@@ -4,7 +4,7 @@
   <groupId>com.youssgm3o8</groupId>
   <artifactId>AdminAreaProtectionPlugin</artifactId>
   <name>AdminAreaProtectionPlugin</name>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.0.1-SNAPSHOT</version>
   <description>MCPE Nukkit plugin for admin area protection with SQLite persistence and GUI support.</description>
   <build>
     <plugins>
@@ -62,6 +62,14 @@
       <url>https://jitpack.io</url>
     </repository>
   </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>cn.nukkit</groupId>
+      <artifactId>nukkit</artifactId>
+      <version>1.0-SNAPSHOT</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
   <properties>
     <maven.compiler.target>11</maven.compiler.target>
     <maven.compiler.source>11</maven.compiler.source>
