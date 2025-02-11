@@ -1,0 +1,28 @@
+# Enable or disable sending messages to players when events are blocked
+enableMessages: true
+
+# Custom messages for blocked events
+messages:
+  blockBreak: "§cYou cannot break blocks in {area}."
+  blockPlace: "§cYou cannot place blocks in {area}."
+  pvp: "§cPVP is disabled in {area}."
+
+# Global title configuration for area enter/leave events:
+title:
+  enter:
+    main: "§aEntering {area}"
+    subtitle: "Welcome to {area}!"
+  leave:
+    main: "§eLeaving {area}"
+    subtitle: "Goodbye from {area}!"
+
+# Area-specific title configurations:
+areaTitles:
+  MyArea:
+    enter:
+      main: "§6You are entering MyArea!"
+      subtitle: "Enjoy your stay at MyArea"
+    leave:
+      main: "§4You left MyArea!"
+      subtitle: "See you next time"
+  # Add additional area configurations here...
