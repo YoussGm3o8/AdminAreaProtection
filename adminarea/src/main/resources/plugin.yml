@@ -1,5 +1,5 @@
 name: AdminAreaProtection
-version: "1.0"
+version: "1.0.1"
 main: adminarea.AdminAreaProtectionPlugin
 api: [1.1.0]
 load: POSTWORLD
