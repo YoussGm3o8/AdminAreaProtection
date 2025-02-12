@@ -1,0 +1,16 @@
+// A bundled SQLite database file pre-created with the required schema, for example:
+//
+// CREATE TABLE areas (
+//     id INTEGER PRIMARY KEY AUTOINCREMENT,
+//     name TEXT,
+//     world TEXT,
+//     x_min INTEGER,
+//     x_max INTEGER,
+//     y_min INTEGER,
+//     y_max INTEGER,
+//     z_min INTEGER,
+//     z_max INTEGER,
+//     priority INTEGER,
+//     show_title BOOLEAN,
+//     settings TEXT
+// );
