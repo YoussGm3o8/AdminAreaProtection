@@ -26,6 +26,7 @@
                   <includes>
                     <include>org/glassfish/json/JsonProviderImpl</include>
                     <include>com/sun/xml/bind/v2/model/nav/ReflectionNavigator</include>
+                    <include>org/sqlite/**</include>
                   </includes>
                   <excludes>
                     <exclude>**/*.md</exclude>
@@ -40,9 +41,6 @@
                 </filter>
               </filters>
               <transformers>
-                <transformer>
-                  <mainClass>HelloWorldBootstrap</mainClass>
-                </transformer>
                 <transformer />
               </transformers>
             </configuration>

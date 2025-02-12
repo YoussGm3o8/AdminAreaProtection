@@ -1,5 +1,9 @@
 package adminarea;
 
+import java.io.File;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,16 +19,30 @@ public class DatabaseManager {
 
     public void init() {
         try {
-            // Create plugin data directory if it doesn't exist
+            // Ensure plugin data folder exists
             if (!plugin.getDataFolder().exists()) {
                 plugin.getDataFolder().mkdirs();
             }
-            
+            // Prepare storage folder and copy bundled storage on first run
+            File storageFolder = new File(plugin.getDataFolder(), "storage");
+            if (!storageFolder.exists()) {
+                storageFolder.mkdirs();
+                try (InputStream in = plugin.getResource("storage/areas.db")) {
+                    if (in != null) {
+                        File outFile = new File(storageFolder, "areas.db");
+                        Files.copy(in, outFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    } else {
+                        plugin.getLogger().warning("Bundled storage file not found: storage/areas.db");
+                    }
+                }
+            }
+            // Use the storage folder's database file
+            String dbPath = new File(storageFolder, "areas.db").getAbsolutePath();
             Class.forName("org.sqlite.JDBC");
-            String dbPath = plugin.getDataFolder().getAbsolutePath() + "/areas.db";
             connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
             
             try (Statement statement = connection.createStatement()) {
+                // Make sure settings column is TEXT to store JSON string
                 statement.executeUpdate("CREATE TABLE IF NOT EXISTS areas (" +
                         "id INTEGER PRIMARY KEY AUTOINCREMENT," +
                         "name TEXT," +
@@ -37,7 +55,7 @@ public class DatabaseManager {
                         "z_max INTEGER," +
                         "priority INTEGER," +
                         "show_title BOOLEAN," +
-                        "settings TEXT" +
+                        "settings TEXT" + // Stores JSON string of all permission toggles
                         ")");
             }
         } catch (Exception e) {
@@ -83,7 +101,7 @@ public class DatabaseManager {
                 ps.setInt(8, area.getZMax());
                 ps.setInt(9, area.getPriority());
                 ps.setBoolean(10, area.isShowTitle());
-                ps.setString(11, area.getSettings().toString());
+                ps.setString(11, area.getSettings().toString()); // Save settings as JSON string
 
                 // Log the values being saved
                 plugin.getLogger().info("Saving area: name=" + area.getName() +
@@ -173,7 +191,7 @@ public class DatabaseManager {
                     boolean showTitle = rs.getBoolean("show_title");
                     String settingsStr = rs.getString("settings");
                     Area area = new Area(name, world, xMin, xMax, yMin, yMax, zMin, zMax, priority, showTitle);
-                    area.setSettings(new JSONObject(settingsStr));
+                    area.setSettings(new JSONObject(settingsStr)); // Parse JSON string back to JSONObject
                     areas.add(area);
                 }
             }
