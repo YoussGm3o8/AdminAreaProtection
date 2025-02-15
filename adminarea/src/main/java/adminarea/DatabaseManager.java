@@ -57,6 +57,13 @@ public class DatabaseManager {
                         "show_title BOOLEAN," +
                         "settings TEXT" + // Stores JSON string of all permission toggles
                         ")");
+                // Create new luckpermsoverrides table: one row per area and target.
+                statement.executeUpdate("CREATE TABLE IF NOT EXISTS luckpermsoverrides (" +
+                        "area TEXT," +
+                        "target TEXT," +
+                        "overrides TEXT," + // JSON string containing permission overrides
+                        "PRIMARY KEY (area, target)" +
+                        ")");
             }
         } catch (Exception e) {
             plugin.getLogger().error("Could not initialize database", e);
@@ -72,6 +79,16 @@ public class DatabaseManager {
         } catch(SQLException e) {
             e.printStackTrace();
         }
+    }
+
+    public Connection getConnection() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            // Use the same "areas.db" file in the storage folder as used in init()
+            File storageFolder = new File(plugin.getDataFolder(), "storage");
+            String dbPath = new File(storageFolder, "areas.db").getAbsolutePath();
+            connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+        }
+        return connection;
     }
 
     public void saveArea(Area area) {
@@ -127,8 +144,12 @@ public class DatabaseManager {
     public void updateArea(Area area) {
         try {
             if (connection == null || connection.isClosed()) {
-                plugin.getLogger().error("Database connection is not available");
-                return;
+                plugin.getLogger().error("Database connection is not available, reinitializing...");
+                init(); // Attempt to reinitialize the connection
+                if (connection == null || connection.isClosed()) {
+                    plugin.getLogger().error("Database connection still not available after reinitialization.");
+                    return;
+                }
             }
             String sql = "UPDATE areas SET world=?, x_min=?, x_max=?, y_min=?, y_max=?, z_min=?, z_max=?, priority=?, show_title=?, settings=? WHERE name=?";
             try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -151,13 +172,9 @@ public class DatabaseManager {
     }
 
     public void deleteArea(String name) {
-        try {
-            if (connection == null || connection.isClosed()) {
-                plugin.getLogger().error("Database connection is not available");
-                return;
-            }
+        try (Connection conn = getConnection()) {
             String sql = "DELETE FROM areas WHERE name=?";
-            try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, name);
                 ps.executeUpdate();
             }

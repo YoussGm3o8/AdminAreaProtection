@@ -57,21 +57,10 @@ public class GuiManager {
         form.addElement(new ElementInput("Pos2 Y", "", pos2y));
         form.addElement(new ElementInput("Pos2 Z", "", pos2z));
         
-        // Permissions toggles
-        form.addElement(new ElementToggle("Show Title on Enter/Exit", true));
-        form.addElement(new ElementToggle("Allow Block Break", true));      // key: "break"
-        form.addElement(new ElementToggle("Allow Block Place", true));      // key: "place"
-        form.addElement(new ElementToggle("Allow Fall Damage", true));      // key: "no_fall"
-        form.addElement(new ElementToggle("Allow PvP", true));              // key: "pvp"
-        form.addElement(new ElementToggle("Allow TNT", true));              // key: "tnt"
-        form.addElement(new ElementToggle("Allow Hunger", true));           // key: "hunger"
-        form.addElement(new ElementToggle("Allow Projectile", true));       // key: "no_projectile"
-        form.addElement(new ElementToggle("Allow Fire", true));             // key: "set_fire"
-        form.addElement(new ElementToggle("Allow Fire Spread", true));      // key: "fire_spread"
-        form.addElement(new ElementToggle("Allow Water Flow", true));       // key: "water_flow"
-        form.addElement(new ElementToggle("Allow Lava Flow", true));        // key: "lava_flow"
-        form.addElement(new ElementToggle("Allow Mob Spawning", true));     // key: "mob_spawning"
-        form.addElement(new ElementToggle("Allow Item Use", true));         // key: "item_use"
+        // Replace individual permission toggles with PermissionToggle iteration
+        for (PermissionToggle pt : PermissionToggle.getDefaultToggles()) {
+            form.addElement(pt.toElementToggle());
+        }
         
         plugin.getFormIdMap().put(player.getName(), "create_area_form");
         player.showFormWindow(form);
@@ -81,41 +70,29 @@ public class GuiManager {
         FormWindowCustom form = new FormWindowCustom("Edit Area - " + area.getName());
         
         String defaultPriority = String.valueOf(area.getPriority());
-        // Retrieve permission toggles from area settings; default to true if not set.
-        boolean allowBreak      = area.getSettings().optBoolean("break", true);
-        boolean allowPlace      = area.getSettings().optBoolean("place", true);
-        boolean allowFall       = area.getSettings().optBoolean("no_fall", true);
-        boolean allowPvP        = area.getSettings().optBoolean("pvp", true);
-        boolean allowTNT        = area.getSettings().optBoolean("tnt", true);
-        boolean allowHunger     = area.getSettings().optBoolean("hunger", true);
-        boolean allowProjectile = area.getSettings().optBoolean("no_projectile", true);
-        boolean allowFire       = area.getSettings().optBoolean("set_fire", true);
-        boolean allowFireSpread = area.getSettings().optBoolean("fire_spread", true);
-        boolean allowWaterFlow  = area.getSettings().optBoolean("water_flow", true);
-        boolean allowLavaFlow   = area.getSettings().optBoolean("lava_flow", true);
-        boolean allowMobSpawn   = area.getSettings().optBoolean("mob_spawning", true);
-        boolean allowItemUse    = area.getSettings().optBoolean("item_use", true);
-        boolean showTitle       = area.isShowTitle();
         
         // Build the edit form with area details and permission toggles.
         form.addElement(new ElementInput("Area Name", "Area name", area.getName()));
         form.addElement(new ElementInput("Priority", "Enter priority (integer)", defaultPriority));
-        form.addElement(new ElementToggle("Show Title on Enter/Exit", showTitle));
-        form.addElement(new ElementToggle("Allow Block Break", allowBreak));
-        form.addElement(new ElementToggle("Allow Block Place", allowPlace));
-        form.addElement(new ElementToggle("Allow Fall Damage", allowFall));
-        form.addElement(new ElementToggle("Allow PvP", allowPvP));
-        form.addElement(new ElementToggle("Allow TNT", allowTNT));
-        form.addElement(new ElementToggle("Allow Hunger", allowHunger));
-        form.addElement(new ElementToggle("Allow Projectile", allowProjectile));
-        form.addElement(new ElementToggle("Allow Fire", allowFire));
-        form.addElement(new ElementToggle("Allow Fire Spread", allowFireSpread));
-        form.addElement(new ElementToggle("Allow Water Flow", allowWaterFlow));
-        form.addElement(new ElementToggle("Allow Lava Flow", allowLavaFlow));
-        form.addElement(new ElementToggle("Allow Mob Spawning", allowMobSpawn));
-        form.addElement(new ElementToggle("Allow Item Use", allowItemUse));
+        
+        // Use PermissionToggle for all permission toggles.
+        for (PermissionToggle pt : PermissionToggle.getDefaultToggles()) {
+            boolean defaultValue;
+            if (pt.getPermissionNode().equals("show.title")) {
+                defaultValue = area.isShowTitle();
+            } else {
+                defaultValue = area.getSettings().optBoolean(pt.getPermissionNode(), pt.getDefaultValue());
+            }
+            form.addElement(new ElementToggle(pt.getDisplayName(), defaultValue));
+        }
         
         plugin.getFormIdMap().put(player.getName(), "edit_area");
         player.showFormWindow(form);
     }
+
+    public void openLuckPermsOverrideForm(Player player, Area area) {
+        LuckPermsOverrideForm lpForm = new LuckPermsOverrideForm(plugin);
+        lpForm.openTrackSelection(player, area);
+    }
+    
 }

@@ -3,6 +3,7 @@ package adminarea;
 import cn.nukkit.entity.item.EntityPrimedTNT;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.EventHandler;
+import cn.nukkit.event.EventPriority;
 import cn.nukkit.event.block.*;
 import cn.nukkit.event.entity.EntityDamageEvent;
 import cn.nukkit.event.player.PlayerItemConsumeEvent;
@@ -11,15 +12,16 @@ import cn.nukkit.event.entity.EntityExplodeEvent;
 import cn.nukkit.event.entity.EntityShootBowEvent;
 import cn.nukkit.event.player.PlayerFoodLevelChangeEvent;
 import cn.nukkit.event.entity.CreatureSpawnEvent;
-import org.json.JSONObject;
 import cn.nukkit.event.player.PlayerMoveEvent;
 import cn.nukkit.event.player.PlayerBucketEmptyEvent; // add import for bucket event
+import cn.nukkit.event.player.PlayerInteractEvent; // add import for interact event
 import cn.nukkit.item.Item;
 
 import cn.nukkit.Player;
 import cn.nukkit.block.Block;
 import cn.nukkit.event.entity.EntityDamageEvent.DamageCause;
 
+import org.json.JSONObject;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -34,10 +36,24 @@ public class ProtectionListener implements Listener {
         this.plugin = plugin;
     }
 
-    // Helper method to get a boolean permission from area settings.
-    private boolean isActionAllowed(Area area, String key) {
+    // Helper method: returns an override value if present; otherwise null.
+    private Boolean getPlayerOverride(Area area, Player player, String actionKey) {
+        String rank = "default";
+        if (plugin.getLuckPermsApi() != null) {
+            try {
+                rank = plugin.getLuckPermsApi().getUserManager()
+                        .getUser(player.getUniqueId())
+                        .getPrimaryGroup();
+            } catch(Exception e) {
+                plugin.getLogger().warning("Failed to retrieve player's rank; defaulting.");
+            }
+        }
         JSONObject settings = area.getSettings();
-        return settings.optBoolean(key, true);
+        String key = "override." + rank + "." + actionKey;
+        if (settings.has(key)) {
+            return settings.getBoolean(key);
+        }
+        return null;
     }
 
     private boolean isCoolingDown(Player player) {
@@ -50,21 +66,26 @@ public class ProtectionListener implements Listener {
         return false;
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.HIGH)
     public void onBlockBreak(BlockBreakEvent event) {
         Player player = event.getPlayer();
-        if (plugin.isBypassing(player.getName())) {
-            return; // Bypassing, so don't apply protection
-        }
-        if (isCoolingDown(player)) {
-            event.setCancelled(true);
-            return;
-        }
-        Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
-        if (area != null && !isActionAllowed(area, "break")) {
-            event.setCancelled(true);
-            if (plugin.isEnableMessages()) {
-                player.sendMessage(plugin.getMsgBlockBreak().replace("{area}", area.getName()));
+        String world = player.getLevel().getFolderName();
+        double x = event.getBlock().getX();
+        double y = event.getBlock().getY();
+        double z = event.getBlock().getZ();
+        Area area = plugin.getHighestPriorityArea(world, x, y, z);
+        if (area != null) {
+            Boolean override = getPlayerOverride(area, player, "block.break");
+            if (override != null) {
+                if (!override) {
+                    event.setCancelled(true);
+                    player.sendMessage(plugin.getMsgBlockBreak());
+                }
+                return;
+            }
+            if (!area.getSettings().optBoolean("block.break", true)) {
+                event.setCancelled(true);
+                player.sendMessage(plugin.getMsgBlockBreak());
             }
         }
     }
@@ -75,15 +96,25 @@ public class ProtectionListener implements Listener {
         if (plugin.isBypassing(player.getName())) {
             return; // Bypassing, so don't apply protection
         }
-        if (isCoolingDown(player)) {
-            event.setCancelled(true);
-            return;
-        }
-        Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
-        if (area != null && !isActionAllowed(area, "place")) {
-            event.setCancelled(true);
-            if (plugin.isEnableMessages()) {
-                player.sendMessage(plugin.getMsgBlockPlace().replace("{area}", area.getName()));
+        // Use block's coordinates instead of player's position.
+        Block placedBlock = event.getBlock();
+        Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), placedBlock.getX(), placedBlock.getY(), placedBlock.getZ());
+        if (area != null) {
+            Boolean override = getPlayerOverride(area, player, "place");
+            if (override != null) {
+                if (!override) {
+                    event.setCancelled(true);
+                    if (plugin.isEnableMessages()) {
+                        player.sendMessage(plugin.getMsgBlockPlace().replace("{area}", area.getName()));
+                    }
+                }
+                return;
+            }
+            if (!area.getSettings().optBoolean("place", true)) {
+                event.setCancelled(true);
+                if (plugin.isEnableMessages()) {
+                    player.sendMessage(plugin.getMsgBlockPlace().replace("{area}", area.getName()));
+                }
             }
         }
     }
@@ -94,13 +125,28 @@ public class ProtectionListener implements Listener {
             Player player = (Player) event.getEntity();
             Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
             if (area != null) {
-                if (event.getCause() == DamageCause.FALL && !isActionAllowed(area, "no_fall")) {
+                // For fall damage, use "no_fall" toggle (no override applied here)
+                if (event.getCause() == DamageCause.FALL && !area.getSettings().optBoolean("no_fall", true)) {
                     event.setCancelled(true);
+                    return;
                 }
-                if (event.getCause() == DamageCause.ENTITY_ATTACK && !isActionAllowed(area, "pvp")) {
-                    event.setCancelled(true);
-                    if (plugin.isEnableMessages()) {
-                        player.sendMessage(plugin.getMsgPVP().replace("{area}", area.getName()));
+                // For PvP (ENTITY_ATTACK) events:
+                if (event.getCause() == DamageCause.ENTITY_ATTACK) {
+                    Boolean override = getPlayerOverride(area, player, "pvp");
+                    if (override != null) {
+                        if (!override) {
+                            event.setCancelled(true);
+                            if (plugin.isEnableMessages()) {
+                                player.sendMessage(plugin.getMsgPVP().replace("{area}", area.getName()));
+                            }
+                        }
+                        return;
+                    }
+                    if (!area.getSettings().optBoolean("pvp", true)) {
+                        event.setCancelled(true);
+                        if (plugin.isEnableMessages()) {
+                            player.sendMessage(plugin.getMsgPVP().replace("{area}", area.getName()));
+                        }
                     }
                 }
             }
@@ -112,7 +158,7 @@ public class ProtectionListener implements Listener {
         if (event.getEntity() instanceof EntityPrimedTNT) {
             EntityPrimedTNT tnt = (EntityPrimedTNT) event.getEntity();
             Area area = plugin.getHighestPriorityArea(tnt.getLevel().getFolderName(), tnt.x, tnt.y, tnt.z);
-            if (area != null && !isActionAllowed(area, "tnt")) {
+            if (area != null && !area.getSettings().optBoolean("tnt", true)) {
                 event.setCancelled(true);
             }
         }
@@ -122,7 +168,7 @@ public class ProtectionListener implements Listener {
     public void onPlayerFoodLevelChange(PlayerFoodLevelChangeEvent event) {
         Player player = event.getPlayer();
         Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
-        if (area != null && !isActionAllowed(area, "hunger")) {
+        if (area != null && !area.getSettings().optBoolean("hunger", true)) {
             event.setCancelled(true);
         }
     }
@@ -132,7 +178,7 @@ public class ProtectionListener implements Listener {
         if (event.getEntity() instanceof Player) {
             Player player = (Player) event.getEntity();
             Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
-            if (area != null && !isActionAllowed(area, "no_projectile")) {
+            if (area != null && !area.getSettings().optBoolean("no_projectile", true)) {
                 event.setCancelled(true);
             }
         }
@@ -142,7 +188,7 @@ public class ProtectionListener implements Listener {
     public void onBlockIgnite(BlockIgniteEvent event) {
         Block block = event.getBlock();
         Area area = plugin.getHighestPriorityArea(block.getLevel().getFolderName(), block.getX(), block.getY(), block.getZ());
-        if (area != null && !isActionAllowed(area, "set_fire")) {
+        if (area != null && !area.getSettings().optBoolean("set_fire", true)) {
             event.setCancelled(true);
         }
     }
@@ -151,7 +197,7 @@ public class ProtectionListener implements Listener {
     public void onBlockSpread(BlockSpreadEvent event) {
         Block block = event.getBlock();
         Area area = plugin.getHighestPriorityArea(block.getLevel().getFolderName(), block.getX(), block.getY(), block.getZ());
-        if (area != null && !isActionAllowed(area, "fire_spread")) {
+        if (area != null && !area.getSettings().optBoolean("fire_spread", true)) {
             event.setCancelled(true);
         }
     }
@@ -162,9 +208,9 @@ public class ProtectionListener implements Listener {
         Area area = plugin.getHighestPriorityArea(block.getLevel().getFolderName(), block.getX(), block.getY(), block.getZ());
         if (area != null) {
             int id = block.getId();
-            if ((id == 8 || id == 9) && !isActionAllowed(area, "water_flow")) {
+            if ((id == 8 || id == 9) && !area.getSettings().optBoolean("water_flow", true)) {
                 event.setCancelled(true);
-            } else if ((id == 10 || id == 11) && !isActionAllowed(area, "lava_flow")) {
+            } else if ((id == 10 || id == 11) && !area.getSettings().optBoolean("lava_flow", true)) {
                 event.setCancelled(true);
             }
         }
@@ -174,7 +220,7 @@ public class ProtectionListener implements Listener {
     public void onCreatureSpawn(CreatureSpawnEvent event) {
         Position position = event.getPosition();
         Area area = plugin.getHighestPriorityArea(position.getLevel().getFolderName(), position.getX(), position.getY(), position.getZ());
-        if (area != null && !isActionAllowed(area, "mob_spawning")) {
+        if (area != null && !area.getSettings().optBoolean("mob_spawning", true)) {
             event.setCancelled(true);
         }
     }
@@ -183,7 +229,7 @@ public class ProtectionListener implements Listener {
     public void onPlayerItemUse(PlayerItemConsumeEvent event) {
         Player player = event.getPlayer();
         Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.x, player.y, player.z);
-        if (area != null && !isActionAllowed(area, "item_use")) {
+        if (area != null && !area.getSettings().optBoolean("item_use", true)) {
             event.setCancelled(true);
         }
     }
@@ -243,12 +289,67 @@ public class ProtectionListener implements Listener {
     public void onBucketEmpty(PlayerBucketEmptyEvent event) {
         Player player = event.getPlayer();
         Area area = plugin.getHighestPriorityArea(player.getLevel().getFolderName(), player.getX(), player.getY(), player.getZ());
-        if (area != null && !isActionAllowed(area, "place")) {
+        if (area != null && !area.getSettings().optBoolean("place", true)) {
             Item bucket = event.getBucket(); // bucket item
             if (bucket.getId() == 325 || bucket.getId() == 327) { // water bucket or lava bucket
                 event.setCancelled(true);
                 if (plugin.isEnableMessages()) {
                     player.sendMessage(plugin.getMsgBlockPlace().replace("{area}", area.getName()));
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        Player player = event.getPlayer();
+        if (plugin.isBypassing(player.getName())) {
+            return; // Bypass enabled
+        }
+        if (isCoolingDown(player)) {
+            event.setCancelled(true);
+            return;
+        }
+        // Do not intercept if the player is holding a block (to avoid interfering with block placement)
+        if (player.getInventory().getItemInHand().getId() < 256) {
+            return;
+        }
+        Block block = event.getBlock();
+        // Check only interactable blocks (example: chest, door, trapdoor)
+        int id = block.getId();
+        // You may adjust the ids below as needed.
+        if (id == 54   // Chest
+         || id == 146  // Ender Chest
+         || id == 64   // Door
+         || id == 71   // Wooden Door
+         || id == 96   // Trapdoor
+         || id == 107  // Iron Trapdoor
+         || id == -203 // barrel
+         || id == -198 // smoker
+         || id == -196 // blast furnace
+         || id == -194 // lectern
+         || id == -195 // grindstone
+         || id == -197 // stonecutter
+         || id == 146 // trapped chest
+        ) 
+        {
+            Area area = plugin.getHighestPriorityArea(block.getLevel().getFolderName(), block.getX(), block.getY(), block.getZ());
+            if (area != null) {
+                Boolean override = getPlayerOverride(area, player, "object.interact");
+                if (override != null) {
+                    if (!override) {
+                        event.setCancelled(true);
+                        if (plugin.isEnableMessages()) {
+                            player.sendMessage("§cYou cannot interact with objects in this area.");
+                        }
+                    }
+                    return;
+                }
+                if (!area.getSettings().optBoolean("object.interact", true)) {
+                    event.setCancelled(true);
+                    if (plugin.isEnableMessages()) {
+                        player.sendMessage("§cYou cannot interact with objects in this area.");
+                    }
                 }
             }
         }

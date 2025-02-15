@@ -10,6 +10,8 @@ import cn.nukkit.level.Position;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
+import net.luckperms.api.LuckPerms;
+import net.luckperms.api.LuckPermsProvider;
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
@@ -20,6 +22,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     private HashMap<String, String> formIdMap = new HashMap<>(); // Store form IDs
     private HashMap<String, Boolean> bypassingPlayers = new HashMap<>(); // Store players bypassing protection
     private boolean globalAreaProtection = false; // new flag
+    private LuckPerms luckPermsApi; // New field for LuckPerms API
 
     private boolean enableMessages;
     private String msgBlockBreak;
@@ -69,6 +72,15 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             // Register the command
             getServer().getCommandMap().register("area", areaCommand);
             getLogger().info("Area command registered.");
+
+            // Check for LuckPerms presence and retrieve its API if available.
+            if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
+                luckPermsApi = LuckPermsProvider.get();
+                getLogger().info("LuckPerms detected. Integration is enabled.");
+                // ...optional LuckPerms-specific setup...
+            } else {
+                getLogger().info("LuckPerms not found. Proceeding without it.");
+            }
 
             getLogger().info("AdminAreaProtectionPlugin enabled successfully.");
 
@@ -172,5 +184,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     public void toggleGlobalAreaProtection() {
         this.globalAreaProtection = !this.globalAreaProtection;
+    }
+
+    // New getter for LuckPerms API.
+    public LuckPerms getLuckPermsApi() {
+        return luckPermsApi;
+    }
+
+    public DatabaseManager getDatabaseManager() {
+        return dbManager;
     }
 }

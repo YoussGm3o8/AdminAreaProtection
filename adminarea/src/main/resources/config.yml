@@ -26,3 +26,6 @@ areaTitles:
       main: "§4You left MyArea!"
       subtitle: "See you next time"
   # Add additional area configurations here...
+
+# Allow regular players to create areas
+allowRegularAreaCreation: true

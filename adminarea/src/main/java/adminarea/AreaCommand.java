@@ -72,8 +72,10 @@ public class AreaCommand extends Command {
                 handlePositionCommand(player, 1, "2");
                 return true;
             case "create":
-                if (!player.hasPermission("adminarea.command.area.create")) {
-                    plugin.getLogger().info("Player " + player.getName() + " does not have adminarea.command.area.create permission.");
+                // Check for LuckPerms-driven permission or allow regular player creation via config.
+                boolean allowRegularCreation = plugin.getConfig().getBoolean("allowRegularAreaCreation", false);
+                if (!player.hasPermission("adminarea.command.area.create") && !allowRegularCreation) {
+                    plugin.getLogger().info("Player " + player.getName() + " lacks permission to create areas.");
                     player.sendMessage("§cYou don't have permission to create areas.");
                     return true;
                 }
@@ -135,7 +137,13 @@ public class AreaCommand extends Command {
                 return true;
             case "bypass":
                 if (!player.hasPermission("adminarea.command.area.bypass")) {
-                    player.sendMessage("§cYou don't have permission to toggle bypass mode.");
+                    plugin.getLogger().info("Player " + player.getName() + " does not have adminarea.command.area.bypass permission.");
+                    player.sendMessage("§cYou don't have permission to use the bypass command.");
+                    return true;
+                }
+                // Prevent bypass from interfering with LuckPerms integration.
+                if (plugin.getLuckPermsApi() != null) {
+                    player.sendMessage("§cBypass mode disabled when LuckPerms integration is active.");
                     return true;
                 }
                 plugin.toggleBypass(player.getName());

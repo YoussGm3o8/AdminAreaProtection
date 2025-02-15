@@ -7,6 +7,7 @@ author: "YoussGm3o8"
 description: >
   Admin Area Protection Plugin for MCPE Nukkit servers.
   Provides admin area protection with SQLite persistence and GUI-based management.
+softdepend: [LuckPerms]
 commands:
   area:
     description: Manage protected areas
