@@ -11,14 +11,14 @@ softdepend: [LuckPerms]
 commands:
   area:
     description: Manage protected areas
-    usage: "/area <create|edit|delete|list|bypass|wand|pos1|pos2|help>"
+    usage: "/area <create|edit|delete|list|bypass|wand|pos1|pos2|help|merge|visualize|stats|reload|undo|clear|here|expand|debug>"
     permission: adminarea.command.area
     permission-message: "§cYou do not have permission to use this command!"
     aliases: [areaprotect, areaadmin]
     subcommands:
       create:
         description: Create a new area
-        usage: /area create
+        usage: /area create [global]
       edit:
         description: Edit an existing area
         usage: /area edit <name>
@@ -32,35 +32,83 @@ commands:
         description: Show help message
         usage: /area help
       pos1:
-        description: Set the first position for area creation.
+        description: Set the first position for area creation
         usage: /area pos1
       pos2:
-        description: Set the second position for area creation.
+        description: Set the second position for area creation
         usage: /area pos2
       wand:
-        description: Receive the Area Wand.
+        description: Receive the Area Wand
         usage: /area wand
       bypass:
-        description: Toggle bypass mode (operators only).
+        description: Toggle bypass mode (operators only)
         usage: /area bypass
+      merge:
+        description: Merge two areas together
+        usage: /area merge <area1> <area2>
+      visualize:
+        description: Visualize area boundaries
+        usage: /area visualize <name>
+      stats:
+        description: View area statistics
+        usage: /area stats <name>
+      reload:
+        description: Reload plugin configuration
+        usage: /area reload
+      undo:
+        description: Undo last selection
+        usage: /area undo
+      clear:
+        description: Clear selection points
+        usage: /area clear
+      here:
+        description: Set both positions to current location
+        usage: /area here
+      expand:
+        description: Expand selection in a direction
+        usage: /area expand <direction> <amount>
+      debug:
+        description: Toggle debug logging mode
+        usage: /area debug [on|off]
 
 permissions:
-  adminarea.command.area:
-    description: Allows using area protection commands
-    default: op
+  adminarea.*:
+    description: Gives access to all AdminArea commands and features
     children:
-      adminarea.command.area.create:
-        description: Allows creating areas
-        default: op
-      adminarea.command.area.edit:
-        description: Allows editing areas
-        default: op
-      adminarea.command.area.delete:
-        description: Allows deleting areas
-        default: op
-      adminarea.command.area.list:
-        description: Allows listing areas
-        default: op
-      adminarea.command.area.bypass:
-        description: Allows toggling bypass mode
-        default: op
+      adminarea.command.*: true
+      adminarea.bypass: true
+      adminarea.wand.*: true
+      adminarea.stats.*: true
+  
+  adminarea.command.*:
+    description: Gives access to all AdminArea commands
+    children:
+      adminarea.command.area: true
+      adminarea.command.area.create: true
+      adminarea.command.area.edit: true
+      adminarea.command.area.delete: true
+      adminarea.command.area.list: true
+      adminarea.command.area.bypass: true
+      adminarea.command.reload: true
+      adminarea.command.area.debug: true
+  
+  adminarea.wand.*:
+    description: Gives access to all wand features
+    children:
+      adminarea.wand.use: true
+      adminarea.wand.undo: true
+  
+  adminarea.stats.*:
+    description: Gives access to all statistics features
+    children:
+      adminarea.stats.view: true
+      adminarea.stats.export: true
+      adminarea.stats.reset: true
+
+  adminarea.api.use:
+    description: Allows plugins to use the AdminArea API
+    default: op
+
+  adminarea.debug:
+    description: Allows toggling debug mode
+    default: op

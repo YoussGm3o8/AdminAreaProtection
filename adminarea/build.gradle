@@ -1,0 +1,43 @@
+// ...existing gradle config...
+
+dependencies {
+    // ...existing dependencies...
+    
+    // Connection pooling
+    implementation 'com.zaxxer:HikariCP:5.0.1'
+    
+    // Caching
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+    
+    // Database migrations
+    implementation 'org.flywaydb:flyway-core:9.22.3'
+    
+    // Performance monitoring
+    implementation 'io.micrometer:micrometer-core:1.11.3'
+    
+    // Improved logging
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    implementation 'ch.qos.logback:logback-classic:1.4.11'
+    
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+    testImplementation 'org.mockito:mockito-core:5.6.0'
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.6.0'
+    testImplementation 'com.h2database:h2:2.2.224'
+    testImplementation 'org.testcontainers:testcontainers:1.19.1'
+    testImplementation 'org.testcontainers:junit-jupiter:1.19.1'
+    testImplementation 'org.testcontainers:sqlite:1.19.1'
+    
+    // Performance testing
+    testImplementation 'org.openjdk.jmh:jmh-core:1.37'
+    testAnnotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+// ...rest of existing gradle config...

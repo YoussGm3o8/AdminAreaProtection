@@ -1,31 +1,66 @@
-# Enable or disable sending messages to players when events are blocked
-enableMessages: true
+# AdminAreaProtection Configuration
 
-# Custom messages for blocked events
+# General settings
+debug: false
+enableMessages: true
+allowRegularAreaCreation: false
+maxAreaPriority: 100
+
+# Wand settings
+wandItemType: 280  # Item ID for the wand (280 = stick)
+particleVisualization: true
+visualizationDuration: 10  # seconds
+selectionCooldown: 250  # milliseconds between selections
+undoHistorySize: 10  # number of undo steps to remember
+
+# Cache settings
+cacheExpiry: 5  # minutes before cache entries expire
+
+# Messages
 messages:
   blockBreak: "§cYou cannot break blocks in {area}."
   blockPlace: "§cYou cannot place blocks in {area}."
   pvp: "§cPVP is disabled in {area}."
+  interact: "§cYou cannot interact with that in {area}."
+  container: "§cYou cannot access containers in {area}."
+  command: "§cYou cannot use that command in {area}."
+  noPermission: "§cYou don't have permission for that."
+  areaCreated: "§aArea {area} created successfully."
+  areaDeleted: "§aArea {area} deleted successfully."
+  areaUpdated: "§aArea {area} updated successfully."
+  selectionCleared: "§aSelection points cleared."
+  selectionComplete: "§aBoth positions set! Use /area create to create your area."
+  wandGiven: "§eYou have received the Area Wand!"
+  bypassEnabled: "§aBypass mode enabled."
+  bypassDisabled: "§aBypass mode disabled."
 
-# Global title configuration for area enter/leave events:
+# Title configuration
 title:
   enter:
     main: "§aEntering {area}"
     subtitle: "Welcome to {area}!"
+    fadeIn: 20
+    stay: 40
+    fadeOut: 20
   leave:
     main: "§eLeaving {area}"
     subtitle: "Goodbye from {area}!"
+    fadeIn: 20
+    stay: 40
+    fadeOut: 20
 
-# Area-specific title configurations:
+# Area-specific title configurations (overrides default)
 areaTitles:
-  MyArea:
+  example_area:
     enter:
-      main: "§6You are entering MyArea!"
-      subtitle: "Enjoy your stay at MyArea"
+      main: "§6Welcome to Example Area"
+      subtitle: "§eEnjoy your stay!"
     leave:
-      main: "§4You left MyArea!"
-      subtitle: "See you next time"
-  # Add additional area configurations here...
+      main: "§6Come back soon!"
+      subtitle: "§eThank you for visiting!"
 
-# Allow regular players to create areas
-allowRegularAreaCreation: true
+# LuckPerms integration
+luckperms:
+  enabled: true
+  inheritPermissions: true
+  updateInterval: 300  # seconds between permission updates
