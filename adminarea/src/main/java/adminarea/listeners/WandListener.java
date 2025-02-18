@@ -49,13 +49,22 @@ public class WandListener implements Listener {
             if (!isHoldingWand(player)) return;
             
             if (!player.hasPermission("adminarea.wand.use")) {
-                player.sendMessage("§cYou don't have permission to use the Area Wand.");
+                player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
                 event.setCancelled(true);
                 return;
             }
 
             if (isOnCooldown(player)) {
                 event.setCancelled(true);
+                return;
+            }
+
+            // Handle shift + left click
+            if (player.isSneaking()) {
+                plugin.getPlayerPositions().remove(player.getName());
+                player.sendMessage(plugin.getLanguageManager().get("messages.selectionCleared"));
+                event.setCancelled(true);
+                updateLastActionTime(player);
                 return;
             }
 
@@ -75,7 +84,7 @@ public class WandListener implements Listener {
             if (!isHoldingWand(player)) return;
 
             if (!player.hasPermission("adminarea.wand.use")) {
-                player.sendMessage("§cYou don't have permission to use the Area Wand.");
+                player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
                 event.setCancelled(true);
                 return;
             }
@@ -86,6 +95,20 @@ public class WandListener implements Listener {
             }
 
             if (event.getAction() == PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK) {
+                // Handle shift + right click
+                if (player.isSneaking()) {
+                    // Check if both positions are set
+                    Position[] positions = plugin.getPlayerPositions().get(player.getName());
+                    if (positions != null && positions[0] != null && positions[1] != null) {
+                        plugin.getGuiManager().openCreateForm(player);
+                    } else {
+                        player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionsNeeded"));
+                    }
+                    event.setCancelled(true);
+                    updateLastActionTime(player);
+                    return;
+                }
+
                 handleWandAction(player, event.getBlock(), 1);
                 event.setCancelled(true);
                 updateLastActionTime(player);
@@ -128,14 +151,20 @@ public class WandListener implements Listener {
         positions[positionIndex] = Position.fromObject(block, block.getLevel()).floor();
         plugin.getPlayerPositions().put(playerName, positions);
 
-        // Send feedback using proper integer formatting
-        String posLabel = positionIndex == 0 ? "first" : "second";
-        player.sendMessage(String.format("§a%s position set to: %.0f, %.0f, %.0f", 
-            posLabel, block.getX(), block.getY(), block.getZ()));
+        // Send feedback using LanguageManager
+        Map<String, String> placeholders = new HashMap<>();
+        placeholders.put("x", String.valueOf(block.getFloorX()));
+        placeholders.put("y", String.valueOf(block.getFloorY()));
+        placeholders.put("z", String.valueOf(block.getFloorZ()));
+        if (positionIndex == 0) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.pos1Set", placeholders));
+        } else {
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.pos2Set", placeholders));
+        }
 
         // Notify if both positions are set
         if (positions[0] != null && positions[1] != null) {
-            player.sendMessage("§aBoth positions are set! Use §e/area create§a to create your area.");
+            player.sendMessage(plugin.getLanguageManager().get("messages.selectionComplete"));
         }
 
         // Start or update visualization
@@ -158,13 +187,13 @@ public class WandListener implements Listener {
         List<Position[]> history = undoHistory.get(playerName);
         
         if (history == null || history.isEmpty()) {
-            player.sendMessage("§cNo actions to undo!");
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.noActionsToUndo"));
             return;
         }
 
         Position[] lastPositions = history.remove(history.size() - 1);
         plugin.getPlayerPositions().put(playerName, lastPositions);
-        player.sendMessage("§aUndid last selection.");
+        player.sendMessage(plugin.getLanguageManager().get("messages.wand.undoSuccess"));
         updateVisualization(player);
     }
 

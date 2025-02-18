@@ -138,4 +138,37 @@ class PermissionToggleTest {
         assertDoesNotThrow(() -> permissionToggle.close());
         verify(plugin, never()).getLogger();
     }
+
+    @Test
+    void performanceMonitoring_RecordsMetrics() {
+        String playerId = "testPlayer";
+        String permission = "test.permission";
+        
+        // Set toggle and verify metrics are recorded
+        permissionToggle.setPlayerToggle(playerId, permission, true);
+        verify(performanceMonitor, times(1)).stopTimer(any(), eq("set_player_toggle"));
+        
+        // Get toggle and verify metrics
+        permissionToggle.getEffectiveToggle(playerId, permission);
+        verify(performanceMonitor, times(1)).stopTimer(any(), eq("get_effective_toggle"));
+    }
+
+    @Test
+    void toggleCache_ImprovesCacheHitRatio() throws Exception {
+        String playerId = "testPlayer";
+        String permission = "test.permission";
+        
+        // First access - should miss cache
+        permissionToggle.getEffectiveToggle(playerId, permission);
+        
+        // Second access - should hit cache
+        permissionToggle.getEffectiveToggle(playerId, permission);
+        
+        // Third access - should hit cache
+        permissionToggle.getEffectiveToggle(playerId, permission);
+        
+        // Verify cache metrics
+        verify(performanceMonitor, times(1)).stopTimer(any(), eq("toggle_cache_miss"));
+        verify(performanceMonitor, times(2)).stopTimer(any(), eq("toggle_cache_hit"));
+    }
 }

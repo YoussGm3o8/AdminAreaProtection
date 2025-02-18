@@ -3,160 +3,90 @@ package adminarea.form.handlers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
-import adminarea.constants.AdminAreaConstants;
-import adminarea.form.IFormHandler;
-import adminarea.permissions.PermissionToggle;
+import adminarea.constants.FormIds;
+import adminarea.form.validation.FormValidator;
+import adminarea.form.validation.ValidationResult;
+import adminarea.util.ValidationUtils;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
+import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
-import cn.nukkit.form.window.FormWindowCustom;
-import cn.nukkit.form.element.ElementInput;
-import cn.nukkit.form.element.ElementToggle;
-import cn.nukkit.level.Position;
-import org.json.JSONObject;
+import io.micrometer.core.instrument.Timer;
 
-public class CreateAreaHandler implements IFormHandler {
-    private final AdminAreaProtectionPlugin plugin;
+import java.util.Map;
+
+public class CreateAreaHandler extends BaseFormHandler {
 
     public CreateAreaHandler(AdminAreaProtectionPlugin plugin) {
-        this.plugin = plugin;
+        super(plugin);
     }
 
     @Override
     public String getFormId() {
-        return AdminAreaConstants.FORM_CREATE_AREA;
+        return FormIds.CREATE_AREA;
     }
 
     @Override
     public FormWindow createForm(Player player) {
-        FormWindowCustom form = new FormWindowCustom("Create Area");
-        form.addElement(new ElementInput("Area Name", "Enter area name"));
-
-        Position[] positions = plugin.getPlayerPositions().get(player.getName());
-        // If positions are set, pre-fill the coordinates
-        if (positions != null && positions[0] != null && positions[1] != null) {
-            Position pos1 = positions[0];
-            Position pos2 = positions[1];
-            form.addElement(new ElementInput("Min X", "Enter min X", String.valueOf(Math.min(pos1.getFloorX(), pos2.getFloorX()))));
-            form.addElement(new ElementInput("Min Y", "Enter min Y", String.valueOf(Math.min(pos1.getFloorY(), pos2.getFloorY()))));
-            form.addElement(new ElementInput("Min Z", "Enter min Z", String.valueOf(Math.min(pos1.getFloorZ(), pos2.getFloorZ()))));
-            form.addElement(new ElementInput("Max X", "Enter max X", String.valueOf(Math.max(pos1.getFloorX(), pos2.getFloorX()))));
-            form.addElement(new ElementInput("Max Y", "Enter max Y", String.valueOf(Math.max(pos1.getFloorY(), pos2.getFloorY()))));
-            form.addElement(new ElementInput("Max Z", "Enter max Z", String.valueOf(Math.max(pos1.getFloorZ(), pos2.getFloorZ()))));
-        } else {
-            // Empty fields if no positions are set
-            form.addElement(new ElementInput("Min X", "Enter min X"));
-            form.addElement(new ElementInput("Min Y", "Enter min Y"));
-            form.addElement(new ElementInput("Min Z", "Enter min Z"));
-            form.addElement(new ElementInput("Max X", "Enter max X"));
-            form.addElement(new ElementInput("Max Y", "Enter max Y"));
-            form.addElement(new ElementInput("Max Z", "Enter max Z"));
+        if (!plugin.hasValidSelection(player)) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.notBoth"));
+            return null;
         }
-        form.addElement(new ElementInput("Priority", "Enter priority (default: 0)", "0"));
-        form.addElement(new ElementToggle("Global Area", false));
-        
-        // Add permission toggles
-        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            form.addElement(new ElementToggle(toggle.getDisplayName(), toggle.getDefaultValue()));
-        }
-        
-        return form;
+        return plugin.getFormFactory().createAreaCreationForm();
     }
 
     @Override
-    public void handleResponse(Player player, Object response) {
-        if (!(response instanceof FormResponseCustom)) return;
-        
-        FormResponseCustom customResponse = (FormResponseCustom) response;
+    protected void handleCustomResponse(Player player, FormResponseCustom response) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Validate form data first
-            if (!plugin.getGuiManager().validateForm(player, customResponse, getFormId())) {
+            // Validate form input, e.g., name and priority:
+            ValidationResult validation = FormValidator.validateCreateAreaForm(response);
+            if (!validation.isValid()) {
+                player.sendMessage(validation.getMessage());
+                plugin.getGuiManager().openMainMenu(player);
                 return;
             }
 
-            // Basic info
-            String name = customResponse.getInputResponse(0);
-            int priority = Integer.parseInt(customResponse.getInputResponse(1));
-            
-            // Check if responses map contains the toggle response
-            boolean isGlobal = false;
-            if (customResponse.getResponse(2) instanceof Boolean) {
-                isGlobal = (Boolean) customResponse.getResponse(2);
+            // Get selection
+            Map<String, Object> selection = plugin.getPlayerSelection(player);
+            if (selection == null) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.wand.notBoth"));
+                return;
             }
-            
-            // Build area using coordinates
-            AreaBuilder builder = Area.builder()
-                .name(name)
+
+            // Create area
+            Area area = new AreaBuilder()
+                .name(response.getInputResponse(0))
                 .world(player.getLevel().getName())
-                .priority(priority);
+                .coordinates(
+                    (int)selection.get("x1"), (int)selection.get("x2"),
+                    (int)selection.get("y1"), (int)selection.get("y2"),
+                    (int)selection.get("z1"), (int)selection.get("z2")
+                )
+                .priority(Integer.parseInt(response.getInputResponse(1)))
+                .showTitle(response.getToggleResponse(2))
+                .enterMessage(response.getInputResponse(3))
+                .leaveMessage(response.getInputResponse(4))
+                .build();
 
-            if (isGlobal) {
-                builder.coordinates(
-                    Integer.MIN_VALUE, Integer.MAX_VALUE,
-                    0, 255,
-                    Integer.MIN_VALUE, Integer.MAX_VALUE
-                );
-            } else {
-                // Parse coordinates safely
-                int xMin = parseCoordinate(customResponse.getInputResponse(3), player.getFloorX());
-                int xMax = parseCoordinate(customResponse.getInputResponse(4), player.getFloorX());
-                int yMin = parseCoordinate(customResponse.getInputResponse(5), player.getFloorY());
-                int yMax = parseCoordinate(customResponse.getInputResponse(6), player.getFloorY());
-                int zMin = parseCoordinate(customResponse.getInputResponse(7), player.getFloorZ());
-                int zMax = parseCoordinate(customResponse.getInputResponse(8), player.getFloorZ());
-
-                builder.coordinates(xMin, xMax, yMin, yMax, zMin, zMax);
-            }
-
-            // Process permission toggles safely using standardized nodes
-            JSONObject settings = new JSONObject();
-            int toggleIndex = 9; // Adjust based on your form layout
-            for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                Object toggleResponse = customResponse.getResponse(toggleIndex++);
-                boolean value = toggleResponse instanceof Boolean ? (Boolean) toggleResponse : toggle.getDefaultValue();
-                settings.put(toggle.getPermissionNode(), value);
-            }
-            builder.settings(settings);
-
-            // Build and save the area
-            Area area = builder.build();
-
-            // Set messages safely
-            int lastIndex = customResponse.getResponses().size() - 1;
-            String enterMsg = customResponse.getInputResponse(lastIndex - 1);
-            String leaveMsg = customResponse.getInputResponse(lastIndex);
-            if (enterMsg != null) area.setEnterMessage(enterMsg);
-            if (leaveMsg != null) area.setLeaveMessage(leaveMsg);
-
-            // Add and save the area
-            plugin.addArea(area);
+            // Save area
             plugin.saveArea(area);
-            
-            player.sendMessage(String.format(AdminAreaConstants.MSG_AREA_CREATED, name));
-            
+            player.sendMessage(plugin.getLanguageManager().get("messages.areaCreated", 
+                Map.of("area", area.getName())));
+
+            // Open area settings after creation
+            plugin.getGuiManager().openAreaSettings(player, area);
+
         } catch (Exception e) {
-            player.sendMessage("§cError creating area: " + e.getMessage());
-            if (plugin.getConfigManager().isDebugEnabled()) {
-                e.printStackTrace();
-            }
+            plugin.getLogger().error("Error creating area", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "create_area_handler");
         }
     }
 
-    private int parseCoordinate(String input, int playerPos) {
-        if (input == null || input.isEmpty() || input.equals("~")) {
-            return playerPos;
-        }
-        if (input.startsWith("~")) {
-            try {
-                return playerPos + Integer.parseInt(input.substring(1));
-            } catch (NumberFormatException e) {
-                return playerPos;
-            }
-        }
-        try {
-            return Integer.parseInt(input);
-        } catch (NumberFormatException e) {
-            return playerPos;
-        }
+    @Override 
+    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
+        throw new UnsupportedOperationException("Create area form only uses custom form");
     }
 }

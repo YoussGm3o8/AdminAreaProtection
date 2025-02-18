@@ -16,6 +16,8 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 
 /**
@@ -24,11 +26,13 @@ import java.util.logging.Level;
 public class OverrideManager implements AutoCloseable {
     private final AdminAreaProtectionPlugin plugin;
     private final HikariDataSource dataSource;
-    private final Map<String, Map<String, PermissionOverride>> playerOverrides;
-    private final Map<String, Map<String, PermissionOverride>> areaOverrides;
-    private final Map<String, Set<String>> inheritanceChains;
-    private final ScheduledExecutorService scheduler;
+    private final ConcurrentMap<String, ConcurrentMap<String, PermissionOverride>> playerOverrides;
+    private final ConcurrentMap<String, ConcurrentMap<String, PermissionOverride>> areaOverrides;
+    private final ScheduledThreadPoolExecutor scheduler;
     private final Cache<String, Boolean> overrideCache;
+    private final ConcurrentMap<String, Set<String>> inheritanceChains = new ConcurrentHashMap<>();
+    private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
+    private final Object dbLock = new Object(); // Lock for database operations
     private static final int CACHE_SIZE = 1000;
     private static final long CACHE_DURATION = TimeUnit.MINUTES.toMillis(5);
 
@@ -44,8 +48,7 @@ public class OverrideManager implements AutoCloseable {
         this.plugin = plugin;
         this.playerOverrides = new ConcurrentHashMap<>();
         this.areaOverrides = new ConcurrentHashMap<>();
-        this.inheritanceChains = new ConcurrentHashMap<>();
-        this.scheduler = Executors.newScheduledThreadPool(1);
+        this.scheduler = (ScheduledThreadPoolExecutor) Executors.newScheduledThreadPool(1);
         this.overrideCache = CacheBuilder.newBuilder()
             .maximumSize(CACHE_SIZE)
             .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
@@ -57,16 +60,24 @@ public class OverrideManager implements AutoCloseable {
     }
 
     private HikariDataSource initializeDataSource() {
-        HikariConfig config = new HikariConfig();
-        Path dbPath = plugin.getDataFolder().toPath().resolve("overrides.db");
-        config.setJdbcUrl("jdbc:sqlite:" + dbPath);
-        config.setMaximumPoolSize(10);
-        config.setMinimumIdle(5);
-        config.setIdleTimeout(300000); // 5 minutes
-        config.setMaxLifetime(600000); // 10 minutes
-        config.addDataSourceProperty("cachePrepStmts", "true");
-        config.addDataSourceProperty("prepStmtCacheSize", "250");
-        return new HikariDataSource(config);
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            HikariConfig config = new HikariConfig();
+            Path dbPath = plugin.getDataFolder().toPath().resolve("overrides.db");
+            config.setJdbcUrl("jdbc:sqlite:" + dbPath);
+            config.setMaximumPoolSize(10);
+            config.setMinimumIdle(5);
+            config.setIdleTimeout(300000); // 5 minutes
+            config.setMaxLifetime(600000); // 10 minutes
+            config.setConnectionTimeout(30000);
+            // Add connection test query
+            config.setConnectionTestQuery("SELECT 1");
+            // Enable JMX monitoring
+            config.setRegisterMbeans(true);
+            return new HikariDataSource(config);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "override_ds_init");
+        }
     }
 
     private void initializeDatabase() {
@@ -119,14 +130,29 @@ public class OverrideManager implements AutoCloseable {
     }
 
     private void setupScheduledTasks() {
-        // Cleanup expired overrides
-        scheduler.scheduleAtFixedRate(this::cleanupExpiredOverrides, 1, 1, TimeUnit.MINUTES);
-        
-        // Backup database
-        scheduler.scheduleAtFixedRate(this::backupDatabase, 6, 6, TimeUnit.HOURS);
-        
-        // Cache maintenance
-        scheduler.scheduleAtFixedRate(overrideCache::cleanUp, 1L, 1L, TimeUnit.MINUTES);
+        // Use rejection handler for scheduled tasks
+        RejectedExecutionHandler handler = (r, executor) -> 
+            plugin.getLogger().warning("Scheduled task rejected: " + r.toString());
+
+        scheduler.setRejectedExecutionHandler(handler);
+
+        // Schedule cleanup with fixed delay to prevent overlap
+        scheduler.scheduleWithFixedDelay(
+            this::cleanupExpiredOverridesThreadSafe, 
+            1, 1, TimeUnit.MINUTES
+        );
+
+        // Schedule backup with fixed delay
+        scheduler.scheduleWithFixedDelay(
+            this::backupDatabaseThreadSafe,
+            6, 6, TimeUnit.HOURS
+        );
+
+        // Cache maintenance - use fixed delay
+        scheduler.scheduleWithFixedDelay(
+            overrideCache::cleanUp,
+            1, 1, TimeUnit.MINUTES
+        );
     }
 
     /**
@@ -140,35 +166,37 @@ public class OverrideManager implements AutoCloseable {
             
             Instant expiry = duration != null ? Instant.now().plus(duration) : null;
             
-            try (Connection conn = dataSource.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement("""
-                     INSERT OR REPLACE INTO overrides 
-                     (target_type, target_id, permission, state, priority, expiry)
-                     VALUES (?, ?, ?, ?, ?, ?)
-                 """)) {
-                
-                conn.setAutoCommit(false);
-                try {
-                    stmt.setString(1, targetType);
-                    stmt.setString(2, targetId);
-                    stmt.setString(3, permission);
-                    stmt.setBoolean(4, state);
-                    stmt.setInt(5, priority);
-                    stmt.setObject(6, expiry);
-                    stmt.executeUpdate();
+            synchronized (dbLock) {
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement stmt = conn.prepareStatement("""
+                         INSERT OR REPLACE INTO overrides 
+                         (target_type, target_id, permission, state, priority, expiry)
+                         VALUES (?, ?, ?, ?, ?, ?)
+                     """)) {
                     
-                    // Update in-memory cache
-                    Map<String, PermissionOverride> overrides = getOverridesMap(targetType)
-                        .computeIfAbsent(targetId, k -> new ConcurrentHashMap<>());
-                    overrides.put(permission, new PermissionOverride(targetId, permission, state, expiry, priority));
-                    
-                    // Invalidate affected cache entries
-                    invalidateRelatedCaches(targetType, targetId, permission);
-                    
-                    conn.commit();
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw e;
+                    conn.setAutoCommit(false);
+                    try {
+                        stmt.setString(1, targetType);
+                        stmt.setString(2, targetId);
+                        stmt.setString(3, permission);
+                        stmt.setBoolean(4, state);
+                        stmt.setInt(5, priority);
+                        stmt.setObject(6, expiry);
+                        stmt.executeUpdate();
+                        
+                        // Update in-memory cache
+                        Map<String, PermissionOverride> overrides = getOverridesMap(targetType)
+                            .computeIfAbsent(targetId, k -> new ConcurrentHashMap<>());
+                        overrides.put(permission, new PermissionOverride(targetId, permission, state, expiry, priority));
+                        
+                        // Invalidate affected cache entries
+                        invalidateRelatedCaches(targetType, targetId, permission);
+                        
+                        conn.commit();
+                    } catch (SQLException e) {
+                        conn.rollback();
+                        throw e;
+                    }
                 }
             }
         } catch (SQLException e) {
@@ -240,7 +268,7 @@ public class OverrideManager implements AutoCloseable {
         return candidates.isEmpty() ? false : candidates.peek().state;
     }
 
-    private Map<String, Map<String, PermissionOverride>> getOverridesMap(String targetType) {
+    private ConcurrentMap<String, ConcurrentMap<String, PermissionOverride>> getOverridesMap(String targetType) {
         return switch (targetType) {
             case "player" -> playerOverrides;
             case "area" -> areaOverrides;
@@ -283,28 +311,34 @@ public class OverrideManager implements AutoCloseable {
             overrideCache.invalidate(targetType + ":" + child + ":" + permission));
     }
 
-    private void cleanupExpiredOverrides() {
+    private void cleanupExpiredOverridesThreadSafe() {
+        if (isShuttingDown.get()) return;
+
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "DELETE FROM overrides WHERE expiry IS NOT NULL AND expiry < ?")) {
-            
-            stmt.setObject(1, Instant.now());
-            int removed = stmt.executeUpdate();
-            
-            if (removed > 0) {
-                plugin.getLogger().info("Cleaned up " + removed + " expired overrides");
-                
-                // Clean up in-memory state
-                playerOverrides.values().forEach(overrides -> 
-                    overrides.entrySet().removeIf(e -> 
-                        e.getValue().expiry != null && e.getValue().expiry.isBefore(Instant.now())));
-                
-                areaOverrides.values().forEach(overrides -> 
-                    overrides.entrySet().removeIf(e -> 
-                        e.getValue().expiry != null && e.getValue().expiry.isBefore(Instant.now())));
-                
-                overrideCache.invalidateAll();
+        try {
+            synchronized (dbLock) {
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement stmt = conn.prepareStatement(
+                         "DELETE FROM overrides WHERE expiry IS NOT NULL AND expiry < ?")) {
+                    
+                    stmt.setObject(1, Instant.now());
+                    int removed = stmt.executeUpdate();
+                    
+                    if (removed > 0) {
+                        plugin.getLogger().info("Cleaned up " + removed + " expired overrides");
+                        
+                        // Clean up in-memory state safely
+                        playerOverrides.values().forEach(overrides -> 
+                            overrides.entrySet().removeIf(e -> 
+                                e.getValue().expiry != null && e.getValue().expiry.isBefore(Instant.now())));
+                        
+                        areaOverrides.values().forEach(overrides -> 
+                            overrides.entrySet().removeIf(e -> 
+                                e.getValue().expiry != null && e.getValue().expiry.isBefore(Instant.now())));
+                        
+                        overrideCache.invalidateAll();
+                    }
+                }
             }
         } catch (SQLException e) {
             plugin.getLogger().error("Failed to cleanup expired overrides", e);
@@ -313,19 +347,24 @@ public class OverrideManager implements AutoCloseable {
         }
     }
 
-    private void backupDatabase() {
+    private void backupDatabaseThreadSafe() {
+        if (isShuttingDown.get()) return;
+
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            Path backupDir = plugin.getDataFolder().toPath().resolve("override_backups");
-            java.nio.file.Files.createDirectories(backupDir);
-            
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-            Path backupFile = backupDir.resolve("overrides_" + timestamp + ".db");
-            
-            try (Connection conn = dataSource.getConnection();
-                 PreparedStatement stmt = conn.prepareStatement("BACKUP TO ?")) {
-                stmt.setString(1, backupFile.toString());
-                stmt.executeUpdate();
+            synchronized (dbLock) {
+                Path backupDir = plugin.getDataFolder().toPath().resolve("override_backups");
+                java.nio.file.Files.createDirectories(backupDir);
+                
+                String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                    .replace(":", "-");
+                Path backupFile = backupDir.resolve("overrides_" + timestamp + ".db");
+                
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement stmt = conn.prepareStatement("BACKUP TO ?")) {
+                    stmt.setString(1, backupFile.toString());
+                    stmt.executeUpdate();
+                }
             }
         } catch (Exception e) {
             plugin.getLogger().error("Failed to backup override database", e);
@@ -334,17 +373,154 @@ public class OverrideManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Gets all permission overrides for a specific group.
+     * 
+     * @param groupName The name of the group
+     * @return Map of permission nodes to their states
+     */
+    public Map<String, Boolean> getGroupPermissions(String groupName) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        Map<String, Boolean> permissions = new HashMap<>();
+        
+        try {
+            synchronized (dbLock) {
+                try (Connection conn = dataSource.getConnection();
+                     PreparedStatement stmt = conn.prepareStatement("""
+                         SELECT permission, state 
+                         FROM overrides 
+                         WHERE target_type = 'group' 
+                         AND target_id = ? 
+                         AND (expiry IS NULL OR expiry > CURRENT_TIMESTAMP)
+                     """)) {
+                    
+                    stmt.setString(1, groupName);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            permissions.put(rs.getString("permission"), rs.getBoolean("state"));
+                        }
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            plugin.getLogger().error("Failed to get group permissions", e);
+            throw new RuntimeException("Failed to get group permissions", e);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "get_group_permissions");
+        }
+        
+        return permissions;
+    }
+    
+    /**
+     * Sets permission overrides for a specific group.
+     * 
+     * @param groupName The name of the group
+     * @param permissions Map of permission nodes to their states
+     */
+    public void setGroupOverrides(String groupName, Map<String, Boolean> permissions) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            ValidationUtils.validateString(groupName, 2, 64, "^[a-zA-Z0-9_-]+$", "Group name");
+            
+            synchronized (dbLock) {
+                Connection conn = null;
+                try {
+                    conn = dataSource.getConnection();
+                    conn.setAutoCommit(false);
+                    
+                    // First delete existing overrides
+                    try (PreparedStatement deleteStmt = conn.prepareStatement(
+                        "DELETE FROM overrides WHERE target_type = 'group' AND target_id = ?")) {
+                        deleteStmt.setString(1, groupName);
+                        deleteStmt.executeUpdate();
+                    }
+                    
+                    // Then insert new overrides
+                    try (PreparedStatement insertStmt = conn.prepareStatement("""
+                        INSERT INTO overrides (target_type, target_id, permission, state)
+                        VALUES ('group', ?, ?, ?)
+                    """)) {
+                        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
+                            insertStmt.setString(1, groupName);
+                            insertStmt.setString(2, entry.getKey());
+                            insertStmt.setBoolean(3, entry.getValue());
+                            insertStmt.addBatch();
+                        }
+                        insertStmt.executeBatch();
+                    }
+                    
+                    conn.commit();
+                } catch (SQLException e) {
+                    if (conn != null) {
+                        try {
+                            conn.rollback();
+                        } catch (SQLException rollbackEx) {
+                            plugin.getLogger().error("Failed to rollback transaction", rollbackEx);
+                        }
+                    }
+                    throw e;
+                } finally {
+                    if (conn != null) {
+                        try {
+                            conn.close();
+                        } catch (SQLException closeEx) {
+                            plugin.getLogger().error("Failed to close connection", closeEx);
+                        }
+                    }
+                }
+            }
+            
+            // Invalidate affected cache entries
+            overrideCache.invalidateAll();
+            
+        } catch (SQLException e) {
+            plugin.getLogger().error("Failed to set group overrides", e);
+            throw new RuntimeException("Failed to set group overrides", e);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "set_group_overrides");
+        }
+    }
+
     @Override
     public void close() {
+        if (!isShuttingDown.compareAndSet(false, true)) {
+            return; // Already shutting down
+        }
+
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
+            // Shutdown scheduler first
             scheduler.shutdown();
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
                 scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
             }
-            backupDatabase();
-            dataSource.close();
+
+            synchronized (dbLock) {
+                // Perform final backup
+                backupDatabaseThreadSafe();
+                
+                // Close data source
+                if (dataSource != null && !dataSource.isClosed()) {
+                    dataSource.close();
+                }
+            }
+
+            // Clear caches and maps
+            overrideCache.invalidateAll();
+            playerOverrides.clear();
+            areaOverrides.clear();
+            inheritanceChains.clear();
+
         } catch (Exception e) {
-            plugin.getLogger().error("Error closing OverrideManager", e);
+            plugin.getLogger().error("Error during OverrideManager shutdown", e);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "override_manager_close");
         }
     }
 }

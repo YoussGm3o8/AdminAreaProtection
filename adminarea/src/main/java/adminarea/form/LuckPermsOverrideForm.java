@@ -15,6 +15,8 @@ import org.json.JSONObject;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.HashMap;
 
 /**
  * Handles multi-step form management for LuckPerms permission overrides.
@@ -59,7 +61,11 @@ public class LuckPermsOverrideForm {
     }
 
     public void saveGroupPermissions(Area area, String groupName, JSONObject permissions) {
-        area.setGroupPermissions(permissions);
+        Map<String, Boolean> permissionMap = new HashMap<>();
+        for (String key : permissions.keySet()) {
+            permissionMap.put(key, permissions.getBoolean(key));
+        }
+        area.setGroupPermissions(groupName, permissionMap);
         plugin.updateArea(area);
     }
 

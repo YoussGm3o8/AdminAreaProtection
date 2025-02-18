@@ -98,6 +98,18 @@ public class AreaManager implements IAreaManager {
         return areasByName.containsKey(name.toLowerCase());
     }
 
+    /**
+     * Gets all areas at a specific location, sorted by priority in descending order.
+     * When areas overlap, the area with the highest priority takes precedence.
+     * Example: If area A (priority 50) and area B (priority 25) overlap,
+     * area A's settings will override area B's settings in the overlapping space.
+     *
+     * @param world The world name
+     * @param x X coordinate
+     * @param y Y coordinate
+     * @param z Z coordinate
+     * @return List of areas at location, sorted by priority (highest first)
+     */
     public List<Area> getAreasAtLocation(String world, double x, double y, double z) {
         String cacheKey = String.format("%s:%d:%d:%d", world, (int)x, (int)y, (int)z);
         return locationCache.get(cacheKey, k -> calculateAreasAtLocation(world, x, y, z));
@@ -114,6 +126,17 @@ public class AreaManager implements IAreaManager {
         locationCache.invalidateAll();
     }
 
+    /**
+     * Gets the highest priority area at a specific location.
+     * This is the area whose settings will take precedence over any other
+     * overlapping areas at this location due to having the highest priority value.
+     *
+     * @param world The world name
+     * @param x X coordinate
+     * @param y Y coordinate
+     * @param z Z coordinate
+     * @return The highest priority area at the location, or null if no areas exist there
+     */
     public Area getHighestPriorityArea(String world, double x, double y, double z) {
         return areas.stream()
             .filter(area -> area.isInside(world, x, y, z))
@@ -121,6 +144,11 @@ public class AreaManager implements IAreaManager {
             .orElse(null);
     }
 
+    /**
+     * Merges two areas, keeping the highest priority between them.
+     * The merged area will use the higher priority value to maintain
+     * proper precedence in the protection hierarchy.
+     */
     public Area mergeAreas(Area area1, Area area2) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
@@ -151,7 +179,16 @@ public class AreaManager implements IAreaManager {
             // Merge group permissions
             JSONObject mergedPermissions = new JSONObject();
             mergeGroupPermissions(mergedPermissions, area1.getGroupPermissions(), area2.getGroupPermissions());
-            merged.setGroupPermissions(mergedPermissions);
+            
+            // Set permissions for each group
+            for (String group : mergedPermissions.keySet()) {
+                JSONObject groupPerms = mergedPermissions.getJSONObject(group);
+                Map<String, Boolean> permMap = new HashMap<>();
+                for (String perm : groupPerms.keySet()) {
+                    permMap.put(perm, groupPerms.getBoolean(perm));
+                }
+                merged.setGroupPermissions(group, permMap);
+            }
 
             return merged;
         } finally {
@@ -159,16 +196,41 @@ public class AreaManager implements IAreaManager {
         }
     }
 
+    /**
+     * Merges settings from two areas using the most restrictive approach.
+     * For boolean flags:
+     * - true = allowed/unrestricted
+     * - false = denied/restricted
+     * We use AND (&&) to enforce the most restrictive combination:
+     * - If either area restricts an action (false), the merged result is restricted
+     * - Both areas must allow (true) for the merged result to allow
+     * This ensures merged areas maintain the highest level of protection.
+     *
+     * @param target The target JSONObject to store merged settings
+     * @param settings1 First area's settings
+     * @param settings2 Second area's settings
+     */
     private void mergeSettings(JSONObject target, JSONObject settings1, JSONObject settings2) {
         Set<String> allKeys = new HashSet<>();
         allKeys.addAll(settings1.keySet());
         allKeys.addAll(settings2.keySet());
 
+        // Get merge mode from config, default to most restrictive (AND)
+        boolean useMostRestrictive = plugin.getConfigManager().getBoolean(
+            "areaSettings.useMostRestrictiveMerge", true);
+
         for (String key : allKeys) {
-            // For boolean settings, use most restrictive (false) value
+            // Default to true (unrestricted) if setting doesn't exist
             boolean value1 = settings1.optBoolean(key, true);
             boolean value2 = settings2.optBoolean(key, true);
-            target.put(key, value1 && value2);
+            
+            if (useMostRestrictive) {
+                // AND operation - most restrictive approach
+                target.put(key, value1 && value2);
+            } else {
+                // OR operation - least restrictive approach
+                target.put(key, value1 || value2);
+            }
         }
     }
 
@@ -178,11 +240,23 @@ public class AreaManager implements IAreaManager {
         allGroups.addAll(perms2.keySet());
 
         for (String group : allGroups) {
-            JSONObject merged = new JSONObject();
             JSONObject groupPerms1 = perms1.optJSONObject(group, new JSONObject());
             JSONObject groupPerms2 = perms2.optJSONObject(group, new JSONObject());
-            mergeSettings(merged, groupPerms1, groupPerms2);
-            target.put(group, merged);
+            
+            JSONObject mergedPermsJson = new JSONObject();
+            
+            // Merge permissions from both areas
+            Set<String> allPerms = new HashSet<>();
+            allPerms.addAll(groupPerms1.keySet());
+            allPerms.addAll(groupPerms2.keySet());
+            
+            for (String perm : allPerms) {
+                boolean val1 = groupPerms1.optBoolean(perm, true);
+                boolean val2 = groupPerms2.optBoolean(perm, true);
+                mergedPermsJson.put(perm, val1 && val2); // Use most restrictive
+            }
+            
+            target.put(group, mergedPermsJson);
         }
     }
 
@@ -245,31 +319,6 @@ public class AreaManager implements IAreaManager {
         TaskHandler task = visualizationTasks.remove(player.getName());
         if (task != null) {
             task.cancel();
-        }
-    }
-
-    // : Perform additional testing on visualization methods; possibly optimize particle spawn rate.
-    private void showParticles(Player player, Area area, DustParticle particle) {
-        // Draw edges
-        for (double x = area.getXMin(); x <= area.getXMax(); x += 0.5) {
-            spawnParticle(player, x, area.getYMin(), area.getZMin(), particle);
-            spawnParticle(player, x, area.getYMin(), area.getZMax(), particle);
-            spawnParticle(player, x, area.getYMax(), area.getZMin(), particle);
-            spawnParticle(player, x, area.getYMax(), area.getZMax(), particle);
-        }
-        
-        for (double y = area.getYMin(); y <= area.getYMax(); y += 0.5) {
-            spawnParticle(player, area.getXMin(), y, area.getZMin(), particle);
-            spawnParticle(player, area.getXMax(), y, area.getZMin(), particle);
-            spawnParticle(player, area.getXMin(), y, area.getZMax(), particle);
-            spawnParticle(player, area.getXMax(), y, area.getZMax(), particle);
-        }
-        
-        for (double z = area.getZMin(); z <= area.getZMax(); z += 0.5) {
-            spawnParticle(player, area.getXMin(), area.getYMin(), z, particle);
-            spawnParticle(player, area.getXMax(), area.getYMin(), z, particle);
-            spawnParticle(player, area.getXMin(), area.getYMax(), z, particle);
-            spawnParticle(player, area.getXMax(), area.getYMax(), z, particle);
         }
     }
 
@@ -377,6 +426,19 @@ public class AreaManager implements IAreaManager {
         }
     }
 
+    /**
+     * Gets all areas that apply at a given position, sorted by priority in descending order.
+     * The priority system determines which area's settings take precedence when areas overlap.
+     * Areas with higher priority values override the settings of lower priority areas.
+     * 
+     * For example:
+     * - Area A (priority 75) and Area B (priority 25) overlap at position P
+     * - Area A's settings will be applied at position P, overriding Area B
+     * - Both areas are still returned in the list, but sorted by priority
+     *
+     * @param position The position to check
+     * @return List of applicable areas, sorted by priority (highest first)
+     */
     public List<Area> getAllAreasAt(Position position) {
         if (position == null || position.getLevel() == null) {
             return new ArrayList<>();

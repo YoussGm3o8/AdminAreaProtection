@@ -5,14 +5,17 @@ import adminarea.area.Area;
 import adminarea.form.IFormHandler;
 import adminarea.managers.GuiManager;
 import adminarea.constants.AdminAreaConstants;
+import adminarea.data.FormTrackingData;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowSimple;
 import cn.nukkit.form.element.ElementButton;
+import adminarea.constants.FormIds;
 
 public class AreaListHandler implements IFormHandler {
     private final AdminAreaProtectionPlugin plugin;
+    private final String formId = FormIds.AREA_LIST;
 
     public AreaListHandler(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
@@ -41,9 +44,41 @@ public class AreaListHandler implements IFormHandler {
         
         if (btnId >= 0 && btnId < plugin.getAreas().size()) {
             Area area = plugin.getAreas().get(btnId);
-            plugin.getFormIdMap().put(player.getName() + "_editing", area.getName());
-            GuiManager gui = plugin.getGuiManager(); // Use existing GuiManager instance
-            gui.openEditForm(player, area);
+            plugin.getFormIdMap().put(player.getName() + "_editing", 
+                new FormTrackingData(area.getName(), System.currentTimeMillis()));
+            plugin.getGuiManager().openEditForm(player, area);
+        }
+    }
+
+    public void handle(AreaListFormData formData) {
+        // Process the form data
+        // Example:
+        // - Retrieve area list based on criteria in formData
+        // - Format the area list for display in the GUI
+        // - Potentially update the GUI with the area list
+    }
+
+    // Inner class to represent the form data (adjust as needed)
+    public static class AreaListFormData {
+        // Example fields:
+        private String searchCriteria;
+        private int pageNumber;
+
+        // Getters and setters for the fields
+        public String getSearchCriteria() {
+            return searchCriteria;
+        }
+
+        public void setSearchCriteria(String searchCriteria) {
+            this.searchCriteria = searchCriteria;
+        }
+
+        public int getPageNumber() {
+            return pageNumber;
+        }
+
+        public void setPageNumber(int pageNumber) {
+            this.pageNumber = pageNumber;
         }
     }
 }

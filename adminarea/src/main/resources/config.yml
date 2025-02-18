@@ -16,23 +16,8 @@ undoHistorySize: 10  # number of undo steps to remember
 # Cache settings
 cacheExpiry: 5  # minutes before cache entries expire
 
-# Messages
-messages:
-  blockBreak: "§cYou cannot break blocks in {area}."
-  blockPlace: "§cYou cannot place blocks in {area}."
-  pvp: "§cPVP is disabled in {area}."
-  interact: "§cYou cannot interact with that in {area}."
-  container: "§cYou cannot access containers in {area}."
-  command: "§cYou cannot use that command in {area}."
-  noPermission: "§cYou don't have permission for that."
-  areaCreated: "§aArea {area} created successfully."
-  areaDeleted: "§aArea {area} deleted successfully."
-  areaUpdated: "§aArea {area} updated successfully."
-  selectionCleared: "§aSelection points cleared."
-  selectionComplete: "§aBoth positions set! Use /area create to create your area."
-  wandGiven: "§eYou have received the Area Wand!"
-  bypassEnabled: "§aBypass mode enabled."
-  bypassDisabled: "§aBypass mode disabled."
+# Language settings
+language: en_US
 
 # Title configuration
 title:
@@ -64,3 +49,220 @@ luckperms:
   enabled: true
   inheritPermissions: true
   updateInterval: 300  # seconds between permission updates
+
+# Toggle configuration
+toggles:
+  categories:
+    building:
+      name: "Building"
+      description: "Controls for building and basic interactions"
+      toggles:
+        build:
+          default: false
+          description: "Controls if players can place blocks"
+        break:
+          default: false
+          description: "Controls if players can break blocks"
+        interact:
+          default: false
+          description: "Controls if players can interact with blocks"
+        container:
+          default: false
+          description: "Controls if players can access containers"
+          depends: ["interact"]
+        itemFrame:
+          default: false
+          description: "Controls if players can interact with item frames"
+          depends: ["interact"]
+        armorStand:
+          default: false
+          description: "Controls if players can interact with armor stands"
+          depends: ["interact"]
+
+    environment:
+      name: "Environment"
+      description: "Natural world and environmental controls"
+      toggles:
+        fire:
+          default: false
+          description: "Controls if fire can spread"
+        liquid:
+          default: true
+          description: "Controls if liquids can flow"
+        blockSpread:
+          default: true
+          description: "Controls if blocks like grass can spread"
+        leafDecay:
+          default: true
+          description: "Controls if leaves can decay"
+        iceChange:
+          default: true
+          description: "Controls if ice can form/melt"
+        snowChange:
+          default: true
+          description: "Controls if snow can form/melt"
+
+    entities:
+      name: "Entity Controls"
+      description: "Settings for entities and mobs"
+      toggles:
+        pvp:
+          default: false
+          description: "Allows PvP combat"
+        monster_spawn:    # Updated to use underscore
+          default: false
+          description: "Allows hostile mobs to spawn"
+        animal_spawn:     # Updated to use underscore
+          default: true
+          description: "Allows passive mobs to spawn"
+        entity.damage:
+          default: false
+          description: "Allows damaging any entity"
+        animal.breed:
+          default: true
+          description: "Allows breeding animals"
+          depends: ["interact"]
+        monster.target:
+          default: false
+          description: "Allows monsters to target players"
+        entity.leash:
+          default: true
+          description: "Allows using leads on mobs"
+          depends: ["interact"]
+
+    technical:
+      name: "Redstone & Mechanics"
+      description: "Technical block functionality"
+      toggles:
+        redstone.use:
+          default: true
+          description: "Allows redstone to function"
+        piston.use:
+          default: true
+          description: "Allows pistons to move blocks"
+        hopper.use:
+          default: true
+          description: "Allows hoppers to transfer items"
+          depends: ["redstone.use"]
+        dispenser.use:
+          default: true
+          description: "Allows dispensers to function"
+          depends: ["redstone.use"]
+
+    special:
+      name: "Special"
+      description: "Special features and permissions"
+      toggles:
+        item.drop:
+          default: true
+          description: "Allows dropping items"
+        item.pickup:
+          default: true
+          description: "Allows picking up items"
+        vehicle.place:
+          default: true
+          description: "Allows placing vehicles"
+        vehicle.enter:
+          default: true
+          description: "Allows entering vehicles"
+        portal.use:
+          default: true
+          description: "Allows using portals"
+        flight:
+          default: false
+          description: "Allows flying in the area"
+        enderpearl:
+          default: false
+          description: "Allows using ender pearls"
+
+# Area Settings
+defaultToggleStates:
+  build: false
+  break: false
+  interact: false
+  pvp: false
+  monster_spawn: true
+  redstone: true
+
+# Default toggle inheritance - use normal map instead of JSONObject
+inheritedToggles: {}
+
+# Remove any !!org.json.JSONObject tags and use normal YAML maps
+toggles:
+  # ... rest of toggles config remains unchanged ...
+
+# Area Settings
+areaSettings:
+  useMostRestrictiveMerge: true
+  description:
+    mergeBehavior: "Determines how overlapping areas handle permissions. When true, uses AND logic (most restrictive). When false, uses OR logic (least restrictive)."
+    priority: "Higher priority (0-100) areas override lower priority areas in overlapping spaces."
+
+# Default permissions applied to new areas
+defaultPermissions:
+  allowBuild: false
+  allowBreak: false
+  allowInteract: false
+  allowContainer: false
+  allowItemFrame: false
+  allowPvP: false
+  allowMobSpawn: true
+  allowRedstone: true
+
+# Permission templates for quick area setup
+permissionTemplates:
+  pvp_arena:
+    allowPvP: true
+    allowBuild: false
+    allowBreak: false
+    allowMobSpawn: false
+  creative_zone:
+    allowBuild: true
+    allowBreak: true
+    allowInteract: true
+    allowContainer: true
+  safe_spawn:
+    allowBuild: false
+    allowBreak: false
+    allowPvP: false
+    allowMobSpawn: false
+
+# Template descriptions
+templateDescriptions:
+  pvp_arena: "PvP enabled, building disabled"
+  creative_zone: "Full building permissions"
+  safe_spawn: "Safe spawn area with no PvP/mobs"
+
+# Messages
+messages:
+  prefix: "§8[§bAreaProtect§8] §r"
+  blockBreak: "§cYou cannot break blocks in {area}."
+  blockPlace: "§cYou cannot place blocks in {area}."
+  interact: "§cYou cannot interact with blocks in {area}."
+  container: "§cYou cannot access containers in {area}."
+  pvp: "§cPvP is disabled in {area}."
+  noPermission: "§cYou don't have permission to do that."
+  selectionComplete: "§aSelection complete! Position {pos} set to {location}"
+  selectionCleared: "§aSelection cleared!"
+  areaCreated: "§aArea '{name}' has been created successfully!"
+  areaUpdated: "§aArea '{name}' has been updated successfully!"
+  areaDeleted: "§aArea '{name}' has been deleted successfully!"
+  wandGiven: "§aYou have received a selection wand!"
+  bypassEnabled: "§aArea bypass mode enabled."
+  bypassDisabled: "§aArea bypass mode disabled."
+  command:
+    usage: "§cUsage: {usage}"
+    error: "§cError: {error}"
+    toggleHeader: "§6=== Area Toggle Commands ==="
+    toggleArea: "§e/area toggle <on|off> <toggle> <area> §7- Toggle a permission"
+    toggleList: "§e/area toggle list [category] §7- List available toggles"
+    toggleCategory: "§e/area toggle category <name> §7- List toggles in category"
+
+  toggleList:
+    header: "§6=== Available Permission Toggles ==="
+    categoryHeader: "§e=== {category} ==="
+    entry: "§7- {name}: {description}"
+
+  error:
+    invalidToggle: "§cInvalid toggle name. Use /area toggle list to see available toggles."
+    invalidCategory: "§cInvalid category name. Use /area toggle list to see categories."

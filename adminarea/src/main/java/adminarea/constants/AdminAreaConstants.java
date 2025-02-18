@@ -18,11 +18,24 @@ public final class AdminAreaConstants {
     public static final String FORM_DELETE_CONFIRM = "delete_area_confirm";
     public static final String FORM_AREA_SETTINGS = "area_settings";
     public static final String FORM_ERROR = "error";
+    public static final String FORM_BASIC_SETTINGS = "basic_settings";
+    public static final String FORM_PROTECTION_SETTINGS = "protection_settings";
+    public static final String FORM_LUCKPERMS_GROUPS = "luckperms_groups";
+    public static final String FORM_BUILDING_SETTINGS = "form_building_settings";
+    public static final String FORM_ENVIRONMENT_SETTINGS = "form_environment_settings";
+    public static final String FORM_ENTITY_SETTINGS = "form_entity_settings";
+    public static final String FORM_TECHNICAL_SETTINGS = "form_technical_settings";
+    public static final String FORM_SPECIAL_SETTINGS = "form_special_settings";
     
     // LuckPerms Form Constants
     public static final String FORM_GROUP_SELECT = "group_select";
     public static final String FORM_GROUP_PERMISSIONS = "group_permissions";
-    public static final String MSG_GROUP_PERMS_UPDATED = "§aPermissions updated for group %s in area %s";
+
+    // LuckPerms Integration Constants
+    public static final String FORM_TRACK_SELECT = "track_select";
+    public static final String FORM_TRACK_GROUPS = "track_groups";
+    public static final String FORM_GROUP_INHERITANCE = "group_inheritance";
+    public static final String FORM_GROUP_WEIGHT = "group_weight";
 
     // Configuration related messages
     public static final String MSG_CONFIG_RELOADED = "§aConfiguration has been reloaded.";
@@ -38,12 +51,29 @@ public final class AdminAreaConstants {
     public static final String MSG_AREA_UPDATED = "§aArea %s updated successfully.";
     public static final String MSG_AREA_DELETED = "§aArea '%s' has been deleted successfully.";
     public static final String MSG_NO_AREAS = "§eThere are no protected areas.";
-    public static final String MSG_LUCKPERMS_NOT_LOADED = "§cError: LuckPerms data not loaded";
-    public static final String MSG_LUCKPERMS_NOT_AVAILABLE = "§cLuckPerms is not available";
     public static final String MSG_NO_PERMISSION = "§cYou don't have permission to manage player areas";
-    public static final String MSG_AREA_NOT_FOUND = "§cArea not found!";
     public static final String MSG_FORM_CREATE_ERROR = "§cError creating delete form";
     public static final String MSG_FORM_ERROR = "§cError: Form could not be created";
     
     private AdminAreaConstants() {} // Prevent instantiation
+
+    public static final class Permissions {
+        // Base permissions
+        public static final String ADMIN = "adminarea.admin";
+        public static final String MANAGE = "adminarea.manage";
+        
+        // Area management 
+        public static final String AREA_CREATE = "adminarea.area.create";
+        public static final String AREA_EDIT = "adminarea.area.edit";
+        public static final String AREA_DELETE = "adminarea.area.delete";
+        public static final String AREA_LIST = "adminarea.area.list";
+        
+        // LuckPerms integration
+        public static final String LUCKPERMS_EDIT = "adminarea.luckperms.edit";
+        public static final String LUCKPERMS_VIEW = "adminarea.luckperms.view";
+        
+        // Settings
+        public static final String SETTINGS_MANAGE = "adminarea.settings.manage";
+        public static final String TOGGLE_MANAGE = "adminarea.toggle.manage";
+    }
 }

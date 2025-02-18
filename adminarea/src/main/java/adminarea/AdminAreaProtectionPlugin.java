@@ -15,6 +15,9 @@ import cn.nukkit.Player;
 import cn.nukkit.level.Position;
 
 import java.util.List;
+import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
@@ -22,30 +25,47 @@ import java.util.stream.Collectors;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.group.Group;
+import adminarea.listeners.EntityListener;
+import adminarea.listeners.EnvironmentListener;
 import adminarea.listeners.FormResponseListener;
+import adminarea.listeners.ItemListener;
 import adminarea.listeners.ProtectionListener;
+import adminarea.listeners.VehicleListener;
 import adminarea.listeners.WandListener;
 import adminarea.managers.AreaManager;
 import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
+import adminarea.managers.LanguageManager;
+import adminarea.permissions.OverrideManager;  // Updated import path
 import adminarea.api.AdminAreaAPI;
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
 import adminarea.config.ConfigManager;
+import adminarea.data.FormTrackingData;
+import adminarea.event.AreaPermissionUpdateEvent;
+import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.PermissionChangeEvent;
 import adminarea.util.PerformanceMonitor;
+import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
 import adminarea.exception.DatabaseException;
+import adminarea.form.FormFactory;
+import adminarea.permissions.LuckPermsCache;
+import adminarea.permissions.PermissionToggle;
+
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     private static AdminAreaProtectionPlugin instance;
     private AdminAreaAPI api;
-
+    // Add this field with other managers
+    private OverrideManager overrideManager;
     private DatabaseManager dbManager;
     private AreaCommand areaCommand;
-    private HashMap<String, Position[]> playerPositions = new HashMap<>(); // Store player positions
-    private HashMap<String, String> formIdMap = new HashMap<>(); // Store form IDs
-    private HashMap<String, Boolean> bypassingPlayers = new HashMap<>(); // Store players bypassing protection
+    private final HashMap<String, Position[]> playerPositions = new HashMap<>(); // Store player positions
+    private final ConcurrentHashMap<String, FormTrackingData> formIdMap = new ConcurrentHashMap<>(); // Store form IDs
+    private final HashMap<String, Boolean> bypassingPlayers = new HashMap<>(); // Store players bypassing protection
     private boolean globalAreaProtection = false; // new flag
     private LuckPerms luckPermsApi; // New field for LuckPerms API
     private ConfigManager configManager;
@@ -56,11 +76,15 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     private WandListener wandListener; // Add WandListener
 
     private boolean enableMessages;
-    private String msgBlockBreak;
-    private String msgBlockPlace;
-    private String msgPVP;
+    private LanguageManager languageManager;
 
     private boolean debugMode = false;
+
+    private FormFactory formFactory;
+
+    private LuckPermsCache luckPermsCache;
+
+    private ValidationUtils validationUtils;
 
     /**
      * Initializes the plugin, loads configuration, and sets up required components.
@@ -99,6 +123,17 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             // Replace direct config access with config manager
             reloadConfigValues();
 
+            // Initialize language manager earlier in startup sequence
+            languageManager = new LanguageManager(this);
+            try {
+                languageManager.reload();
+                getLogger().info("LanguageManager initialized successfully.");
+            } catch (Exception e) {
+                getLogger().error("Failed to initialize LanguageManager", e);
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+
             // Initialize managers with performance monitoring
             Timer.Sample dbInitTimer = performanceMonitor.startTimer();
             dbManager = new DatabaseManager(this);
@@ -109,6 +144,19 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             } catch (DatabaseException e) {
                 performanceMonitor.stopTimer(dbInitTimer, "database_init_failed");
                 getLogger().error("Failed to initialize database", e);
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+
+            // Initialize OverrideManager
+            Timer.Sample overrideInitTimer = performanceMonitor.startTimer();
+            try {
+                overrideManager = new OverrideManager(this);
+                performanceMonitor.stopTimer(overrideInitTimer, "override_manager_init");
+                getLogger().info("Override manager initialized successfully");
+            } catch (Exception e) {
+                performanceMonitor.stopTimer(overrideInitTimer, "override_manager_init_failed");
+                getLogger().error("Failed to initialize override manager", e);
                 getServer().getPluginManager().disablePlugin(this);
                 return;
             }
@@ -136,12 +184,24 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
             wandListener = new WandListener(this); // Initialize WandListener
 
+            formFactory = new FormFactory(this);
+
+            validationUtils = new ValidationUtils();
+
             // Register events and commands
+
             getServer().getPluginManager().registerEvents(this, this);
-            getServer().getPluginManager().registerEvents(new ProtectionListener(this), this);
             getServer().getPluginManager().registerEvents(new FormResponseListener(this), this);
             getServer().getPluginManager().registerEvents(wandListener, this); // Register WandListener
             getLogger().info("FormResponseListener registered."); // Added log
+
+            ProtectionListener protectionListener = new ProtectionListener(this);
+
+            getServer().getPluginManager().registerEvents(protectionListener, this);
+            getServer().getPluginManager().registerEvents(new EnvironmentListener(this, protectionListener), this);
+            getServer().getPluginManager().registerEvents(new EntityListener(this, protectionListener), this);
+            getServer().getPluginManager().registerEvents(new ItemListener(this, protectionListener), this);
+            getServer().getPluginManager().registerEvents(new VehicleListener(this, protectionListener), this);
 
             // Initialize AreaCommand
             areaCommand = new AreaCommand(this);
@@ -150,11 +210,24 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             getServer().getCommandMap().register("area", areaCommand);
             getLogger().info("Area command registered.");
 
-            // Check for LuckPerms presence and retrieve its API if available.
+            // Initialize LuckPerms integration
             if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
-                luckPermsApi = LuckPermsProvider.get();
-                getLogger().info("LuckPerms detected. Integration is enabled.");
-                // ...optional LuckPerms-specific setup...
+                try {
+                    luckPermsApi = LuckPermsProvider.get();
+                    luckPermsCache = new LuckPermsCache(luckPermsApi);
+                    
+                    // Register listener for LuckPerms changes
+                    luckPermsApi.getEventBus().subscribe(this, 
+                        net.luckperms.api.event.group.GroupDataRecalculateEvent.class, 
+                        event -> luckPermsCache.refreshCache());
+                    luckPermsApi.getEventBus().subscribe(this,
+                        net.luckperms.api.event.group.GroupLoadEvent.class,
+                        event -> luckPermsCache.refreshCache());
+                        
+                    getLogger().info("LuckPerms integration enabled successfully");
+                } catch (Exception e) {
+                    getLogger().error("Failed to initialize LuckPerms integration", e);
+                }
             } else {
                 getLogger().info("LuckPerms not found. Proceeding without it.");
             }
@@ -195,9 +268,10 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
      */
     public void reloadConfigValues() {
         enableMessages = configManager.isEnabled("enableMessages");
-        msgBlockBreak = configManager.getMessage("blockBreak");
-        msgBlockPlace = configManager.getMessage("blockPlace");
-        msgPVP = configManager.getMessage("pvp");
+        debugMode = configManager.isEnabled("debug");
+        if (debugMode) {
+            getLogger().info("Debug mode enabled");
+        }
     }
 
     public ConfigManager getConfigManager() {
@@ -227,6 +301,18 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     @Override
     public void onDisable() {
+        // Add override manager cleanup before database cleanup
+        if (overrideManager != null) {
+            Timer.Sample overrideCloseTimer = performanceMonitor.startTimer();
+            try {
+                overrideManager.close();
+                performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close");
+            } catch (Exception e) {
+                performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close_failed");
+                getLogger().error("Error closing override manager", e);
+            }
+        }
+
         // Cleanup managers in reverse order of initialization
         if (guiManager != null) {
             // Cancel any pending GUI tasks
@@ -319,6 +405,10 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         return luckPermsApi;
     }
 
+    public LuckPermsCache getLuckPermsCache() {
+        return luckPermsCache;
+    }
+
     public DatabaseManager getDatabaseManager() {
         return dbManager;
     }
@@ -329,7 +419,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     }
 
     // Getter and setter for form ID map
-    public HashMap<String, String> getFormIdMap() {
+    public ConcurrentHashMap<String, FormTrackingData> getFormIdMap() {
         return formIdMap;
     }
 
@@ -338,28 +428,22 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         return enableMessages;
     }
 
-    public String getMsgBlockBreak() {
-        return msgBlockBreak;
-    }
-
-    public String getMsgBlockPlace() {
-        return msgBlockPlace;
-    }
-
-    public String getMsgPVP() {
-        return msgPVP;
-    }
-
     public boolean hasGroupPermission(Player player, Area area, String permission) {
         if (luckPermsApi == null) return true;
         
-        // Get user's groups
         var user = luckPermsApi.getPlayerAdapter(Player.class).getUser(player);
         var groups = user.getInheritedGroups(user.getQueryOptions());
         
-        // Check each group's permissions for the area
-        for (Group group : groups) {
-            if (!area.getGroupPermission(group.getName(), permission)) {
+        // Sort groups by weight
+        List<Group> sortedGroups = new ArrayList<>(groups);
+        sortedGroups.sort((g1, g2) -> Integer.compare(
+            luckPermsCache.getGroupWeight(g2.getName()),
+            luckPermsCache.getGroupWeight(g1.getName())
+        ));
+        
+        // Check permissions starting from highest weight group
+        for (Group group : sortedGroups) {
+            if (!area.getEffectivePermission(group.getName(), permission)) {
                 return false;
             }
         }
@@ -414,4 +498,105 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     public boolean isDebugMode() {
         return debugMode;
     }
+
+    public LanguageManager getLanguageManager() {
+        return languageManager;
+    }
+
+    public void debug(String message) {
+        if (debugMode) {
+            getLogger().debug("[Debug] " + message);
+        }
+    }
+
+    public FormFactory getFormFactory() {
+        return formFactory;
+    }
+
+    public boolean isLuckPermsEnabled() {
+        return luckPermsApi != null && luckPermsCache != null;
+    }
+
+    public List<String> getGroupsByTrack(String trackName) {
+        if (!isLuckPermsEnabled()) return Collections.emptyList();
+        return new ArrayList<>(luckPermsCache.getTrackGroups(trackName));
+    }
+
+    public List<String> getGroupInheritance(String groupName) {
+        if (!isLuckPermsEnabled()) return Collections.emptyList();
+        return luckPermsCache.getInheritanceChain(groupName);
+    }
+
+    // Add helper methods for firing events
+    public void firePermissionChangeEvent(Area area, String group, String permission, 
+                                    boolean oldValue, boolean newValue) {
+        PermissionChangeEvent event = new PermissionChangeEvent(area, group, permission, oldValue, newValue);
+        getServer().getPluginManager().callEvent(event);
+        if (!event.isCancelled()) {
+            // Apply the change if not cancelled
+            area.setGroupPermission(group, permission, newValue);
+        }
+    }
+
+    public void fireAreaPermissionUpdateEvent(Area area, PermissionToggle.Category category,
+                                        Map<String, Boolean> oldPermissions,
+                                        Map<String, Boolean> newPermissions) {
+        AreaPermissionUpdateEvent event = new AreaPermissionUpdateEvent(
+            area, category, oldPermissions, newPermissions);
+        getServer().getPluginManager().callEvent(event);
+        if (!event.isCancelled()) {
+            // Apply the changes if not cancelled
+            area.updateCategoryPermissions(category, newPermissions);
+        }
+    }
+
+    public void fireLuckPermsGroupChangeEvent(Area area, String group,
+                                        Map<String, Boolean> oldPermissions,
+                                        Map<String, Boolean> newPermissions) {
+        LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(
+            area, group, oldPermissions, newPermissions);
+        getServer().getPluginManager().callEvent(event);
+        if (!event.isCancelled()) {
+            // Apply the changes if not cancelled
+            area.setGroupPermissions(group, newPermissions);
+        }
+    }
+
+    /**
+     * Gets the plugin's override manager.
+     * @return The OverrideManager instance
+     */
+    public OverrideManager getOverrideManager() {
+        return overrideManager;
+    }
+
+    /**
+     * Gets the validation utilities instance.
+     * @return The ValidationUtils instance
+     */
+    public ValidationUtils getValidationUtils() {
+        return validationUtils;
+    }
+
+    public boolean hasValidSelection(Player player) {
+        Position[] positions = playerPositions.get(player.getName());
+        return positions != null && positions[0] != null && positions[1] != null;
+    }
+
+    public Map<String, Object> getPlayerSelection(Player player) {
+        Position[] positions = playerPositions.get(player.getName());
+        if (!hasValidSelection(player)) {
+            return null;
+        }
+
+        Map<String, Object> selection = new HashMap<>();
+        selection.put("x1", positions[0].getFloorX());
+        selection.put("x2", positions[1].getFloorX());
+        selection.put("y1", positions[0].getFloorY());
+        selection.put("y2", positions[1].getFloorY());
+        selection.put("z1", positions[0].getFloorZ());
+        selection.put("z2", positions[1].getFloorZ());
+        return selection;
+    }
+
 }

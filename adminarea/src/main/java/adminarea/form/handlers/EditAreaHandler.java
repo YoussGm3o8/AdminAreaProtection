@@ -3,21 +3,19 @@ package adminarea.form.handlers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.constants.AdminAreaConstants;
-import adminarea.form.IFormHandler;
-import adminarea.permissions.PermissionToggle;
+import adminarea.constants.FormIds;
+import adminarea.data.FormTrackingData;
 import cn.nukkit.Player;
-import cn.nukkit.form.element.ElementInput;
-import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.form.response.FormResponseCustom;
+import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
-import cn.nukkit.form.window.FormWindowCustom;
-import org.json.JSONObject;
 
-public class EditAreaHandler implements IFormHandler {
-    private final AdminAreaProtectionPlugin plugin;
+public class EditAreaHandler extends BaseFormHandler {
+
+    private final String formId = FormIds.EDIT_AREA;
 
     public EditAreaHandler(AdminAreaProtectionPlugin plugin) {
-        this.plugin = plugin;
+        super(plugin);
     }
 
     @Override
@@ -27,89 +25,110 @@ public class EditAreaHandler implements IFormHandler {
 
     @Override
     public FormWindow createForm(Player player) {
-        String areaName = plugin.getFormIdMap().get(player.getName() + "_editing");
-        Area area = plugin.getArea(areaName);
-        
+        // Safely handle null player
+        if (player == null) {
+            return null;
+        }
+
+        // Get the area being edited from tracking data
+        FormTrackingData trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (trackingData == null) {
+            return null;
+        }
+
+        Area area = plugin.getArea(trackingData.getFormId());
         if (area == null) {
             return null;
         }
 
-        FormWindowCustom form = new FormWindowCustom("Edit Area: " + area.getName());
-        form.addElement(new ElementInput("Area Name", "Enter new name", area.getName()));
-        form.addElement(new ElementInput("Priority", "Enter new priority", String.valueOf(area.getPriority())));
-
-        // Add permission toggles
-        JSONObject settings = area.getSettings();
-        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            boolean current = settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue());
-            form.addElement(new ElementToggle(toggle.getDisplayName(), current));
-        }
-        
-        return form;
+        return plugin.getGuiManager().createEditForm(area);
     }
 
     @Override
-    public void handleResponse(Player player, Object response) {
-        if (!(response instanceof FormResponseCustom)) return;
-        
-        FormResponseCustom customResponse = (FormResponseCustom) response;
-        String areaName = plugin.getFormIdMap().get(player.getName() + "_editing");
-        Area oldArea = plugin.getArea(areaName);
-        
-        if (oldArea == null) {
-            player.sendMessage("§cArea not found");
+    protected void handleCustomResponse(Player player, FormResponseCustom response) {
+        // Edit form doesn't use custom responses
+        throw new UnsupportedOperationException("This handler only supports simple forms");
+    }
+
+    @Override
+    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
+        if (player == null || response == null) {
             return;
         }
 
         try {
-            String newName = customResponse.getInputResponse(0);
-            int priority = Integer.parseInt(customResponse.getInputResponse(1));
-            
-            // Create new area using builder with updated values
-            Area newArea = Area.builder()
-                .name(newName)
-                .world(oldArea.getWorld()) // Keep the original world
-                .coordinates(
-                    Integer.parseInt(customResponse.getInputResponse(2)), // xMin
-                    Integer.parseInt(customResponse.getInputResponse(3)), // xMax
-                    Integer.parseInt(customResponse.getInputResponse(4)), // yMin
-                    Integer.parseInt(customResponse.getInputResponse(5)), // yMax
-                    Integer.parseInt(customResponse.getInputResponse(6)), // zMin
-                    Integer.parseInt(customResponse.getInputResponse(7))  // zMax
-                )
-                .priority(priority)
-                .showTitle(oldArea.isShowTitle())
-                .build();
+            // Store form data
+            plugin.getFormIdMap().put(player.getName(),
+                new FormTrackingData(AdminAreaConstants.FORM_EDIT_AREA, System.currentTimeMillis()));
 
-            // Process permission toggles starting at index 8
-            JSONObject settings = new JSONObject();
-            int toggleIndex = 8;
-            for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                settings.put(toggle.getPermissionNode(), customResponse.getToggleResponse(toggleIndex++));
+            FormTrackingData trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
+            if (trackingData == null) {
+                return;
             }
-            newArea.setSettings(settings);
 
-            // Get custom messages
-            newArea.setEnterMessage(customResponse.getInputResponse(customResponse.getResponses().size() - 2));
-            newArea.setLeaveMessage(customResponse.getInputResponse(customResponse.getResponses().size() - 1));
+            Area area = plugin.getArea(trackingData.getFormId());
+            if (area == null) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+                return;
+            }
 
-            // Copy over group permissions from old area
-            newArea.setGroupPermissions(oldArea.getGroupPermissions());
+            plugin.getGuiManager().handleEditFormResponse(player, response.getClickedButtonId(), area);
 
-            // Remove old area and add new one
-            plugin.removeArea(oldArea);
-            plugin.addArea(newArea);
-            plugin.saveArea(newArea);
-            
-            player.sendMessage(String.format(AdminAreaConstants.MSG_AREA_UPDATED, newName));
-            
-        } catch (NumberFormatException e) {
-            player.sendMessage("§cInvalid number format in input fields");
         } catch (Exception e) {
-            player.sendMessage("§cError updating area: " + e.getMessage());
-            if (plugin.getConfigManager().isDebugEnabled()) {
-                e.printStackTrace();
-            }
+            handleError(player, e);
         }
+    }
+
+    private void handleError(Player player, Exception e) {
+        plugin.getLogger().error(e.getMessage(), e);
+        player.sendMessage(plugin.getLanguageManager().get("messages.errorOccurred"));
+    }
+
+    public void handle(EditAreaFormData formData) {
+        // Example of data flow:
+        // 1. Get data from the form
+        String areaId = formData.getAreaId();
+        String newAreaName = formData.getNewAreaName();
+
+        // 2. Validate the data
+        if (areaId == null || areaId.isEmpty()) {
+            System.err.println("Error: Area ID is required.");
+            return;
+        }
+
+        // 3. Update the database
+        updateAreaInDatabase(areaId, newAreaName);
+
+        // 4. Confirm the update to the user (e.g., display a success message)
+        System.out.println("Area updated successfully.");
+    }
+
+    private void updateAreaInDatabase(String areaId, String newAreaName) {
+        // Implementation to update the area in the database
+        // ...
+    }
+
+    public static class EditAreaFormData {
+        private String areaId;
+        private String newAreaName;
+        // ... other fields ...
+
+        public String getAreaId() {
+            return areaId;
+        }
+
+        public void setAreaId(String areaId) {
+            this.areaId = areaId;
+        }
+
+        public String getNewAreaName() {
+            return newAreaName;
+        }
+
+        public void setNewAreaName(String newAreaName) {
+            this.newAreaName = newAreaName;
+        }
+
+        // ... getters and setters for other fields ...
     }
 }

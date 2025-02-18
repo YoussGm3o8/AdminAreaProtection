@@ -2,11 +2,19 @@ package adminarea.api;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.permissions.PermissionToggle;
 import adminarea.util.PerformanceMonitor;
 import cn.nukkit.Player;
 import cn.nukkit.level.Position;
 import java.util.List;
 import java.util.Set;
+
+import org.json.JSONObject;
+
+import java.util.Map;
+import java.util.HashMap;
+import java.util.HashSet;
+
 
 /**
  * Public API for AdminAreaProtection plugin.
@@ -123,5 +131,102 @@ public class AdminAreaAPI {
      */
     public AdminAreaProtectionPlugin getPlugin() {
         return plugin;
+    }
+
+    /**
+     * Gets all permissions for a specific group in an area
+     * @param area The area to check
+     * @param group The group name
+     * @return Map of permission nodes to boolean values
+     */
+    public Map<String, Boolean> getGroupPermissions(Area area, String group) {
+        return area.getGroupPermissions(group);
+    }
+
+    /**
+     * Sets multiple permissions for a group in an area
+     * @param area The area to modify 
+     * @param group The group name
+     * @param permissions Map of permission nodes and values to set
+     */
+    public void setGroupPermissions(Area area, String group, Map<String, Boolean> permissions) {
+        area.setGroupPermissions(group, permissions);
+        plugin.saveArea(area);
+    }
+
+    /**
+     * Gets all permissions in an area by category
+     * @param area The area to check
+     * @param category The category to get permissions for
+     * @return Map of permission nodes to boolean values
+     */
+    public Map<String, Boolean> getPermissionsByCategory(Area area, PermissionToggle.Category category) {
+        Map<String, Boolean> perms = new HashMap<>();
+        for (PermissionToggle toggle : PermissionToggle.getTogglesByCategory().get(category)) {
+            String node = toggle.getPermissionNode();
+            perms.put(node, area.getSetting(node));
+        }
+        return perms;
+    }
+
+    /**
+     * Updates multiple permissions in a category
+     * @param area The area to modify
+     * @param category The category to update
+     * @param permissions Map of permission nodes and values to set
+     */
+    public void setPermissionsByCategory(Area area, PermissionToggle.Category category, 
+                                       Map<String, Boolean> permissions) {
+        JSONObject settings = area.getSettings();
+        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
+            settings.put(entry.getKey(), entry.getValue());
+        }
+        area.setSettings(settings);
+        plugin.saveArea(area);
+    }
+
+    /**
+     * Gets effective permission value considering group inheritance
+     * @param area The area to check
+     * @param group The group name
+     * @param permission The permission to check
+     * @return The effective permission value
+     */
+    public boolean getEffectivePermission(Area area, String group, String permission) {
+        return area.getEffectivePermission(group, permission);
+    }
+
+    /**
+     * Gets effective permissions for a player in an area
+     * @param player The player to check
+     * @param area The area to check  
+     * @return Map of all effective permissions for the player
+     */
+    public Map<String, Boolean> getEffectivePermissions(Player player, Area area) {
+        Map<String, Boolean> effective = new HashMap<>();
+        Set<String> groups = plugin.getGroupNames();
+        
+        // Get all possible permission nodes
+        Set<String> allNodes = new HashSet<>();
+        for (List<PermissionToggle> toggles : PermissionToggle.getTogglesByCategory().values()) {
+            for (PermissionToggle toggle : toggles) {
+                allNodes.add(toggle.getPermissionNode());
+            }
+        }
+
+        // Check each permission node
+        for (String node : allNodes) {
+            boolean value = false;
+            // Check groups in priority order
+            for (String group : groups) {
+                if (area.hasExplicitGroupPermission(group, node)) {
+                    value = area.getGroupPermission(group, node);
+                    break;
+                }
+            }
+            effective.put(node, value);
+        }
+        
+        return effective;
     }
 }

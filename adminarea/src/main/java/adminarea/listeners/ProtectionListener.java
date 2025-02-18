@@ -16,7 +16,10 @@ import cn.nukkit.level.Position;
 import cn.nukkit.utils.LogLevel;
 import io.micrometer.core.instrument.Timer;
 import cn.nukkit.event.inventory.InventoryOpenEvent;
+import cn.nukkit.event.vehicle.EntityEnterVehicleEvent;
+import cn.nukkit.event.vehicle.VehicleCreateEvent;
 import cn.nukkit.event.vehicle.VehicleDamageEvent;
+import cn.nukkit.event.inventory.InventoryPickupItemEvent;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +29,9 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.event.AreaPermissionUpdateEvent;
+import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.PermissionChangeEvent;
 
 /**
  * Handles all protection-related events and permission checks.
@@ -57,60 +63,94 @@ public class ProtectionListener implements Listener {
             .build();
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            if (handleProtection(event.getBlock(), event.getPlayer(), "area.block.break")) {
+            if (handleProtection(event.getBlock(), event.getPlayer(), "gui.permissions.toggles.allowBreak")) {
                 event.setCancelled(true);
-                sendProtectionMessage(event.getPlayer(), plugin.getMsgBlockBreak());
+                // Get the area at the block's location for the message
+                Area area = plugin.getHighestPriorityArea(
+                    event.getBlock().getLevel().getName(),
+                    event.getBlock().getX(),
+                    event.getBlock().getY(),
+                    event.getBlock().getZ()
+                );
+                
+                HashMap<String, String> placeholders = new HashMap<>();
+                if (area != null) {
+                    placeholders.put("area", area.getName());
+                }
+                
+                sendProtectionMessage(event.getPlayer(), "messages.blockBreak", placeholders);
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "block_break_check");
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             Player player = event.getPlayer();
             Block block = event.getBlock();
-            Area area = plugin.getHighestPriorityArea(block.getLevel().getName(),
-                block.getX(), block.getY(), block.getZ());
-                
-            if (handleProtection(event.getBlock(), event.getPlayer(), "area.block.place")) {
-                if (player.hasPermission("adminarea.bypass") || plugin.isBypassing(player.getName())) {
-                    return;
-                }
+            
+            // Check bypass first
+            if (player.hasPermission("adminarea.bypass") || plugin.isBypassing(player.getName())) {
+                return;
+            }
+
+            // Handle protection check - Update permission node to match gui.permissions.toggles format
+            if (handleProtection(block, player, "gui.permissions.toggles.build")) {
                 event.setCancelled(true);
-                sendProtectionMessage(player, plugin.getMsgBlockPlace());
+                
+                // Get the area for the message
+                Area area = plugin.getHighestPriorityArea(
+                    block.getLevel().getName(),
+                    block.getX(),
+                    block.getY(),
+                    block.getZ()
+                );
+                
+                HashMap<String, String> placeholders = new HashMap<>();
+                if (area != null) {
+                    placeholders.put("area", area.getName());
+                }
+                
+                sendProtectionMessage(player, "messages.blockPlace", placeholders);
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "block_place_check");
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onPlayerInteract(PlayerInteractEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             Player player = event.getPlayer();
             Block block = event.getBlock();
             
+            // Skip interaction check if a break/place event will handle it
+            if (event.getAction() == PlayerInteractEvent.Action.LEFT_CLICK_BLOCK || 
+                event.getAction() == PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK && player.getInventory().getItemInHand().canBePlaced()) {
+                return;
+            }
+            
             // Special handling for containers
             if (block != null && isContainer(block)) {
-                if (handleProtection(block, player, "area.container.access")) {
+                if (handleProtection(block, player, "gui.permissions.toggles.allowContainer")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, "§cYou cannot access containers in this area.");
+                    sendProtectionMessage(player, "messages.protection.container", new HashMap<>());
                     return;
                 }
             }
 
             // General interaction protection
-            if (handleProtection(block, player, "area.interact")) {
+            if (handleProtection(block, player, "gui.permissions.toggles.allowInteract")) {
                 event.setCancelled(true);
-                sendProtectionMessage(player, "§cThis area is protected.");
+                sendProtectionMessage(player, "messages.interact", new HashMap<>());
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "interact_check");
@@ -124,7 +164,7 @@ public class ProtectionListener implements Listener {
             Area area = plugin.getHighestPriorityArea(event.getBlock().getLevel().getName(),
                 event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ());
                 
-            if (area != null && !area.getSettings().optBoolean("area.redstone", true)) {
+            if (area != null && !area.getSettings().optBoolean("gui.permissions.toggles.allowRedstone", true)) {
                 event.setCancelled();
             }
         } finally {
@@ -143,14 +183,14 @@ public class ProtectionListener implements Listener {
                 // PvP protection
                 if (victim instanceof Player && handleProtection(victim, player, "allowPvP")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, plugin.getMsgPVP());
+                    sendProtectionMessage(player, "messages.pvp", new HashMap<>());
                     return;
                 }
                 
                 // General entity protection
                 if (handleProtection(victim, player, "allowEntityDamage")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, "§cYou cannot damage entities in this area.");
+                    sendProtectionMessage(player, "messages.protectionDenied", new HashMap<>());
                 }
             }
         } finally {
@@ -233,7 +273,7 @@ public class ProtectionListener implements Listener {
             if (event.getPlayer() instanceof Player player) {
                 if (handleProtection(player.getPosition(), player, "allowContainerAccess")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, "§cYou cannot access containers in this area.");
+                    sendProtectionMessage(player, "messages.protection.container", new HashMap<>());
                 }
             }
         } finally {
@@ -261,7 +301,7 @@ public class ProtectionListener implements Listener {
             if (attacker instanceof Player player) {
                 if (handleProtection(event.getVehicle().getPosition(), player, "allowVehicleDamage")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, "§cYou cannot damage vehicles in this area.");
+                    sendProtectionMessage(player, "messages.protection.vehicleDamage", new HashMap<>());
                 }
             }
         } finally {
@@ -276,6 +316,10 @@ public class ProtectionListener implements Listener {
             // Additional fire protection
             if (handleProtection(event.getBlock(), null, "allowFireStart")) {
                 event.setCancelled(true);
+                // Fire messages only shown for player-caused ignition
+                if (event.getEntity() instanceof Player player) {
+                    sendProtectionMessage(player, "messages.protection.fire", new HashMap<>());
+                }
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "block_ignite_check");
@@ -286,7 +330,7 @@ public class ProtectionListener implements Listener {
     public void onBlockSpread(BlockSpreadEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Additional block spread protection (vines, mushrooms, etc)
+            // Block spread is always natural, no player check needed
             if (handleProtection(event.getBlock(), null, "allowBlockSpread")) {
                 event.setCancelled(true);
             }
@@ -299,8 +343,7 @@ public class ProtectionListener implements Listener {
     public void onPistonExtend(BlockPistonChangeEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Check if piston affects protected area
-            boolean cancel = false;
+            // Pistons can work without player involvement
             if (handleProtection(event.getBlock(), null, "allowPistons")) {
                 event.setCancelled(true);
             }
@@ -321,51 +364,199 @@ public class ProtectionListener implements Listener {
         }
     }
 
-    private boolean handleProtection(Position pos, Player player, String permission) {
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onSoilDry(BlockFadeEvent event) {
+        if (event.getBlock().getId() == BlockID.FARMLAND && 
+            handleProtection(event.getBlock(), null, "gui.permissions.toggles.allowBlockSpread")) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onCropGrow(BlockGrowEvent event) {
+        if (handleProtection(event.getBlock(), null, "gui.permissions.toggles.allowBlockSpread")) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onCreatureSpawn(CreatureSpawnEvent event) {
+        if (event.getReason() == CreatureSpawnEvent.SpawnReason.BREEDING) {
+            if (handleProtection(event.getPosition(), null, "gui.permissions.toggles.allowBreeding")) {
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityTame(PlayerInteractEntityEvent event) {
+        if (event.getEntity().isAlive() && handleProtection(event.getEntity(), event.getPlayer(), "gui.permissions.allowVehicleEnter")) {
+            event.setCancelled(true);
+            sendProtectionMessage(event.getPlayer(), "messages.protection.vehicleEnter");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onItemDrop(PlayerDropItemEvent event) {
+        if (handleProtection(event.getPlayer(), event.getPlayer(), "gui.permissions.toggles.allowItemDrop")) {
+            event.setCancelled(true);
+            sendProtectionMessage(event.getPlayer(), "messages.protection.itemDrop");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onItemPickup(InventoryPickupItemEvent event) {
+        if (event.getInventory().getHolder() instanceof Player player &&
+            handleProtection(event.getItem(), player, "gui.permissions.toggles.allowItemPickup")) {
+            event.setCancelled(true);
+            sendProtectionMessage(player, "messages.protection.itemPickup");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onVehiclePlace(VehicleCreateEvent event) {
+        if (handleProtection(event.getVehicle(), null, "gui.permissions.toggles.allowVehiclePlace")) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onVehicleEnter(EntityEnterVehicleEvent event) {
+        if (event.getEntity() instanceof Player player &&
+            handleProtection(event.getVehicle(), player, "gui.permissions.toggles.allowVehicleEnter")) {
+            event.setCancelled(true);
+            sendProtectionMessage(player, "messages.protection.vehicleEnter");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPortalUse(PlayerTeleportEvent event) {
+        if (handleProtection(event.getPlayer(), event.getPlayer(), "gui.permissions.toggles.allowEnderPearl")) {
+            event.setCancelled(true);
+            sendProtectionMessage(event.getPlayer(), "messages.protection.enderPearl");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPermissionChange(PermissionChangeEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Invalidate any cached permissions for this area/group
+            String cacheKey = event.getArea().getName() + ":" + 
+                            event.getGroup() + ":" + 
+                            event.getPermission();
+            permissionCache.invalidate(cacheKey);
+            
+            // Log permission change if debug is enabled
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().debug(String.format(
+                    "Permission changed in area %s for group %s: %s %s -> %s",
+                    event.getArea().getName(),
+                    event.getGroup(),
+                    event.getPermission(),
+                    event.getOldValue(),
+                    event.getNewValue()
+                ));
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "permission_change_handle");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onAreaPermissionUpdate(AreaPermissionUpdateEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Invalidate all cached permissions for this area
+            String areaPrefix = event.getArea().getName() + ":";
+            permissionCache.asMap().keySet().removeIf(key -> key.startsWith(areaPrefix));
+            
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().debug(String.format(
+                    "Bulk permission update in area %s for category %s", 
+                    event.getArea().getName(),
+                    event.getCategory().name()
+                ));
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "area_permission_update_handle");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true) 
+    public void onLuckPermsGroupChange(LuckPermsGroupChangeEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Invalidate cached permissions for this area/group
+            String cachePrefix = event.getArea().getName() + ":" + event.getGroup();
+            permissionCache.asMap().keySet().removeIf(key -> key.startsWith(cachePrefix));
+            
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().debug(String.format(
+                    "LuckPerms group permissions changed in area %s for group %s",
+                    event.getArea().getName(),
+                    event.getGroup() 
+                ));
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "luckperms_group_change_handle"); 
+        }
+    }
+
+    boolean handleProtection(Position pos, Player player, String permission) {
         if (player != null && plugin.isBypassing(player.getName())) {
+            plugin.debug("Protection bypassed by player: " + player.getName());
             return false;
         }
 
         String cacheKey = buildCacheKey(pos, player, permission);
         Boolean cached = permissionCache.getIfPresent(cacheKey);
         if (cached != null) {
+            plugin.debug("Using cached protection result for " + cacheKey + ": " + cached);
             return cached;
         }
 
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            boolean result = checkProtection(pos, player, permission);
+            Area area = plugin.getHighestPriorityArea(pos.getLevel().getName(),
+                pos.getX(), pos.getY(), pos.getZ());
+            
+            if (area == null) {
+                plugin.debug("No area found at position " + pos);
+                return false;
+            }
+
+            plugin.debug("Checking protection in area: " + area.getName());
+
+            // Check toggle state first
+            boolean toggleState = area.getToggleState(permission);
+            if (!toggleState) {
+                permissionCache.put(cacheKey, true);
+                return true;
+            }
+
+            // Check player-specific permissions first
+            if (player != null) {
+                // Check temporary permissions
+                if (hasTemporaryPermission(player.getName(), permission, area.getName())) {
+                    permissionCache.put(cacheKey, false);
+                    return false;
+                }
+
+                // Check LuckPerms group permissions
+                if (plugin.getLuckPermsApi() != null && 
+                    !plugin.hasGroupPermission(player, area, permission)) {
+                    permissionCache.put(cacheKey, true);
+                    return true;
+                }
+            }
+
+            boolean result = !area.getSetting(permission);
             permissionCache.put(cacheKey, result);
             return result;
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "protection_check");
         }
-    }
-
-    private boolean checkProtection(Position pos, Player player, String permission) {
-        Area area = plugin.getHighestPriorityArea(pos.getLevel().getName(),
-            pos.getX(), pos.getY(), pos.getZ());
-        
-        if (area == null) {
-            return false;
-        }
-
-        // Check player-specific permissions first
-        if (player != null) {
-            // Check temporary permissions
-            if (hasTemporaryPermission(player.getName(), permission, area.getName())) {
-                return false;
-            }
-
-            // Check LuckPerms group permissions
-            if (plugin.getLuckPermsApi() != null && 
-                !plugin.hasGroupPermission(player, area, permission)) {
-                return true;
-            }
-        }
-
-        // Check area settings
-        return !area.getSettings().optBoolean(permission, true);
     }
 
     private String buildCacheKey(Position pos, Player player, String permission) {
@@ -425,15 +616,77 @@ public class ProtectionListener implements Listener {
         }
     }
 
-    private void sendProtectionMessage(Player player, String message) {
+    void sendProtectionMessage(Player player, String message) {
         if (!plugin.isEnableMessages()) return;
         
         long now = System.currentTimeMillis();
         long lastWarning = lastWarningTime.getOrDefault(player.getName(), 0L);
         
         if (now - lastWarning >= WARNING_COOLDOWN) {
-            player.sendMessage(message != null ? message : "§cThis area is protected.");
+            // Get the area at player's location
+            Area area = plugin.getHighestPriorityArea(
+                player.getLevel().getName(),
+                player.getX(),
+                player.getY(),
+                player.getZ()
+            );
+            
+            // Add area name to placeholders if available
+            HashMap<String, String> placeholders = new HashMap<>();
+            if (area != null) {
+                placeholders.put("area", area.getName());
+            }
+            
+            // Use default message if none provided
+            if (message == null) {
+                message = plugin.getLanguageManager().get("messages.protection.protectionDenied", placeholders);
+            } else {
+                // Replace placeholders in the provided message
+                message = plugin.getLanguageManager().get(message, placeholders);
+            }
+            
+            player.sendMessage(message);
             lastWarningTime.put(player.getName(), now);
+        }
+    }
+
+    // Add this new overload for sendProtectionMessage
+    private void sendProtectionMessage(Player player, String messageKey, Map<String, String> placeholders) {
+        if (!plugin.isEnableMessages()) return;
+        
+        long now = System.currentTimeMillis();
+        long lastWarning = lastWarningTime.getOrDefault(player.getName(), 0L);
+        
+        if (now - lastWarning >= WARNING_COOLDOWN) {
+            // Get the area at player's location if not provided in placeholders
+            if (!placeholders.containsKey("area")) {
+                Area area = plugin.getHighestPriorityArea(
+                    player.getLevel().getName(),
+                    player.getX(),
+                    player.getY(),
+                    player.getZ()
+                );
+                
+                if (area != null) {
+                    placeholders.put("area", area.getName());
+                } else {
+                    // If no area is found, use a default value
+                    placeholders.put("area", "this area");
+                }
+            }
+
+            String message = plugin.getLanguageManager().get(messageKey, placeholders);
+            
+            if (message != null && !message.isEmpty()) {
+                player.sendMessage(message);
+                lastWarningTime.put(player.getName(), now);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.getLogger().debug("Sent protection message: " + message);
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.getLogger().debug("Empty or null message for key: " + messageKey);
+            }
         }
     }
 
