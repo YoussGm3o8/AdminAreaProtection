@@ -7,6 +7,7 @@ import org.json.JSONObject;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
 import adminarea.form.IFormHandler;
@@ -57,35 +58,27 @@ public class AreaSettingsHandler extends BaseFormHandler {
 
     private void processAreaSettings(Player player, FormResponseCustom response, Area area) {
         try {
-            // Get values from form response
-            boolean showTitle = response.getToggleResponse(0);
-            String enterMessage = response.getInputResponse(1);
-            String leaveMessage = response.getInputResponse(2);
-
-            // Create builder with current settings
-            AreaBuilder builder = Area.builder()
-                .name(area.getName())
-                .world(area.getWorld())
-                .coordinates(area.getXMin(), area.getXMax(), 
-                            area.getYMin(), area.getYMax(),
-                            area.getZMin(), area.getZMax())
-                .priority(area.getPriority())
-                .showTitle(showTitle)
-                .enterMessage(enterMessage)
-                .leaveMessage(leaveMessage);
-
-            // Apply permission settings from form
-            JSONObject settings = area.getSettings();
+            // Get current area data
+            AreaDTO currentDTO = area.toDTO();
+            
+            // Update toggle states in settings
+            JSONObject settings = currentDTO.settings();
             int toggleIndex = 3; // Start after basic settings
             for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
                 boolean value = response.getToggleResponse(toggleIndex++);
                 settings.put(toggle.getPermissionNode(), value);
             }
-            builder.settings(settings);
 
-            // Build and save updated area
-            Area updatedArea = builder.build();
-            plugin.getAreaManager().updateArea(updatedArea);
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .showTitle(response.getToggleResponse(0))
+                .enterMessage(response.getInputResponse(1))
+                .leaveMessage(response.getInputResponse(2))
+                .settings(settings)
+                .build();
+
+            // Save updated area
+            plugin.updateArea(updatedArea);
             player.sendMessage(plugin.getLanguageManager().get("messages.areaUpdated", 
                 Map.of("area", area.getName())));
 
@@ -109,27 +102,12 @@ public class AreaSettingsHandler extends BaseFormHandler {
             int buttonId = response.getClickedButtonId();
             switch (buttonId) {
                 case 0 -> // Basic Settings
-                    plugin.getGuiManager().openBasicSettings(player, area);
+                    plugin.getFormFactory().createBasicSettingsForm(area);
                 case 1 -> // Protection Settings
-                    plugin.getGuiManager().openProtectionSettings(player, area);
-                case 2 -> // Building Settings
-                    plugin.getGuiManager().openBuildingPermissions(player, area);
-                case 3 -> // Environment Settings  
-                    plugin.getGuiManager().openEnvironmentSettings(player, area);
-                case 4 -> // Entity Settings
-                    plugin.getGuiManager().openEntityControls(player, area);
-                case 5 -> // Technical Settings
-                    plugin.getGuiManager().openRedstoneAndMechanics(player, area);
-                case 6 -> // Special Settings
-                    plugin.getGuiManager().openSpecialPermissions(player, area);
-                case 7 -> { // LuckPerms Group Permissions
-                    if (plugin.isLuckPermsEnabled()) {
-                        plugin.getGuiManager().openLuckPermsGroupList(player, area);
-                    } else {
-                        player.sendMessage(plugin.getLanguageManager().get("messages.luckperms.notAvailable"));
-                    }
-                }
-                case 8 -> // Back to Main Menu
+                    plugin.getFormFactory().createProtectionSettingsForm(area);
+                case 2 -> // LuckPerms Settings
+                    handleLuckPermsSettings(player, area);
+                case 3 -> // Back
                     plugin.getGuiManager().openMainMenu(player);
                 default ->
                     player.sendMessage(plugin.getLanguageManager().get("messages.invalidSelection"));
@@ -137,6 +115,14 @@ public class AreaSettingsHandler extends BaseFormHandler {
         } catch (Exception e) {
             plugin.getLogger().error("Error handling menu selection", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.menuSelection"));
+        }
+    }
+
+    private void handleLuckPermsSettings(Player player, Area area) {
+        if (plugin.isLuckPermsEnabled()) {
+            plugin.getFormFactory().createLuckPermsGroupListForm(area);
+        } else {
+            player.sendMessage(plugin.getLanguageManager().get("messages.luckperms.notAvailable"));
         }
     }
 }

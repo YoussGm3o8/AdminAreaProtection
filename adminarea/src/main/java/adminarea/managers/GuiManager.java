@@ -3,6 +3,7 @@ package adminarea.managers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
 import adminarea.form.FormFactory;
@@ -29,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Deque;
 import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -47,20 +49,8 @@ public class GuiManager implements IGuiManager {
         // Initialize FormFactory first
         this.formFactory = new FormFactory(plugin);
         // Then create FormRegistry
-        this.formRegistry = new FormRegistry(plugin);
-        // Finally register handlers
-        registerFormHandlers();
-    }
-
-    private void registerFormHandlers() {
-        formRegistry.registerHandler(new CreateAreaHandler(plugin));
-        formRegistry.registerHandler(new EditAreaHandler(plugin));
-        formRegistry.registerHandler(new DeleteAreaHandler(plugin));
-        formRegistry.registerHandler(new AreaListHandler(plugin));
-        formRegistry.registerHandler(new PlayerAreaHandler(plugin));
-        formRegistry.registerHandler(new LuckPermsOverrideHandler(plugin));
-        formRegistry.registerHandler(new PermissionSettingsHandler(plugin));
-        formRegistry.registerHandler(new LuckPermsGroupPermHandler(plugin));
+        this.formRegistry = plugin.getFormRegistry();
+        this.formRegistry.initialize(); // Initialize the registry once
     }
 
     private boolean checkPermission(Player player, String permission) {
@@ -78,6 +68,10 @@ public class GuiManager implements IGuiManager {
 
     @Override
     public void openMainMenu(Player player) {
+        plugin.getLogger().info(String.format(
+            "[GUI] Opening main menu for player %s",
+            player.getName()
+        ));
         checkThreadSafety("openMainMenu");
         if (!checkPermission(player, AdminAreaConstants.Permissions.MANAGE)) {
             return;
@@ -201,8 +195,13 @@ public class GuiManager implements IGuiManager {
 
     @Override
     public void openAreaSettings(Player player, Area area) {
+        plugin.getLogger().info(String.format(
+            "[GUI] Opening area settings for player %s, area %s",
+            player.getName(),
+            area.getName()
+        ));
         try {
-            FormWindow form = formFactory.createAreaSettingsForm(area);
+            FormWindow form = formFactory.createAreaSettingsMenu(area);
             pushForm(player, AdminAreaConstants.FORM_AREA_SETTINGS);
             plugin.getFormIdMap().put(player.getName() + "_editing", 
                 new FormTrackingData(area.getName(), System.currentTimeMillis()));
@@ -265,6 +264,36 @@ public class GuiManager implements IGuiManager {
     public void sendForm(Player player, FormWindow form, String formId) {
         Timer.Sample formTimer = plugin.getPerformanceMonitor().startTimer();
         try {
+            // Add detailed logging
+            plugin.getLogger().info(String.format(
+                "[GUI] Sending form '%s' (ID: %s) to player %s",
+                form.getClass().getSimpleName(),
+                formId,
+                player.getName()
+            ));
+
+            if (plugin.isDebugMode()) {
+                if (form instanceof FormWindowCustom) {
+                    plugin.getLogger().debug(String.format(
+                        "[GUI] Custom form details:\n" +
+                        "  Title: %s\n" +
+                        "  Elements: %d",
+                        ((FormWindowCustom) form).getTitle(),
+                        ((FormWindowCustom) form).getElements().size()
+                    ));
+                } else if (form instanceof FormWindowSimple) {
+                    plugin.getLogger().debug(String.format(
+                        "[GUI] Simple form details:\n" +
+                        "  Title: %s\n" +
+                        "  Content: %s\n" +
+                        "  Buttons: %d",
+                        ((FormWindowSimple) form).getTitle(),
+                        ((FormWindowSimple) form).getContent(),
+                        ((FormWindowSimple) form).getButtons().size()
+                    ));
+                }
+            }
+            
             if (plugin.isDebugMode()) {
                 plugin.debug(String.format("[GUI] Sending form %s to player %s", 
                     formId, player.getName()));
@@ -292,6 +321,17 @@ public class GuiManager implements IGuiManager {
     }
 
     private void handleGuiError(Player player, String message, Exception e) {
+        plugin.getLogger().error(String.format(
+            "[GUI] Error occurred:\n" +
+            "  Player: %s\n" +
+            "  Message: %s\n" +
+            "  Exception: %s\n" +
+            "  Cause: %s",
+            player.getName(),
+            message,
+            e.getClass().getName(),
+            e.getMessage()
+        ));
         String detailedError = String.format("%s: %s", message, e.toString());
         plugin.getLogger().error(detailedError);
         
@@ -340,10 +380,11 @@ public class GuiManager implements IGuiManager {
     public void cleanup() {
         // Prevent concurrent cleanup runs
         if (!cleanupRunning.compareAndSet(false, true)) {
-            plugin.debug("Cleanup already running, skipping...");
+            plugin.getLogger().debug("[GUI] Cleanup already running, skipping...");
             return;
         }
 
+        plugin.getLogger().debug("[GUI] Starting form cleanup");
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             final long currentTime = System.currentTimeMillis();
@@ -372,13 +413,20 @@ public class GuiManager implements IGuiManager {
         } finally {
             cleanupRunning.set(false);
             plugin.getPerformanceMonitor().stopTimer(sample, "form_cleanup");
+            plugin.getLogger().debug("[GUI] Form cleanup complete");
         }
     }
 
     // Add method to check thread safety during development
     private void checkThreadSafety(String operation) {
         if (plugin.isDebugMode() && !plugin.getServer().isPrimaryThread()) {
-            plugin.getLogger().warning("GUI operation '" + operation + "' called from non-main thread!");
+            plugin.getLogger().warning(String.format(
+                "[GUI] Operation '%s' called from non-main thread!\n" +
+                "Thread: %s\n" +
+                "Stack trace:",
+                operation,
+                Thread.currentThread().getName()
+            ));
             Thread.dumpStack();
         }
     }
@@ -488,51 +536,67 @@ public class GuiManager implements IGuiManager {
     }
 
     private void addBuildingToggles(FormWindowCustom form, Area area) {
-        form.addElement(new ElementToggle("Allow Building", area.getAllowBuild()));
-        form.addElement(new ElementToggle("Allow Breaking", area.getAllowBreak()));
-        form.addElement(new ElementToggle("Allow Container Access", area.getAllowContainer()));
-        form.addElement(new ElementToggle("Allow Item Frame Usage", area.getAllowItemFrame()));
-        form.addElement(new ElementToggle("Allow Armor Stand Usage", area.getAllowArmorStand()));
+        AreaDTO dto = area.toDTO();
+        AreaDTO.Permissions perms = dto.permissions();
+        form.addElement(new ElementToggle("Allow Building", perms.allowBuild()));
+        form.addElement(new ElementToggle("Allow Breaking", perms.allowBreak()));
+        form.addElement(new ElementToggle("Allow Container Access", perms.allowContainer()));
+        form.addElement(new ElementToggle("Allow Item Frame Usage", perms.allowItemFrame()));
+        form.addElement(new ElementToggle("Allow Armor Stand Usage", perms.allowArmorStand()));
     }
 
     private void addEnvironmentToggles(FormWindowCustom form, Area area) {
-        form.addElement(new ElementToggle("Allow Fire Spread", area.getAllowFire()));
-        form.addElement(new ElementToggle("Allow Liquid Flow", area.getAllowLiquid()));
-        form.addElement(new ElementToggle("Allow Block Spread", area.getAllowBlockSpread()));
-        form.addElement(new ElementToggle("Allow Leaf Decay", area.getAllowLeafDecay()));
-        form.addElement(new ElementToggle("Allow Ice Form/Melt", area.getAllowIceForm()));
-        form.addElement(new ElementToggle("Allow Snow Form/Melt", area.getAllowSnowForm()));
+        AreaDTO dto = area.toDTO();
+        AreaDTO.Permissions perms = dto.permissions();
+        form.addElement(new ElementToggle("Allow Fire Spread", perms.allowFire()));
+        form.addElement(new ElementToggle("Allow Liquid Flow", perms.allowLiquid()));
+        form.addElement(new ElementToggle("Allow Block Spread", perms.allowBlockSpread()));
+        form.addElement(new ElementToggle("Allow Leaf Decay", perms.allowLeafDecay()));
+        form.addElement(new ElementToggle("Allow Ice Form/Melt", perms.allowIceForm()));
+        form.addElement(new ElementToggle("Allow Snow Form/Melt", perms.allowSnowForm()));
     }
 
     private void addEntityToggles(FormWindowCustom form, Area area) {
-        form.addElement(new ElementToggle("Allow PvP", area.getAllowPvP()));
-        form.addElement(new ElementToggle("Allow Monster Spawning", area.getAllowMonsterSpawn()));
-        form.addElement(new ElementToggle("Allow Animal Spawning", area.getAllowAnimalSpawn()));
-        form.addElement(new ElementToggle("Allow Entity Damage", area.getAllowDamageEntities()));
-        form.addElement(new ElementToggle("Allow Animal Breeding", area.getAllowBreeding()));
-        form.addElement(new ElementToggle("Allow Monster Targeting", area.getAllowMonsterTarget()));
-        form.addElement(new ElementToggle("Allow Leashing", area.getAllowLeashing()));
+        AreaDTO dto = area.toDTO();
+        AreaDTO.Permissions perms = dto.permissions();
+        form.addElement(new ElementToggle("Allow PvP", perms.allowPvP()));
+        form.addElement(new ElementToggle("Allow Monster Spawning", perms.allowMonsterSpawn()));
+        form.addElement(new ElementToggle("Allow Animal Spawning", perms.allowAnimalSpawn()));
+        form.addElement(new ElementToggle("Allow Entity Damage", perms.allowDamageEntities()));
+        form.addElement(new ElementToggle("Allow Animal Breeding", perms.allowBreeding()));
+        form.addElement(new ElementToggle("Allow Monster Targeting", perms.allowMonsterTarget()));
+        form.addElement(new ElementToggle("Allow Leashing", perms.allowLeashing()));
     }
 
     private void addTechnicalToggles(FormWindowCustom form, Area area) {
-        form.addElement(new ElementToggle("Allow Redstone", area.getAllowRedstone()));
-        form.addElement(new ElementToggle("Allow Pistons", area.getAllowPistons()));
-        form.addElement(new ElementToggle("Allow Hoppers", area.getAllowHopper()));
-        form.addElement(new ElementToggle("Allow Dispensers", area.getAllowDispenser()));
+        AreaDTO dto = area.toDTO();
+        AreaDTO.Permissions perms = dto.permissions();
+        form.addElement(new ElementToggle("Allow Redstone", perms.allowRedstone()));
+        form.addElement(new ElementToggle("Allow Pistons", perms.allowPistons()));
+        form.addElement(new ElementToggle("Allow Hoppers", perms.allowHopper()));
+        form.addElement(new ElementToggle("Allow Dispensers", perms.allowDispenser()));
     }
 
     private void addSpecialToggles(FormWindowCustom form, Area area) {
-        form.addElement(new ElementToggle("Allow Item Drops", area.getAllowItemDrop()));
-        form.addElement(new ElementToggle("Allow Item Pickup", area.getAllowItemPickup()));
-        form.addElement(new ElementToggle("Allow Vehicle Placement", area.getAllowVehiclePlace()));
-        form.addElement(new ElementToggle("Allow Vehicle Entry", area.getAllowVehicleEnter()));
-        form.addElement(new ElementToggle("Allow Flight", area.getAllowFlight()));
-        form.addElement(new ElementToggle("Allow Ender Pearl", area.getAllowEnderPearl()));
-        form.addElement(new ElementToggle("Allow Chorus Fruit", area.getAllowChorusFruit()));
+        AreaDTO dto = area.toDTO();
+        AreaDTO.Permissions perms = dto.permissions();
+        form.addElement(new ElementToggle("Allow Item Drops", perms.allowItemDrop()));
+        form.addElement(new ElementToggle("Allow Item Pickup", perms.allowItemPickup()));
+        form.addElement(new ElementToggle("Allow Vehicle Placement", perms.allowVehiclePlace()));
+        form.addElement(new ElementToggle("Allow Vehicle Entry", perms.allowVehicleEnter()));
+        form.addElement(new ElementToggle("Allow Flight", perms.allowFlight()));
+        form.addElement(new ElementToggle("Allow Ender Pearl", perms.allowEnderPearl()));
+        form.addElement(new ElementToggle("Allow Chorus Fruit", perms.allowChorusFruit()));
     }
 
     @Override
     public void handleEditFormResponse(Player player, int buttonId, Area area) {
+        plugin.getLogger().info(String.format(
+            "[GUI] Player %s clicked button %d in edit form for area %s",
+            player.getName(),
+            buttonId,
+            area != null ? area.getName() : "null"
+        ));
         checkThreadSafety("handleEditFormResponse");
         try {
             // Add Object parameter and type check
@@ -582,29 +646,32 @@ public class GuiManager implements IGuiManager {
     public FormWindow createBasicSettingsForm(Area area) {
         FormWindowCustom form = new FormWindowCustom("Basic Settings: " + area.getName());
         
+        AreaDTO dto = area.toDTO();
+        
         // Basic area properties
         form.addElement(new ElementLabel("§2General Settings"));
-        form.addElement(new ElementInput("Area Name", "Enter area name", area.getName()));
+        form.addElement(new ElementInput("Area Name", "Enter area name", dto.name()));
         form.addElement(new ElementInput("Priority", "Enter priority (0-100)", 
-            String.valueOf(area.getPriority())));
+            String.valueOf(dto.priority())));
             
         // Display settings
         form.addElement(new ElementLabel("§2Display Settings"));
-        form.addElement(new ElementToggle("Show Area Title", area.isShowTitle()));
+        form.addElement(new ElementToggle("Show Area Title", dto.showTitle()));
         form.addElement(new ElementInput("Enter Message", "Message shown when entering", 
-            area.getEnterMessage() != null ? area.getEnterMessage() : ""));
+            dto.enterMessage() != null ? dto.enterMessage() : ""));
         form.addElement(new ElementInput("Leave Message", "Message shown when leaving", 
-            area.getLeaveMessage() != null ? area.getLeaveMessage() : ""));
+            dto.leaveMessage() != null ? dto.leaveMessage() : ""));
             
         return form;
     }
 
     private void handleSpecialResponse(FormResponseCustom response, AreaBuilder builder) {
         int index = 1;
-        builder.allowItemDrop(response.getToggleResponse(index++))
-               .allowItemPickup(response.getToggleResponse(index++))
-               .allowCreeper(response.getToggleResponse(index++))
-               .allowChorusFruit(response.getToggleResponse(index++));
+        // Set each permission individually using setPermission
+        builder.setPermission("allowItemDrop", response.getToggleResponse(index++))
+               .setPermission("allowItemPickup", response.getToggleResponse(index++))
+               .setPermission("allowCreeper", response.getToggleResponse(index++))
+               .setPermission("allowChorusFruit", response.getToggleResponse(index++));
     }
 
     private void checkLuckPermsAvailable(Player player) throws IllegalStateException {
@@ -618,6 +685,10 @@ public class GuiManager implements IGuiManager {
 
     @Override 
     public void openLuckPermsGroupPermissions(Player player, Area area, String groupName) {
+        if (player == null) {
+            return;
+        }
+        
         checkThreadSafety("openLuckPermsGroupPermissions");
         if (!checkPermission(player, AdminAreaConstants.Permissions.LUCKPERMS_EDIT)) {
             return;
@@ -720,11 +791,6 @@ public class GuiManager implements IGuiManager {
         } catch (Exception e) {
             handleGuiError(player, "Failed to open track groups form", e);
         }
-    }
-
-    public void openCreateAreaForm(Player player) {
-        FormWindow form = plugin.getFormFactory().createAreaCreationForm();
-        player.showFormWindow(form);
     }
 
     public void openListForm(Player player) {

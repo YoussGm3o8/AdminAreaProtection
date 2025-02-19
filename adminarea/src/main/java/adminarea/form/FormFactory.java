@@ -2,6 +2,8 @@ package adminarea.form;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.form.element.ElementButton;
@@ -74,15 +76,20 @@ public class FormFactory {
                     return;
                 }
 
-                // Apply validated changes
-                area.setName(name)
-                    .setPriority(priority)
-                    .setShowTitle(customResponse.getToggleResponse(FormFields.SHOW_TITLE))
-                    .setEnterMessage(customResponse.getInputResponse(FormFields.ENTER_MSG))
-                    .setLeaveMessage(customResponse.getInputResponse(FormFields.LEAVE_MSG));
+                // Get current DTO
+                AreaDTO currentDTO = area.toDTO();
 
-                plugin.saveArea(area);
-                plugin.getGuiManager().openAreaSettings(player, area);
+                // Create updated area using builder
+                Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                    .name(name)
+                    .priority(priority)
+                    .showTitle(customResponse.getToggleResponse(FormFields.SHOW_TITLE))
+                    .enterMessage(customResponse.getInputResponse(FormFields.ENTER_MSG))
+                    .leaveMessage(customResponse.getInputResponse(FormFields.LEAVE_MSG))
+                    .build();
+
+                plugin.updateArea(updatedArea);
+                plugin.getGuiManager().openAreaSettings(player, updatedArea);
 
             } catch (Exception e) {
                 plugin.getLogger().error("Error handling basic settings form", e);
@@ -103,16 +110,25 @@ public class FormFactory {
                 return;
             }
 
-            JSONObject settings = area.getSettings();
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
+            // Create new settings object based on current settings
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
+
+            // Update permissions
             List<PermissionToggle> toggles = PermissionToggle.getDefaultToggles();
-            
             for (int i = 0; i < toggles.size(); i++) {
                 boolean value = customResponse.getToggleResponse(i);
-                settings.put(toggles.get(i).getPermissionNode(), value);
+                updatedSettings.put(toggles.get(i).getPermissionNode(), value);
             }
 
-            area.setSettings(settings);
-            plugin.saveArea(area);
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .settings(updatedSettings)
+                .build();
+
+            plugin.updateArea(updatedArea);
         });
 
         // Track selection form response handler
@@ -170,99 +186,65 @@ public class FormFactory {
         // Add other field indices
     }
 
-    // Add helper method for common form elements
-    private void addBasicSettingsElements(FormWindowCustom form, Area area) {
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.labels.areaName"),
-            "", area.getName()));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.labels.priority"),
-            "0-100", String.valueOf(area.getPriority())));
-        form.addElement(new ElementToggle(
-            plugin.getLanguageManager().get("gui.labels.showTitle"),
-            area.isShowTitle()));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.labels.enterMessage"),
-            "", area.getEnterMessage() != null ? area.getEnterMessage() : ""));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.labels.leaveMessage"),
-            "", area.getLeaveMessage() != null ? area.getLeaveMessage() : ""));
-    }
-
     public FormWindowSimple createMainMenu() {
-        FormWindowSimple form = new FormWindowSimple(AdminAreaConstants.TITLE_MAIN_MENU, "Select an option:");
+        FormWindowSimple form = new FormWindowSimple("Area Protection Menu", "Select an action:");
         
-        // Basic area management
-        form.addButton(new ElementButton("Create Area"));
-        form.addButton(new ElementButton("Edit Area"));
-        form.addButton(new ElementButton("Delete Area"));
+        // Basic area management with descriptive subtitles
+        form.addButton(new ElementButton("Create Area\n§7Create new protected area"));
+        form.addButton(new ElementButton("Edit Area\n§7Modify existing area"));
+        form.addButton(new ElementButton("Delete Area\n§7Remove protected area"));
+        form.addButton(new ElementButton("List Areas\n§7View all protected areas"));
         
-        // Advanced management
-        form.addButton(new ElementButton("Manage Player Permissions"));
-        form.addButton(new ElementButton("LuckPerms Integration"));
-        form.addButton(new ElementButton("Area Settings"));
-        
-        // Utility options
-        form.addButton(new ElementButton("List Areas"));
-        form.addButton(new ElementButton("Toggle Protection"));
-        form.addButton(new ElementButton("Reload Config"));
+        // Advanced management with permission checks
+        if (plugin.isLuckPermsEnabled()) {
+            form.addButton(new ElementButton("Permission Settings\n§7Manage group access"));
+        }
         
         return form;
     }
 
     public FormWindow createAreaForm(Position[] positions) {
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.createArea.title"));
-        
-        // Basic information
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.createArea.labels.name"),
-            plugin.getLanguageManager().get("gui.createArea.labels.namePlaceholder"), 
-            ""));
-        
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.createArea.labels.priority"),
-            plugin.getLanguageManager().get("gui.createArea.labels.priorityPlaceholder"), 
-            "0"));
-            
-        form.addElement(new ElementToggle(
-            plugin.getLanguageManager().get("gui.createArea.labels.globalArea"), 
-            false));
+        FormWindowCustom form = new FormWindowCustom("Create Protected Area");
 
-        // Coordinates
-        if (positions != null && positions[0] != null && positions[1] != null) {
-            Position pos1 = positions[0];
-            Position pos2 = positions[1];
-            form.addElement(new ElementInput("X Min", "Enter X minimum", 
-                String.valueOf(Math.min(pos1.getFloorX(), pos2.getFloorX()))));
-            form.addElement(new ElementInput("X Max", "Enter X maximum", 
-                String.valueOf(Math.max(pos1.getFloorX(), pos2.getFloorX()))));
-            form.addElement(new ElementInput("Y Min", "Enter Y minimum", 
-                String.valueOf(Math.min(pos1.getFloorY(), pos2.getFloorY()))));
-            form.addElement(new ElementInput("Y Max", "Enter Y maximum", 
-                String.valueOf(Math.max(pos1.getFloorY(), pos2.getFloorY()))));
-            form.addElement(new ElementInput("Z Min", "Enter Z minimum", 
-                String.valueOf(Math.min(pos1.getFloorZ(), pos2.getFloorZ()))));
-            form.addElement(new ElementInput("Z Max", "Enter Z maximum", 
-                String.valueOf(Math.max(pos1.getFloorZ(), pos2.getFloorZ()))));
-        } else {
-            form.addElement(new ElementInput("X Min", "Enter X minimum", "~"));
-            form.addElement(new ElementInput("X Max", "Enter X maximum", "~"));
-            form.addElement(new ElementInput("Y Min", "Enter Y minimum", "0"));
-            form.addElement(new ElementInput("Y Max", "Enter Y maximum", "255"));
-            form.addElement(new ElementInput("Z Min", "Enter Z minimum", "~"));
-            form.addElement(new ElementInput("Z Max", "Enter Z maximum", "~"));
-        }
-
-        // Add all permission toggles with descriptions
-        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            String description = plugin.getLanguageManager().get("gui.permissions.toggles." + toggle.getPermissionNode());
-            form.addElement(new ElementToggle(
-                toggle.getDisplayName() + "\n§7" + description,
-                toggle.getDefaultValue()
-            ));
-        }
+        // Add header with clear instructions
+        form.addElement(new ElementLabel("§2Enter Area Details\n§7Fill in the required information below"));
+        
+        // Basic information with improved descriptions
+        form.addElement(new ElementInput("Area Name", "Enter a unique name for this area", ""));
+        form.addElement(new ElementInput("Priority", "Enter priority (0-100)", "50"));
+        form.addElement(new ElementToggle("Show Area Name", true));
+        
+        // Messages with placeholders suggestion
+        form.addElement(new ElementInput("Enter Message", 
+            "Message shown when entering (use {player} for player name)", ""));
+        form.addElement(new ElementInput("Leave Message", 
+            "Message shown when leaving (use {player} for player name)", ""));
+        
+        // Permission settings
+        addPermissionToggles(form);
         
         return form;
+    }
+
+    private void addPermissionToggles(FormWindowCustom form) {
+        form.addElement(new ElementLabel("\n§2Protection Settings\n§7Configure area permissions"));
+        
+        for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
+            form.addElement(new ElementLabel("\n§6" + category.getDisplayName()));
+            
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
+            if (toggles != null) {
+                for (PermissionToggle toggle : toggles) {
+                    String description = plugin.getLanguageManager().get(
+                        "gui.permissions.toggles." + toggle.getPermissionNode(), 
+                        Map.of("default", toggle.getDisplayName()));
+                    form.addElement(new ElementToggle(
+                        toggle.getDisplayName() + "\n§7" + description,
+                        toggle.getDefaultValue()
+                    ));
+                }
+            }
+        }
     }
 
     public FormWindow createAreaForm() {
@@ -312,13 +294,15 @@ public class FormFactory {
         FormWindowCustom form = new FormWindowCustom("Permission Overrides - " + area.getName());
         
         // Add toggle buttons for each group permission
-        JSONObject groupPerms = area.getGroupPermissions();
+        AreaDTO dto = area.toDTO();
+        Map<String, Map<String, Boolean>> groupPerms = dto.groupPermissions();
+
         for (String groupName : plugin.getGroupNames()) {
-            JSONObject perms = groupPerms.optJSONObject(groupName, new JSONObject());
-            form.addElement(new ElementToggle("Group: " + groupName, perms.has("access")));
-            form.addElement(new ElementToggle("  Build", perms.optBoolean("build", true)));
-            form.addElement(new ElementToggle("  Break", perms.optBoolean("break", true)));
-            form.addElement(new ElementToggle("  Interact", perms.optBoolean("interact", true)));
+            Map<String, Boolean> perms = groupPerms.getOrDefault(groupName, new HashMap<>());
+            form.addElement(new ElementToggle("Group: " + groupName, perms.containsKey("access")));
+            form.addElement(new ElementToggle("  Build", perms.getOrDefault("build", true)));
+            form.addElement(new ElementToggle("  Break", perms.getOrDefault("break", true)));
+            form.addElement(new ElementToggle("  Interact", perms.getOrDefault("interact", true)));
         }
         
         return form;
@@ -357,28 +341,6 @@ public class FormFactory {
         FormWindowSimple form = new FormWindowSimple("Delete Area", message);
         form.addButton(new ElementButton("§cConfirm Delete"));
         form.addButton(new ElementButton("§aCancel"));
-        return form;
-    }
-
-    public FormWindow createAreaSettingsForm(Area area) {
-        if (area == null) return null;
-        
-        FormWindowCustom form = new FormWindowCustom("Area Settings: " + area.getName());
-        
-        // Basic settings with null checks
-        form.addElement(new ElementToggle("Show Title", area.isShowTitle()));
-        form.addElement(new ElementInput("Enter Message", "Message shown when entering", 
-            area.getEnterMessage() != null ? area.getEnterMessage() : ""));
-        form.addElement(new ElementInput("Leave Message", "Message shown when leaving", 
-            area.getLeaveMessage() != null ? area.getLeaveMessage() : ""));
-        
-        // Protect against null settings
-        JSONObject settings = area.getSettings() != null ? area.getSettings() : new JSONObject();
-        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            form.addElement(new ElementToggle(toggle.getDisplayName(), 
-                settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())));
-        }
-        
         return form;
     }
 
@@ -437,8 +399,8 @@ public class FormFactory {
         FormWindowCustom form = new FormWindowCustom("Edit " + groupName + " Permissions");
 
         // Add toggles for each permission
-        for (PermissionToggle toggle : PermissionToggle.getPlayerToggles()) {
-            boolean currentValue = area.getGroupPermission(groupName, toggle.getPermissionNode());
+        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+            boolean currentValue = area.getEffectivePermission(groupName, toggle.getPermissionNode());
             form.addElement(new ElementToggle(toggle.getDisplayName(), currentValue));
         }
 
@@ -447,15 +409,16 @@ public class FormFactory {
 
     public FormWindow createBasicSettingsForm(Area area) {
         FormWindowCustom form = new FormWindowCustom("Basic Settings: " + area.getName());
+        AreaDTO dto = area.toDTO();
         
-        form.addElement(new ElementInput("Area Name", "Enter area name", area.getName()));
+        form.addElement(new ElementInput("Area Name", "Enter area name", dto.name()));
         form.addElement(new ElementInput("Priority", "Enter priority (0-100)", 
-            String.valueOf(area.getPriority())));
-        form.addElement(new ElementToggle("Show Title", area.isShowTitle()));
+            String.valueOf(dto.priority())));
+        form.addElement(new ElementToggle("Show Title", dto.showTitle()));
         form.addElement(new ElementInput("Enter Message", "Message shown when entering", 
-            area.getEnterMessage() != null ? area.getEnterMessage() : ""));
+            dto.enterMessage()));
         form.addElement(new ElementInput("Leave Message", "Message shown when leaving", 
-            area.getLeaveMessage() != null ? area.getLeaveMessage() : ""));
+            dto.leaveMessage()));
             
         return form;
     }
@@ -463,7 +426,8 @@ public class FormFactory {
     public FormWindow createProtectionSettingsForm(Area area) {
         FormWindowCustom form = new FormWindowCustom("Protection Settings: " + area.getName());
         
-        JSONObject settings = area.getSettings();
+        AreaDTO dto = area.toDTO();
+        JSONObject settings = dto.settings();
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
             String description = plugin.getLanguageManager().get("gui.permissions.toggles." + toggle.getPermissionNode());
             form.addElement(new ElementToggle(
@@ -490,8 +454,8 @@ public class FormFactory {
     }
 
     public FormWindow createTrackGroupsForm(String trackName) {
-        Set<String> groups = plugin.getLuckPermsCache().getTrackGroups(trackName);
         FormWindowCustom form = new FormWindowCustom("Track Groups: " + trackName);
+        Set<String> groups = plugin.getLuckPermsCache().getTrackGroups(trackName);
         
         for (String group : groups) {
             form.addElement(new ElementToggle("Enable " + group, true));
@@ -506,9 +470,13 @@ public class FormFactory {
         // Get inherited permissions
         List<String> inheritance = plugin.getLuckPermsCache().getInheritanceChain(groupName);
         
+        AreaDTO dto = area.toDTO();
+        Map<String, Map<String, Boolean>> groupPerms = dto.groupPermissions();
+        Map<String, Boolean> currentPerms = groupPerms.getOrDefault(groupName, new HashMap<>());
+
         // Add toggles for each permission
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            boolean currentValue = area.getEffectivePermission(groupName, toggle.getPermissionNode());
+            boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), false);
             String description = plugin.getLanguageManager().get("gui.permissions.toggles." + toggle.getPermissionNode());
             
             // Add inheritance info if available
@@ -527,6 +495,9 @@ public class FormFactory {
     public FormWindow createSpecialSettingsForm(Area area) {
         FormWindowCustom form = new FormWindowCustom("Special Settings: " + area.getName());
         
+        AreaDTO dto = area.toDTO();
+        JSONObject settings = dto.settings();
+
         List<PermissionToggle> specialToggles = PermissionToggle.getTogglesByCategory()
             .get(PermissionToggle.Category.SPECIAL);
 
@@ -536,7 +507,7 @@ public class FormFactory {
                     "gui.permissions.toggles." + toggle.getPermissionNode());
                 form.addElement(new ElementToggle(
                     toggle.getDisplayName() + "\n§7" + description,
-                    area.getSettings().optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
                 ));
             }
         }
@@ -547,6 +518,9 @@ public class FormFactory {
     public FormWindow createTechnicalSettingsForm(Area area) {
         FormWindowCustom form = new FormWindowCustom("Technical Settings: " + area.getName());
         
+        AreaDTO dto = area.toDTO();
+        JSONObject settings = dto.settings();
+
         List<PermissionToggle> technicalToggles = PermissionToggle.getTogglesByCategory()
             .get(PermissionToggle.Category.TECHNICAL);
             
@@ -556,7 +530,7 @@ public class FormFactory {
                     "gui.permissions.toggles." + toggle.getPermissionNode());
                 form.addElement(new ElementToggle(
                     toggle.getDisplayName() + "\n§7" + description,
-                    area.getSettings().optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
                 ));
             }
         }
@@ -564,32 +538,6 @@ public class FormFactory {
         return form;
     }
 
-    public FormWindow createAreaCreationForm() {
-        FormWindowCustom form = new FormWindowCustom("Create Area");
-        
-        // Add basic area information inputs
-        form.addElement(new ElementInput(
-            "Area Name", 
-            "Enter a name for this area", 
-            ""));
-        form.addElement(new ElementInput(
-            "Priority", 
-            "Enter priority (0-100)", 
-            "0"));
-        form.addElement(new ElementToggle(
-            "Show Title", 
-            true));
-        form.addElement(new ElementInput(
-            "Enter Message", 
-            "Message shown when entering area", 
-            ""));
-        form.addElement(new ElementInput(
-            "Leave Message", 
-            "Message shown when leaving area", 
-            ""));
-        
-        return form;
-    }
 
     public FormWindow createMainMenuForm() {
         FormWindowSimple form = new FormWindowSimple(

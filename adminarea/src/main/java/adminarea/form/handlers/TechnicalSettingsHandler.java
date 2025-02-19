@@ -6,6 +6,8 @@ import java.util.Map;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.permissions.PermissionToggle;
@@ -14,6 +16,7 @@ import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
+import org.json.JSONObject;
 
 public class TechnicalSettingsHandler extends BaseFormHandler {
 
@@ -48,46 +51,31 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
                 return;
             }
 
-            // Get current technical settings
-            Map<String, Boolean> oldSettings = new HashMap<>();
-            List<PermissionToggle> technicalToggles = PermissionToggle.getTogglesByCategory()
-                .get(PermissionToggle.Category.TECHNICAL);
-                
-            for (PermissionToggle toggle : technicalToggles) {
-                oldSettings.put(toggle.getPermissionNode(), 
-                    area.getSettings().optBoolean(toggle.getPermissionNode()));
-            }
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
+            // Create new settings object based on current settings
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
 
             // Process technical toggles
-            Map<String, Boolean> newSettings = new HashMap<>();
+            List<PermissionToggle> technicalToggles = PermissionToggle.getTogglesByCategory()
+                .get(PermissionToggle.Category.TECHNICAL);
             int index = 0;
             for (PermissionToggle toggle : technicalToggles) {
                 boolean value = response.getToggleResponse(index++);
-                
-                try {
-                    // Changed to static access
-                    ValidationUtils.validateToggleState(
-                        toggle.getPermissionNode(), 
-                        value, 
-                        area.getSettings()
-                    );
-                    newSettings.put(toggle.getPermissionNode(), value);
-                } catch (IllegalArgumentException e) {
-                    player.sendMessage(plugin.getLanguageManager().getErrorMessage(e.getMessage()));
-                    return;
-                }
+                updatedSettings.put(toggle.getPermissionNode(), value);
             }
 
-            // Fire update event
-            plugin.fireAreaPermissionUpdateEvent(area, PermissionToggle.Category.TECHNICAL,
-                oldSettings, newSettings);
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .settings(updatedSettings)
+                .build();
 
-            // Update area settings
-            area.updateCategoryPermissions(PermissionToggle.Category.TECHNICAL, newSettings);
-            plugin.saveArea(area);
+            // Save changes
+            plugin.updateArea(updatedArea);
 
             player.sendMessage(plugin.getLanguageManager().get("messages.settingsUpdated"));
-            plugin.getGuiManager().openAreaSettings(player, area);
+            plugin.getGuiManager().openAreaSettings(player, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error processing technical settings form", e);

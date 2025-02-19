@@ -16,6 +16,7 @@ import adminarea.logging.PluginLogger;
 import adminarea.managers.GuiManager;
 import adminarea.permissions.PermissionToggle;
 import adminarea.stats.AreaStatistics;
+import adminarea.util.ValidationUtils;
 
 import java.util.HashMap;
 
@@ -104,7 +105,13 @@ public class AreaCommand extends Command {
                     player.sendMessage(plugin.getLanguageManager().get("messages.wand.notBoth"));
                     return true;
                 }
-                openCreateForm(player);
+                try {
+                    Area newArea = createArea(player, "NewArea", positions);
+                    plugin.addArea(newArea);
+                    player.sendMessage("Area created successfully!");
+                } catch (IllegalStateException e) {
+                    player.sendMessage("Error creating area: " + e.getMessage());
+                }
                 return true;
             case "edit":
                 if (!player.hasPermission("adminarea.command.area.edit")) {
@@ -121,7 +128,7 @@ public class AreaCommand extends Command {
                     player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound", Map.of("area", args[1])));
                     return true;
                 }
-                openEditForm(player, area);
+                plugin.getGuiManager().openAreaSettings(player, area);
                 return true;
             case "delete":
                 if (!player.hasPermission("adminarea.command.area.delete")) {
@@ -139,9 +146,7 @@ public class AreaCommand extends Command {
                     return true;
                 }
                 plugin.removeArea(areaToDelete);
-                Map<String, String> placeholders = new HashMap<>();
-                placeholders.put("area", args[1]);
-                player.sendMessage(plugin.getLanguageManager().get("area.delete.success", placeholders));
+                player.sendMessage(plugin.getLanguageManager().get("area.delete.success", Map.of("area", args[1])));
                 return true;
             case "list":
                 if (!player.hasPermission("adminarea.command.area.list")) {
@@ -440,34 +445,117 @@ public class AreaCommand extends Command {
         Position[] positions = plugin.getPlayerPositions().computeIfAbsent(playerName, k -> new Position[2]);
         positions[index] = pos;
         
-        player.sendMessage(String.format(plugin.getLanguageManager().get("messages.positionSet"), 
-            posLabel, pos.getFloorX(), pos.getFloorY(), pos.getFloorZ()));
+        try {
+            ValidationUtils.validateCoordinates(
+                (int)pos.getX(), (int)pos.getY(), (int)pos.getZ()
+            );
             
-        // Check if both positions are set
-        if (positions[0] != null && positions[1] != null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.bothPositionsSet"));
+            player.sendMessage(String.format(plugin.getLanguageManager().get("messages.positionSet"), 
+                posLabel, pos.getFloorX(), pos.getFloorY(), pos.getFloorZ()));
+                
+            // Check if both positions are set
+            if (positions[0] != null && positions[1] != null) {
+                plugin.getValidationUtils().validatePositions(positions);
+                player.sendMessage(plugin.getLanguageManager().get("messages.bothPositionsSet"));
+            }
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCoordinates"));
+            plugin.getPlayerPositions().remove(playerName);
         }
     }
 
-    // Opens a form to create a new area.
-    private void openCreateForm(Player player) {
-         GuiManager gui = new GuiManager(plugin);
-        // Check that both positions are set.
-        HashMap<String, Position[]> playerPositions = plugin.getPlayerPositions();
-        String playerName = player.getName();
-        Position[] positions = playerPositions.getOrDefault(playerName, new Position[2]);
+    private Area createArea(Player player, String name, Position[] positions) {
+        if (positions == null || positions[0] == null || positions[1] == null) {
+            throw new IllegalStateException("Positions not set");
+        }
 
-        if (positions[0] == null || positions[1] == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.positionsNotSet"));
+        try {
+            // Validate area name
+            plugin.getValidationUtils().validateAreaName(name);
+            
+            // Create area using builder
+            return Area.builder()
+                .name(name)
+                .world(positions[0].getLevel().getName())
+                .coordinates(
+                    positions[0].getFloorX(), positions[1].getFloorX(),
+                    positions[0].getFloorY(), positions[1].getFloorY(),
+                    positions[0].getFloorZ(), positions[1].getFloorZ()
+                )
+                .applyDefaults() // Apply default permissions
+                .build();
+
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("Invalid area parameters: " + e.getMessage());
+        }
+    }
+
+    private void openCreateForm(Player player) {
+        // Validate player state first
+        try {
+            plugin.getValidationUtils().validatePlayerState(player, "create area");
+        } catch (IllegalStateException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.playerOffline"));
             return;
         }
-       gui.openCreateForm(player);
+
+        // Check position selection
+        Position[] positions = plugin.getPlayerPositions().get(player.getName());
+        if (positions == null || positions[0] == null || positions[1] == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.selectPositions"));
+            return;
+        }
+
+        try {
+            // Validate positions
+            plugin.getValidationUtils().validatePositions(positions);
+            
+            // Open creation form through GUI manager
+            plugin.getGuiManager().openCreateForm(player);
+            
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidSelection"));
+        }
     }
 
-    // Opens a form to edit an existing area.
     private void openEditForm(Player player, Area area) {
-        GuiManager gui = new GuiManager(plugin);
-        gui.openEditForm(player, area);
+        try {
+            // Validate player and area state
+            plugin.getValidationUtils().validatePlayerState(player, "edit area");
+            if (area == null) {
+                throw new IllegalArgumentException("Area cannot be null");
+            }
+
+            // Open edit form through GUI manager
+            plugin.getGuiManager().openEditForm(player, area);
+            
+        } catch (IllegalStateException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.playerOffline"));
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidArea"));
+        }
+    }
+
+    private void handleAreaDeletion(Player player, String areaName) {
+        try {
+            Area area = plugin.getArea(areaName);
+            if (area == null) {
+                throw new IllegalArgumentException("Area not found");
+            }
+
+            // Validate player state
+            plugin.getValidationUtils().validatePlayerState(player, "delete area");
+
+            // Remove area
+            plugin.removeArea(area);
+            player.sendMessage(plugin.getLanguageManager().get("area.delete.success", 
+                Map.of("area", areaName)));
+
+        } catch (IllegalStateException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.playerOffline"));
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
+        }
     }
 
     // New method to open a main menu form.

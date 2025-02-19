@@ -2,6 +2,8 @@ package adminarea.managers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaDTO;
+import adminarea.area.AreaBuilder;
 import adminarea.exception.DatabaseException;
 import adminarea.logging.PluginLogger;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -9,8 +11,6 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.flywaydb.core.Flyway;
-import org.flywaydb.core.api.MigrationState;
-
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -38,7 +38,7 @@ public class DatabaseManager {
             .build();
     }
 
-    public void init() {
+    public void init() throws DatabaseException {
         try {
             // Ensure plugin data folder exists
             if (!plugin.getDataFolder().exists()) {
@@ -48,38 +48,44 @@ public class DatabaseManager {
             File storageFolder = new File(plugin.getDataFolder(), "storage");
             if (!storageFolder.exists()) {
                 storageFolder.mkdirs();
-                try (InputStream in = plugin.getResource("storage/areas.db")) {
-                    if (in != null) {
-                        File outFile = new File(storageFolder, "areas.db");
-                        Files.copy(in, outFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    } else {
-                        plugin.getLogger().warning("Bundled storage file not found: storage/areas.db");
-                    }
-                }
+                copyBundledDatabase(storageFolder);
             }
             // Use the storage folder's database file
             String dbPath = new File(storageFolder, "areas.db").getAbsolutePath();
-            Class.forName("org.sqlite.JDBC");
+            initializeDataSource(dbPath);
+            initFlyway();
+            initializeDatabase();
+        } catch (Exception e) {
+            throw new DatabaseException("Failed to initialize database", e);
+        }
+    }
 
-            // Initialize connection pool
+    private void copyBundledDatabase(File storageFolder) throws DatabaseException {
+        try (InputStream in = plugin.getResource("storage/areas.db")) {
+            if (in != null) {
+                File outFile = new File(storageFolder, "areas.db");
+                Files.copy(in, outFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception e) {
+            throw new DatabaseException("Failed to copy bundled database", e);
+        }
+    }
+
+    private void initializeDataSource(String dbPath) throws DatabaseException {
+        try {
+            Class.forName("org.sqlite.JDBC");
             HikariConfig config = new HikariConfig();
             config.setJdbcUrl("jdbc:sqlite:" + dbPath);
             config.setMaximumPoolSize(10);
             config.addDataSourceProperty("cachePrepStmts", "true");
             config.addDataSourceProperty("prepStmtCacheSize", "250");
             dataSource = new HikariDataSource(config);
-
-            // Initialize Flyway for migrations
-            initFlyway();
-
-            initializeDatabase();
         } catch (Exception e) {
-            logger.error("Failed to initialize database", e);
-            throw new DatabaseException("Database initialization failed", e);
+            throw new DatabaseException("Failed to initialize connection pool", e);
         }
     }
 
-    private void initFlyway() {
+    private void initFlyway() throws DatabaseException {
         try {
             Flyway flyway = Flyway.configure()
                 .dataSource(dataSource)
@@ -173,9 +179,10 @@ public class DatabaseManager {
         return dataSource.getConnection();
     }
 
-    public void saveAreas(List<Area> areas) {
-        String sql = "REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, priority, show_title, settings, group_permissions, inherited_permissions, enter_message, leave_message) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    public void saveAreas(List<Area> areas) throws DatabaseException {
+        String sql = "REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
+                    "priority, show_title, settings, group_permissions, inherited_permissions, " +
+                    "enter_message, leave_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -183,25 +190,27 @@ public class DatabaseManager {
             conn.setAutoCommit(false);
             
             for (Area area : areas) {
-                ps.setString(1, area.getName());
-                ps.setString(2, area.getWorld());
-                ps.setInt(3, area.getXMin());
-                ps.setInt(4, area.getXMax());
-                ps.setInt(5, area.getYMin());
-                ps.setInt(6, area.getYMax());
-                ps.setInt(7, area.getZMin());
-                ps.setInt(8, area.getZMax());
-                ps.setInt(9, area.getPriority());
-                ps.setBoolean(10, area.isShowTitle());
-                ps.setString(11, area.getSettings().toString());
-                ps.setString(12, area.getGroupPermissions().toString());
-                ps.setString(13, new JSONObject(area.getAllGroupPermissions()).toString());
-                ps.setString(14, area.getEnterMessage());
-                ps.setString(15, area.getLeaveMessage());
+                AreaDTO dto = area.toDTO();
+                AreaDTO.Bounds bounds = dto.bounds();
+                ps.setString(1, dto.name());
+                ps.setString(2, dto.world());
+                ps.setInt(3, bounds.xMin());
+                ps.setInt(4, bounds.xMax());
+                ps.setInt(5, bounds.yMin());
+                ps.setInt(6, bounds.yMax());
+                ps.setInt(7, bounds.zMin());
+                ps.setInt(8, bounds.zMax());
+                ps.setInt(9, dto.priority());
+                ps.setBoolean(10, dto.showTitle());
+                ps.setString(11, dto.settings().toString());
+                ps.setString(12, new JSONObject(dto.groupPermissions()).toString());
+                ps.setString(13, new JSONObject(dto.inheritedPermissions()).toString());
+                ps.setString(14, dto.enterMessage());
+                ps.setString(15, dto.leaveMessage());
                 ps.addBatch();
                 
                 // Update cache
-                areaCache.put(area.getName(), area);
+                areaCache.put(dto.name(), area);
             }
             
             ps.executeBatch();
@@ -212,7 +221,7 @@ public class DatabaseManager {
         }
     }
 
-    public Area getArea(String name) {
+    public Area getArea(String name) throws DatabaseException {
         // Check cache first
         Area cachedArea = areaCache.getIfPresent(name);
         if (cachedArea != null) {
@@ -238,37 +247,131 @@ public class DatabaseManager {
     }
 
     private Area buildAreaFromResultSet(ResultSet rs) throws SQLException {
-        Area area = Area.builder()
-            .name(rs.getString("name"))
-            .world(rs.getString("world"))
-            .coordinates(
-                rs.getInt("x_min"),
-                rs.getInt("x_max"),
-                rs.getInt("y_min"),
-                rs.getInt("y_max"),
-                rs.getInt("z_min"),
-                rs.getInt("z_max")
-            )
-            .priority(rs.getInt("priority"))
-            .showTitle(rs.getBoolean("show_title"))
-            .settings(new JSONObject(rs.getString("settings")))
-            .toggleStates(new JSONObject(rs.getString("toggle_states")))
-            .defaultToggleStates(new JSONObject(rs.getString("default_toggle_states")))
-            .inheritedToggleStates(new JSONObject(rs.getString("inherited_toggle_states")))
-            .build();
+        // Get bounds from database
+        AreaDTO.Bounds bounds = new AreaDTO.Bounds(
+            rs.getInt("x_min"),
+            rs.getInt("x_max"),
+            rs.getInt("y_min"),
+            rs.getInt("y_max"),
+            rs.getInt("z_min"),
+            rs.getInt("z_max")
+        );
 
-        // Load group permissions
-        try (Connection conn = getConnection()) {
-            loadGroupPermissions(conn, area, rs.getInt("id"));
+        // Parse JSON strings
+        JSONObject settings = new JSONObject(rs.getString("settings"));
+        JSONObject toggleStates = new JSONObject(rs.getString("toggle_states"));
+        JSONObject defaultToggleStates = new JSONObject(rs.getString("default_toggle_states"));
+        JSONObject inheritedToggleStates = new JSONObject(rs.getString("inherited_toggle_states"));
+
+        // Parse group permissions
+        Map<String, Map<String, Boolean>> groupPerms = parseGroupPermissions(rs.getString("group_permissions"));
+        Map<String, Map<String, Boolean>> inheritedPerms = parseGroupPermissions(rs.getString("inherited_permissions"));
+
+        // Create AreaDTO
+        AreaDTO dto = new AreaDTO(
+            rs.getString("name"),
+            rs.getString("world"),
+            bounds,
+            rs.getInt("priority"),
+            rs.getBoolean("show_title"),
+            settings,
+            groupPerms,
+            inheritedPerms,
+            toggleStates,
+            defaultToggleStates,
+            inheritedToggleStates,
+            AreaDTO.Permissions.fromMap(new HashMap<>()),  // Default permissions
+            rs.getString("enter_message"),
+            rs.getString("leave_message")
+        );
+        // Create and return Area instance
+        return AreaBuilder
+            .fromDTO(dto)
+            .build();
+    }
+
+    public void saveArea(Area area) throws DatabaseException {
+        if (area == null) {
+            throw new DatabaseException("Cannot save null area");
         }
 
-        return area;
+        // Get DTO from area
+        AreaDTO dto = area.toDTO();
+        
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                saveAreaDTO(conn, dto);
+                conn.commit();
+                areaCache.put(dto.name(), area);
+            } catch (SQLException e) {
+                conn.rollback();
+                throw new DatabaseException("Failed to save area: " + dto.name(), e);
+            }
+        } catch (SQLException e) {
+            throw new DatabaseException("Database connection failed while saving area", e);
+        }
+    }
+
+    private void saveAreaDTO(Connection conn, AreaDTO dto) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+            "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
+            "priority, show_title, settings, group_permissions, inherited_permissions, " + 
+            "enter_message, leave_message, toggle_states, default_toggle_states, " +
+            "inherited_toggle_states) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")) {
+            
+            var bounds = dto.bounds();
+            ps.setString(1, dto.name());
+            ps.setString(2, dto.world());
+            ps.setInt(3, bounds.xMin());
+            ps.setInt(4, bounds.xMax());
+            ps.setInt(5, bounds.yMin());
+            ps.setInt(6, bounds.yMax());
+            ps.setInt(7, bounds.zMin());
+            ps.setInt(8, bounds.zMax());
+            ps.setInt(9, dto.priority());
+            ps.setBoolean(10, dto.showTitle());
+            ps.setString(11, dto.settings().toString());
+            ps.setString(12, new JSONObject(dto.groupPermissions()).toString());
+            ps.setString(13, new JSONObject(dto.inheritedPermissions()).toString());
+            ps.setString(14, dto.enterMessage());
+            ps.setString(15, dto.leaveMessage());
+            ps.setString(16, dto.toggleStates().toString());
+            ps.setString(17, dto.defaultToggleStates().toString());
+            ps.setString(18, dto.inheritedToggleStates().toString());
+            ps.executeUpdate();
+        }
+    }
+
+    private Map<String, Map<String, Boolean>> parseGroupPermissions(String json) {
+        if (json == null || json.isEmpty()) {
+            return new HashMap<>();
+        }
+        try {
+            JSONObject jsonObj = new JSONObject(json);
+            Map<String, Map<String, Boolean>> result = new HashMap<>();
+            
+            for (String group : jsonObj.keySet()) {
+                JSONObject perms = jsonObj.getJSONObject(group);
+                Map<String, Boolean> groupPerms = new HashMap<>();
+                for (String perm : perms.keySet()) {
+                    groupPerms.put(perm, perms.getBoolean(perm));
+                }
+                result.put(group, groupPerms);
+            }
+            return result;
+        } catch (Exception e) {
+            logger.error("Error parsing group permissions", e);
+            return new HashMap<>();
+        }
     }
 
     private void saveGroupPermissions(Connection conn, Area area, int areaId) throws SQLException {
         String sql = "INSERT OR REPLACE INTO group_permissions (area_id, group_name, permissions) VALUES (?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            Map<String, Map<String, Boolean>> groupPerms = area.getAllGroupPermissions();
+            AreaDTO dto = area.toDTO();
+            Map<String, Map<String, Boolean>> groupPerms = dto.groupPermissions();
+            
             for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
                 ps.setInt(1, areaId);
                 ps.setString(2, entry.getKey());
@@ -283,6 +386,7 @@ public class DatabaseManager {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, areaId);
             try (ResultSet rs = ps.executeQuery()) {
+                Map<String, Map<String, Boolean>> groupPermissions = new HashMap<>();
                 while (rs.next()) {
                     String groupName = rs.getString("group_name");
                     JSONObject perms = new JSONObject(rs.getString("permissions"));
@@ -290,71 +394,30 @@ public class DatabaseManager {
                     for (String key : perms.keySet()) {
                         permMap.put(key, perms.getBoolean(key));
                     }
-                    area.setGroupPermissions(groupName, permMap);
+                    groupPermissions.put(groupName, permMap);
                 }
+                AreaDTO updatedDto = new AreaDTO(
+                    area.toDTO().name(),
+                    area.toDTO().world(),
+                    area.toDTO().bounds(),
+                    area.toDTO().priority(),
+                    area.toDTO().showTitle(),
+                    area.toDTO().settings(),
+                    groupPermissions,
+                    area.toDTO().inheritedPermissions(),
+                    area.toDTO().toggleStates(),
+                    area.toDTO().defaultToggleStates(),
+                    area.toDTO().inheritedToggleStates(),
+                    area.toDTO().permissions(),
+                    area.toDTO().enterMessage(),
+                    area.toDTO().leaveMessage()
+                );
+                AreaBuilder.fromDTO(updatedDto).build();
             }
         }
     }
 
-    public void saveArea(Area area) {
-        String sql = "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
-                    "priority, show_title, settings, group_permissions, inherited_permissions, enter_message, leave_message, " +
-                    "toggle_states, default_toggle_states, inherited_toggle_states) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        
-        try (Connection conn = getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                // First, save main area data
-                try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                    ps.setString(1, area.getName());
-                    ps.setString(2, area.getWorld());
-                    ps.setInt(3, area.getXMin());
-                    ps.setInt(4, area.getXMax());
-                    ps.setInt(5, area.getYMin());
-                    ps.setInt(6, area.getYMax());
-                    ps.setInt(7, area.getZMin());
-                    ps.setInt(8, area.getZMax());
-                    ps.setInt(9, area.getPriority());
-                    ps.setBoolean(10, area.isShowTitle());
-                    ps.setString(11, area.getSettings().toString());
-                    ps.setString(12, area.getGroupPermissions().toString());
-                    ps.setString(13, new JSONObject(area.getAllGroupPermissions()).toString());
-                    ps.setString(14, area.getEnterMessage());
-                    ps.setString(15, area.getLeaveMessage());
-                    ps.setString(16, area.getToggleStates().toString());
-                    ps.setString(17, area.getDefaultToggleStates().toString());
-                    ps.setString(18, area.getInheritedToggleStates().toString());
-                    ps.executeUpdate();
-                }
-
-                // Get the area ID using a separate query
-                try (PreparedStatement ps = conn.prepareStatement("SELECT id FROM areas WHERE name = ?")) {
-                    ps.setString(1, area.getName());
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (rs.next()) {
-                            int areaId = rs.getInt("id");
-                            // Save group permissions
-                            saveGroupPermissions(conn, area, areaId);
-                        }
-                    }
-                }
-                
-                conn.commit();
-                // Update cache
-                areaCache.put(area.getName(), area);
-                
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            }
-        } catch (SQLException e) {
-            logger.error("Error saving area " + area.getName(), e);
-            throw new DatabaseException("Could not save area: " + area.getName(), e);
-        }
-    }
-
-    public void updateArea(Area area) {
+    public void updateArea(Area area) throws DatabaseException {
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                 "UPDATE areas SET world=?, x_min=?, x_max=?, y_min=?, y_max=?, z_min=?, z_max=?, " +
@@ -362,35 +425,38 @@ public class DatabaseManager {
                 "enter_message=?, leave_message=?, toggle_states=?, default_toggle_states=?, " +
                 "inherited_toggle_states=? WHERE name=?")) {
             
-            ps.setString(1, area.getWorld());
-            ps.setInt(2, area.getXMin());
-            ps.setInt(3, area.getXMax());
-            ps.setInt(4, area.getYMin());
-            ps.setInt(5, area.getYMax());
-            ps.setInt(6, area.getZMin());
-            ps.setInt(7, area.getZMax());
-            ps.setInt(8, area.getPriority());
-            ps.setBoolean(9, area.isShowTitle());
-            ps.setString(10, area.getSettings().toString());
-            ps.setString(11, area.getGroupPermissions().toString());
-            ps.setString(12, new JSONObject(area.getAllGroupPermissions()).toString());
-            ps.setString(13, area.getEnterMessage());
-            ps.setString(14, area.getLeaveMessage());
-            ps.setString(15, area.getToggleStates().toString());
-            ps.setString(16, area.getDefaultToggleStates().toString());
-            ps.setString(17, area.getInheritedToggleStates().toString());
-            ps.setString(18, area.getName());
+            AreaDTO dto = area.toDTO();
+            AreaDTO.Bounds bounds = dto.bounds();
+            
+            ps.setString(1, dto.world());
+            ps.setInt(2, bounds.xMin());
+            ps.setInt(3, bounds.xMax());
+            ps.setInt(4, bounds.yMin());
+            ps.setInt(5, bounds.yMax());
+            ps.setInt(6, bounds.zMin());
+            ps.setInt(7, bounds.zMax());
+            ps.setInt(8, dto.priority());
+            ps.setBoolean(9, dto.showTitle());
+            ps.setString(10, dto.settings().toString());
+            ps.setString(11, new JSONObject(dto.groupPermissions()).toString());
+            ps.setString(12, new JSONObject(dto.inheritedPermissions()).toString());
+            ps.setString(13, dto.enterMessage());
+            ps.setString(14, dto.leaveMessage());
+            ps.setString(15, dto.toggleStates().toString());
+            ps.setString(16, dto.defaultToggleStates().toString());
+            ps.setString(17, dto.inheritedToggleStates().toString());
+            ps.setString(18, dto.name());
             ps.executeUpdate();
             
             // Update cache
-            areaCache.put(area.getName(), area);
+            areaCache.put(dto.name(), area);
         } catch (SQLException e) {
             logger.error("Error updating area " + area.getName(), e);
             throw new DatabaseException("Could not update area: " + area.getName(), e);
         }
     }
 
-    public void deleteArea(String name) {
+    public void deleteArea(String name) throws DatabaseException {
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement("DELETE FROM areas WHERE name=?")) {
             ps.setString(1, name);
@@ -404,7 +470,7 @@ public class DatabaseManager {
         }
     }
 
-    public List<Area> loadAreas() {
+    public List<Area> loadAreas() throws DatabaseException {
         List<Area> areas = new ArrayList<>();
         try (Connection conn = getConnection();
              Statement statement = conn.createStatement();

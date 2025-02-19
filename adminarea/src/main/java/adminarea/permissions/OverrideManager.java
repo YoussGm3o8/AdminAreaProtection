@@ -311,7 +311,7 @@ public class OverrideManager implements AutoCloseable {
             overrideCache.invalidate(targetType + ":" + child + ":" + permission));
     }
 
-    private void cleanupExpiredOverridesThreadSafe() {
+    void cleanupExpiredOverridesThreadSafe() {
         if (isShuttingDown.get()) return;
 
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();

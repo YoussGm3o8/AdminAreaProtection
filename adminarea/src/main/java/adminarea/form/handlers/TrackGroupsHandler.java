@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.permissions.PermissionToggle;
@@ -10,6 +12,7 @@ import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import io.micrometer.core.instrument.Timer;
+import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.List;
@@ -73,6 +76,9 @@ public class TrackGroupsHandler extends BaseFormHandler {
                 return;
             }
 
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
             // Process track group permissions 
             List<String> groups = plugin.getLuckPermsCache().getTrackGroups(trackName).stream().toList();
             Map<String, Map<String, Boolean>> groupPerms = new HashMap<>();
@@ -91,16 +97,16 @@ public class TrackGroupsHandler extends BaseFormHandler {
                 groupPerms.put(groupName, permissions);
             }
 
-            // Apply permissions to each group
-            for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
-                area.setGroupPermissions(entry.getKey(), entry.getValue());
-            }
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .groupPermissions(groupPerms)
+                .build();
 
             // Save changes
-            plugin.saveArea(area);
+            plugin.updateArea(updatedArea);
 
             player.sendMessage(plugin.getLanguageManager().get("messages.form.trackPermissionsApplied"));
-            plugin.getGuiManager().openAreaSettings(player, area);
+            plugin.getGuiManager().openAreaSettings(player, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error processing track groups form", e);

@@ -2,6 +2,9 @@ package adminarea.util;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.permissions.PermissionToggle;
+import cn.nukkit.Player;
+import cn.nukkit.level.Position;
+
 import org.json.JSONObject;
 
 import java.util.*;
@@ -14,21 +17,25 @@ public class ValidationUtils {
     private static final int MAX_PRIORITY = 100;
     
     // Toggle dependency map
-    private static final Map<String, List<String>> TOGGLE_DEPENDENCIES = new HashMap<>() {{
-        put("container", Arrays.asList("interact")); 
-        put("itemFrame", Arrays.asList("interact"));
-        put("armorStand", Arrays.asList("interact"));
-        put("hopper", Arrays.asList("redstone"));
-        put("dispenser", Arrays.asList("redstone"));
-        put("piston", Arrays.asList("redstone")); 
-        put("breeding", Arrays.asList("interact"));
-    }};
+    private static final Map<String, List<String>> TOGGLE_DEPENDENCIES;
+    static {
+        TOGGLE_DEPENDENCIES = new HashMap<>();
+        TOGGLE_DEPENDENCIES.put("container", Arrays.asList("interact")); 
+        TOGGLE_DEPENDENCIES.put("itemFrame", Arrays.asList("interact"));
+        TOGGLE_DEPENDENCIES.put("armorStand", Arrays.asList("interact"));
+        TOGGLE_DEPENDENCIES.put("hopper", Arrays.asList("redstone"));
+        TOGGLE_DEPENDENCIES.put("dispenser", Arrays.asList("redstone"));
+        TOGGLE_DEPENDENCIES.put("piston", Arrays.asList("redstone")); 
+        TOGGLE_DEPENDENCIES.put("breeding", Arrays.asList("interact"));
+    }
     // Toggle conflict map
-    private static final Map<String, List<String>> TOGGLE_CONFLICTS = new HashMap<>() {{
-        put("pvp", Arrays.asList("damageEntities"));
-        put("monsterSpawn", Arrays.asList("peaceful"));
-        put("fire", Arrays.asList("fireProtection"));
-    }};
+    private static final Map<String, List<String>> TOGGLE_CONFLICTS;
+    static {
+        TOGGLE_CONFLICTS = new HashMap<>();
+        TOGGLE_CONFLICTS.put("pvp", Arrays.asList("damageEntities"));
+        TOGGLE_CONFLICTS.put("monsterSpawn", Arrays.asList("peaceful"));
+        TOGGLE_CONFLICTS.put("fire", Arrays.asList("fireProtection"));
+    }
 
     public static void validateAreaName(String name) {
         if (name == null || !AREA_NAME_PATTERN.matcher(name).matches()) {
@@ -36,9 +43,16 @@ public class ValidationUtils {
         }
     }
 
-    public static void validateCoordinates(int min, int max, String axis) {
-        if (min > max) {
-            throw new IllegalArgumentException(axis + " coordinates are invalid: min (" + min + ") is greater than max (" + max + ")");
+    public static void validateCoordinates(int x, int y, int z) {
+        if (y < -64 || y > 320) {
+            throw new IllegalArgumentException("Y coordinate must be between -64 and 320");
+        }
+        // X and Z coordinates have much larger bounds in Minecraft
+        if (x < -30000000 || x > 30000000) {
+            throw new IllegalArgumentException("X coordinate must be between -30000000 and 30000000"); 
+        }
+        if (z < -30000000 || z > 30000000) {
+            throw new IllegalArgumentException("Z coordinate must be between -30000000 and 30000000");
         }
     }
 
@@ -222,5 +236,43 @@ public class ValidationUtils {
         if (value < min || value > max) {
             throw new IllegalArgumentException(fieldName + " must be between " + min + " and " + max);
         }
+    }
+
+    public void validatePositions(Position[] positions) {
+        if (positions == null || positions.length != 2 || positions[0] == null || positions[1] == null) {
+            throw new IllegalArgumentException("Invalid positions array");
+        }
+        
+        // Fix: Add proper world validation
+        if (!positions[0].getLevel().getName().equals(positions[1].getLevel().getName())) {
+            throw new IllegalArgumentException("Positions must be in the same world");
+        }
+    }
+
+    public void validatePlayerState(Player player, String action) {
+        if (player == null) {
+            throw new IllegalArgumentException("Player cannot be null");
+        }
+        if (!player.isOnline()) {
+            throw new IllegalStateException("Player must be online");
+        }
+    }
+
+    public void validateCrossFields(Map<String, String> fields1, Map<String, String> fields2) {
+        if (fields1 == null || fields2 == null) {
+            throw new IllegalArgumentException("Field maps cannot be null");
+        }
+    }
+
+    public String sanitizeFormInput(String input, int maxLength) {
+        if (input == null) {
+            return "";
+        }
+        // Fix: Trim properly
+        String trimmed = input.trim(); 
+        if (trimmed.length() > maxLength) {
+            return trimmed.substring(0, maxLength);
+        }
+        return trimmed;
     }
 }

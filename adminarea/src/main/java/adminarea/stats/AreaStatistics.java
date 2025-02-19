@@ -151,26 +151,27 @@ public class AreaStatistics implements AutoCloseable {
 
     public void recordViolation(String areaId, String playerId, String violationType) {
         try {
-            violationCounters.computeIfAbsent(areaId, k -> new AtomicInteger())
-                           .incrementAndGet();
+            // Fix: Increment counter first before DB operation
+            violationCounters.computeIfAbsent(areaId, k -> new AtomicInteger()).incrementAndGet();
             
             try (PreparedStatement stmt = dbConnection.prepareStatement(
                 "INSERT INTO violations (area_id, player_id, violation_type) VALUES (?, ?, ?)")) {
                 stmt.setString(1, areaId);
-                stmt.setString(2, playerId);
+                stmt.setString(2, playerId); 
                 stmt.setString(3, violationType);
                 stmt.executeUpdate();
             }
             
             Counter.builder("area.violations")
                   .tag("area", areaId)
-                  .tag("type", violationType)
+                  .tag("type", violationType) 
                   .register(meterRegistry)
                   .increment();
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to record violation", e);
-        }
+
+    } catch (SQLException e) {
+        plugin.getLogger().error("Failed to record violation", e);
     }
+}
 
     public void recordModification(String areaId, String playerId, 
                                  String modificationType, String details) {
@@ -392,7 +393,10 @@ public class AreaStatistics implements AutoCloseable {
             plugin.getLogger().error("Failed to export statistics", e);
         }
     }
+
+    // Add protected getter for testing
+    protected Connection getConnection() {
+        return dbConnection;
+    }
 }
 
-record AreaModification(String areaId, String playerId, String modificationType, 
-                       String details, Instant timestamp) {}

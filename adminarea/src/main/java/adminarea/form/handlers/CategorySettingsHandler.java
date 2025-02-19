@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
 import adminarea.form.IFormHandler;
@@ -13,6 +15,8 @@ import cn.nukkit.form.window.FormWindow;
 
 import java.util.List;
 import java.util.Map;
+
+import org.json.JSONObject;
 
 public class CategorySettingsHandler extends BaseFormHandler {
     private final String formId;
@@ -62,28 +66,39 @@ public class CategorySettingsHandler extends BaseFormHandler {
 
 
     private void processCategorySettings(Player player, FormResponseCustom customResponse, Area area) {
-        PermissionToggle.Category category = getCategoryFromFormId(formId);
-        List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
+        try {
+            PermissionToggle.Category category = getCategoryFromFormId(formId);
+            List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
 
-        if (categoryToggles != null) {
-            // Process toggle settings
-            int toggleIndex = 1;
-            for (PermissionToggle toggle : categoryToggles) {
-                boolean value = customResponse.getToggleResponse(toggleIndex++);
-                area.getSettings().put(toggle.getPermissionNode(), value);
-            }
-            
-            // Save changes
-            try {
-                plugin.getDatabaseManager().saveArea(area);
+            if (categoryToggles != null) {
+                // Get current area data
+                AreaDTO currentDTO = area.toDTO();
+                
+                // Create new settings object based on current settings
+                JSONObject updatedSettings = new JSONObject(currentDTO.settings());
+                
+                // Process toggle settings
+                int toggleIndex = 1;
+                for (PermissionToggle toggle : categoryToggles) {
+                    boolean value = customResponse.getToggleResponse(toggleIndex++);
+                    updatedSettings.put(toggle.getPermissionNode(), value);
+                }
+                
+                // Create updated area using builder
+                Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                    .settings(updatedSettings)
+                    .build();
+                
+                // Update area in plugin
+                plugin.updateArea(updatedArea);
                 player.sendMessage(plugin.getLanguageManager().get("messages.settingsUpdated"));
                 
                 // Return to area edit menu
-                plugin.getGuiManager().openAreaSettings(player, area);
-            } catch (Exception e) {
-                plugin.getLogger().error("Failed to save area changes", e);
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+                plugin.getGuiManager().openAreaSettings(player, updatedArea);
             }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to save category settings", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
         }
     }
 

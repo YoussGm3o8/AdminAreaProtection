@@ -266,7 +266,7 @@ public class PermissionToggle implements AutoCloseable {
         }
     }
 
-    private void backup() {
+    protected void backup() {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             Files.createDirectories(backupPath);
@@ -298,7 +298,7 @@ public class PermissionToggle implements AutoCloseable {
         }
     }
 
-    private void cleanup() {
+    protected void cleanup() {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             // Remove old backups
@@ -329,6 +329,15 @@ public class PermissionToggle implements AutoCloseable {
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "toggle_cleanup");
         }
+    }
+
+    protected void addToGroup(String group, String permission) {
+        // Implementation
+    }
+
+    protected Connection getConnection() {
+        // Implementation
+        return null;
     }
 
     @Override

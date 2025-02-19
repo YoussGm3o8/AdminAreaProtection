@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
 import adminarea.permissions.PermissionToggle;
@@ -48,7 +50,8 @@ public class PermissionSettingsHandler extends BaseFormHandler {
         form.addElement(new ElementLabel("§2Configure area permissions"));
 
         // Add permission toggles
-        JSONObject settings = area.getSettings();
+        AreaDTO currentDTO = area.toDTO();
+        JSONObject settings = currentDTO.settings();
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
             boolean currentValue = settings.optBoolean(
                 toggle.getPermissionNode(), 
@@ -88,21 +91,30 @@ public class PermissionSettingsHandler extends BaseFormHandler {
                 return;
             }
 
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
+            // Create new settings object based on current settings
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
+
             // Update permissions
-            JSONObject settings = area.getSettings();
             int index = 1; // Skip label element
             for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                settings.put(toggle.getPermissionNode(), response.getToggleResponse(index++));
+                updatedSettings.put(toggle.getPermissionNode(), response.getToggleResponse(index++));
             }
 
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .settings(updatedSettings)
+                .build();
+
             // Save changes
-            area.setSettings(settings);
-            plugin.saveArea(area);
+            plugin.updateArea(updatedArea);
             player.sendMessage(plugin.getLanguageManager().get("messages.areaUpdated", 
                 java.util.Map.of("area", area.getName())));
 
             // Return to edit menu
-            plugin.getGuiManager().openEditForm(player, area);
+            plugin.getGuiManager().openEditForm(player, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling permission settings response", e);

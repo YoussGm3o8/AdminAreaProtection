@@ -2,6 +2,8 @@ package adminarea.form;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
@@ -51,9 +53,14 @@ public class LuckPermsOverrideForm {
     public FormWindowCustom createGroupPermissionForm(Area area, String groupName) {
         FormWindowCustom form = new FormWindowCustom("Edit " + groupName + " Permissions");
 
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+        Map<String, Map<String, Boolean>> groupPerms = currentDTO.groupPermissions();
+        Map<String, Boolean> currentPerms = groupPerms.getOrDefault(groupName, new HashMap<>());
+
         // Add toggles for each permission
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            boolean currentValue = area.getGroupPermission(groupName, toggle.getPermissionNode());
+            boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), false);
             form.addElement(new ElementToggle(toggle.getDisplayName(), currentValue));
         }
 
@@ -61,12 +68,25 @@ public class LuckPermsOverrideForm {
     }
 
     public void saveGroupPermissions(Area area, String groupName, JSONObject permissions) {
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+
+        // Convert permissions to map
         Map<String, Boolean> permissionMap = new HashMap<>();
         for (String key : permissions.keySet()) {
             permissionMap.put(key, permissions.getBoolean(key));
         }
-        area.setGroupPermissions(groupName, permissionMap);
-        plugin.updateArea(area);
+
+        // Update group permissions
+        Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
+        updatedGroupPerms.put(groupName, permissionMap);
+
+        // Create updated area using builder
+        Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+            .groupPermissions(updatedGroupPerms)
+            .build();
+
+        plugin.updateArea(updatedArea);
     }
 
     // Add new cleanup method to handle resource cleanup

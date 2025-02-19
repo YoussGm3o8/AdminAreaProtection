@@ -2,6 +2,8 @@ package adminarea.managers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaDTO;
+import adminarea.exception.DatabaseException;
 import adminarea.interfaces.IAreaManager;
 import adminarea.stats.AreaStatistics;
 import cn.nukkit.Player;
@@ -57,7 +59,11 @@ public class AreaManager implements IAreaManager {
             areasByName.put(area.getName().toLowerCase(), area);
             nameCache.put(area.getName().toLowerCase(), area);
             invalidateLocationCache();
-            plugin.getDatabaseManager().saveArea(area);
+            try {
+                plugin.getDatabaseManager().saveArea(area);
+            } catch (DatabaseException e) {
+                throw new RuntimeException("Failed to save area to database", e);
+            }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_add");
         }
@@ -67,7 +73,11 @@ public class AreaManager implements IAreaManager {
     public void removeArea(Area area) {
         areas.remove(area);
         areasByName.remove(area.getName().toLowerCase());
-        plugin.getDatabaseManager().deleteArea(area.getName());
+        try {
+            plugin.getDatabaseManager().deleteArea(area.getName());
+        } catch (DatabaseException e) {
+            throw new RuntimeException("Failed to delete area from database", e);
+        }
     }
 
     @Override
@@ -79,7 +89,11 @@ public class AreaManager implements IAreaManager {
             areasByName.put(area.getName().toLowerCase(), area);
             nameCache.invalidate(area.getName().toLowerCase());
             invalidateLocationCache();
-            plugin.getDatabaseManager().updateArea(area);
+            try {
+                plugin.getDatabaseManager().updateArea(area);
+            } catch (DatabaseException e) {
+                throw new RuntimeException("Failed to update area in database", e);
+            }
         }
     }
 
@@ -152,45 +166,51 @@ public class AreaManager implements IAreaManager {
     public Area mergeAreas(Area area1, Area area2) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            if (!area1.getWorld().equals(area2.getWorld())) {
+            AreaDTO dto1 = area1.toDTO();
+            AreaDTO dto2 = area2.toDTO();
+
+            if (!dto1.world().equals(dto2.world())) {
                 throw new IllegalArgumentException("Cannot merge areas from different worlds");
             }
 
             // Create merged area with combined bounds
-            Area merged = Area.builder()
-                .name(area1.getName() + "_" + area2.getName())
-                .world(area1.getWorld())
-                .coordinates(
-                    Math.min(area1.getXMin(), area2.getXMin()),
-                    Math.max(area1.getXMax(), area2.getXMax()),
-                    Math.min(area1.getYMin(), area2.getYMin()),
-                    Math.max(area1.getYMax(), area2.getYMax()),
-                    Math.min(area1.getZMin(), area2.getZMin()),
-                    Math.max(area1.getZMax(), area2.getZMax())
-                )
-                .priority(Math.max(area1.getPriority(), area2.getPriority()))
-                .build();
+            AreaDTO.Bounds mergedBounds = new AreaDTO.Bounds(
+                Math.min(dto1.bounds().xMin(), dto2.bounds().xMin()),
+                Math.max(dto1.bounds().xMax(), dto2.bounds().xMax()),
+                Math.min(dto1.bounds().yMin(), dto2.bounds().yMin()),
+                Math.max(dto1.bounds().yMax(), dto2.bounds().yMax()),
+                Math.min(dto1.bounds().zMin(), dto2.bounds().zMin()),
+                Math.max(dto1.bounds().zMax(), dto2.bounds().zMax())
+            );
 
-            // Merge settings (prefer more restrictive settings)
+            // Merge settings
             JSONObject mergedSettings = new JSONObject();
-            mergeSettings(mergedSettings, area1.getSettings(), area2.getSettings());
-            merged.setSettings(mergedSettings);
+            mergeSettings(mergedSettings, dto1.settings(), dto2.settings());
 
             // Merge group permissions
-            JSONObject mergedPermissions = new JSONObject();
-            mergeGroupPermissions(mergedPermissions, area1.getGroupPermissions(), area2.getGroupPermissions());
-            
-            // Set permissions for each group
-            for (String group : mergedPermissions.keySet()) {
-                JSONObject groupPerms = mergedPermissions.getJSONObject(group);
-                Map<String, Boolean> permMap = new HashMap<>();
-                for (String perm : groupPerms.keySet()) {
-                    permMap.put(perm, groupPerms.getBoolean(perm));
-                }
-                merged.setGroupPermissions(group, permMap);
-            }
+            Map<String, Map<String, Boolean>> mergedGroupPerms = new HashMap<>(dto1.groupPermissions());
+            dto2.groupPermissions().forEach((group, perms) -> {
+                mergedGroupPerms.merge(group, perms, (existing, newPerms) -> {
+                    Map<String, Boolean> merged = new HashMap<>(existing);
+                    merged.putAll(newPerms);
+                    return merged;
+                });
+            });
 
-            return merged;
+            // Create merged area using builder
+            return Area.builder()
+                .name(dto1.name() + "_" + dto2.name())
+                .world(dto1.world())
+                .coordinates(
+                    mergedBounds.xMin(), mergedBounds.xMax(),
+                    mergedBounds.yMin(), mergedBounds.yMax(),
+                    mergedBounds.zMin(), mergedBounds.zMax()
+                )
+                .priority(Math.max(dto1.priority(), dto2.priority()))
+                .settings(mergedSettings)
+                .groupPermissions(mergedGroupPerms)
+                .build();
+
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_merge");
         }
@@ -290,18 +310,19 @@ public class AreaManager implements IAreaManager {
     private List<Vector3> calculateVisualizationPoints(Area area) {
         List<Vector3> points = new ArrayList<>();
         int spacing = 2; // Adjust spacing between particles
+        AreaDTO.Bounds bounds = area.toDTO().bounds();
 
         // Calculate edges more efficiently
-        for (double x = area.getXMin(); x <= area.getXMax(); x += spacing) {
-            addEdgePoints(points, x, area.getYMin(), area.getZMin(), area.getYMax(), area.getZMax());
+        for (double x = bounds.xMin(); x <= bounds.xMax(); x += spacing) {
+            addEdgePoints(points, x, bounds.yMin(), bounds.zMin(), bounds.yMax(), bounds.zMax());
         }
         
-        for (double y = area.getYMin(); y <= area.getYMax(); y += spacing) {
-            addEdgePoints(points, area.getXMin(), y, area.getZMin(), area.getXMax(), area.getZMax());
+        for (double y = bounds.yMin(); y <= bounds.yMax(); y += spacing) {
+            addEdgePoints(points, bounds.xMin(), y, bounds.zMin(), bounds.xMax(), bounds.zMax());
         }
         
-        for (double z = area.getZMin(); z <= area.getZMax(); z += spacing) {
-            addEdgePoints(points, area.getXMin(), area.getYMin(), z, area.getXMax(), area.getYMax());
+        for (double z = bounds.zMin(); z <= bounds.zMax(); z += spacing) {
+            addEdgePoints(points, bounds.xMin(), bounds.yMin(), z, bounds.xMax(), bounds.yMax());
         }
 
         Collections.shuffle(points); // Randomize for better visual effect

@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.permissions.PermissionToggle;
@@ -40,9 +42,16 @@ public class OverrideEditHandler extends BaseFormHandler {
         // Create custom form for editing overrides
         FormWindowCustom form = new FormWindowCustom("Edit Overrides - " + area.getName());
         
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+
+        // Get current group permissions
+        Map<String, Boolean> currentPerms = currentDTO.groupPermissions()
+            .getOrDefault(groupName, new HashMap<>());
+
         // Add toggle buttons for each permission
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            boolean currentValue = area.getGroupPermission(groupName, toggle.getPermissionNode());
+            boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), false);
             form.addElement(new cn.nukkit.form.element.ElementToggle(
                 toggle.getDisplayName(), 
                 currentValue
@@ -76,6 +85,9 @@ public class OverrideEditHandler extends BaseFormHandler {
                 return;
             }
 
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
             // Process overrides
             Map<String, Boolean> overrides = new HashMap<>();
             int index = 0;
@@ -83,12 +95,21 @@ public class OverrideEditHandler extends BaseFormHandler {
                 overrides.put(toggle.getPermissionNode(), response.getToggleResponse(index++));
             }
 
-            // Update overrides in database
-            plugin.getOverrideManager().setGroupOverrides(groupName, overrides);
+            // Create updated permissions map
+            Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
+            updatedGroupPerms.put(groupName, overrides);
+
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .groupPermissions(updatedGroupPerms)
+                .build();
+
+            // Update area in plugin
+            plugin.updateArea(updatedArea);
             
             player.sendMessage(plugin.getLanguageManager().get("messages.form.permissionOverridesUpdated"));
             
-            plugin.getGuiManager().openLuckPermsGroupList(player, area);
+            plugin.getGuiManager().openLuckPermsGroupList(player, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error processing override edit form", e);

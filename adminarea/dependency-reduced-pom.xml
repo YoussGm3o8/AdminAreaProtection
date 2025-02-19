@@ -27,18 +27,11 @@
           <target>${maven.compiler.target}</target>
           <testSource>${maven.compiler.source}</testSource>
           <testTarget>${maven.compiler.target}</testTarget>
-          <skip>true</skip>
-          <excludes>
-            <exclude>**/test/**</exclude>
-          </excludes>
         </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.2</version>
-        <configuration>
-          <skipTests>true</skipTests>
-        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>
@@ -242,6 +235,5 @@
     <maven.compiler.target>21</maven.compiler.target>
     <maven.compiler.source>21</maven.compiler.source>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <skipTests>true</skipTests>
   </properties>
 </project>

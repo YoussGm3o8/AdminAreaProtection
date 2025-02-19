@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
 import adminarea.form.validation.FormValidator;
@@ -59,21 +61,28 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 return;
             }
 
-            // Update area properties
-            area.setName(response.getInputResponse(1))
-                .setPriority(Integer.parseInt(response.getInputResponse(2)))
-                .setShowTitle(response.getToggleResponse(4))
-                .setEnterMessage(response.getInputResponse(5))
-                .setLeaveMessage(response.getInputResponse(6));
+            // Get current area data
+            AreaDTO currentDTO = area.toDTO();
 
-            // Save changes
-            plugin.saveArea(area);
+            // Create updated area using builder
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .name(response.getInputResponse(1))
+                .priority(Integer.parseInt(response.getInputResponse(2)))
+                .showTitle(response.getToggleResponse(4))
+                .enterMessage(response.getInputResponse(5))
+                .leaveMessage(response.getInputResponse(6))
+                .build();
+
+            // Update area in plugin
+            plugin.updateArea(updatedArea);
             player.sendMessage(plugin.getLanguageManager().get("messages.areaUpdated", 
-                java.util.Map.of("area", area.getName())));
+                java.util.Map.of("area", updatedArea.getName())));
 
             // Return to area settings
-            plugin.getGuiManager().openAreaSettings(player, area);
+            plugin.getGuiManager().openAreaSettings(player, updatedArea);
 
+        } catch (NumberFormatException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidNumber"));
         } catch (Exception e) {
             plugin.getLogger().error("Error handling basic settings response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error"));

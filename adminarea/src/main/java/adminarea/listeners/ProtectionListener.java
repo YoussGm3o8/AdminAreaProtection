@@ -29,6 +29,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaDTO;
 import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.event.LuckPermsGroupChangeEvent;
 import adminarea.event.PermissionChangeEvent;
@@ -164,7 +165,7 @@ public class ProtectionListener implements Listener {
             Area area = plugin.getHighestPriorityArea(event.getBlock().getLevel().getName(),
                 event.getBlock().getX(), event.getBlock().getY(), event.getBlock().getZ());
                 
-            if (area != null && !area.getSettings().optBoolean("gui.permissions.toggles.allowRedstone", true)) {
+            if (area != null && !area.toDTO().settings().optBoolean("gui.permissions.toggles.allowRedstone", true)) {
                 event.setCancelled();
             }
         } finally {
@@ -206,7 +207,7 @@ public class ProtectionListener implements Listener {
                 .filter(block -> {
                     Area area = plugin.getHighestPriorityArea(block.getLevel().getName(),
                         block.getX(), block.getY(), block.getZ());
-                    return area == null || area.getSettings().optBoolean("allowExplosions", false);
+                    return area == null || area.toDTO().settings().optBoolean("allowExplosions", false);
                 })
                 .toList());
         } finally {
@@ -243,25 +244,31 @@ public class ProtectionListener implements Listener {
         // If areas are different, handle enter/leave messages
         if (fromArea != toArea) {
             // Handle leaving area
-            if (fromArea != null && fromArea.isShowTitle() && fromArea.getLeaveMessage() != null) {
-                player.sendTitle(
-                    "§e" + fromArea.getName(),
-                    fromArea.getLeaveMessage(),
-                    20, // fadeIn
-                    40, // stay
-                    20  // fadeOut
-                );
+            if (fromArea != null) {
+                AreaDTO fromAreaDTO = fromArea.toDTO();
+                if (fromAreaDTO.showTitle() && fromAreaDTO.leaveMessage() != null) {
+                    player.sendTitle(
+                        "§e" + fromAreaDTO.name(),
+                        fromAreaDTO.leaveMessage(),
+                        20, // fadeIn
+                        40, // stay
+                        20  // fadeOut
+                    );
+                }
             }
             
             // Handle entering area
-            if (toArea != null && toArea.isShowTitle() && toArea.getEnterMessage() != null) {
-                player.sendTitle(
-                    "§e" + toArea.getName(),
-                    toArea.getEnterMessage(),
-                    20, // fadeIn
-                    40, // stay
-                    20  // fadeOut
-                );
+            if (toArea != null) {
+                AreaDTO toAreaDTO = toArea.toDTO();
+                if (toAreaDTO.showTitle() && toAreaDTO.enterMessage() != null) {
+                    player.sendTitle(
+                        "§e" + toAreaDTO.name(),
+                        toAreaDTO.enterMessage(),
+                        20, // fadeIn
+                        40, // stay
+                        20  // fadeOut
+                    );
+                }
             }
         }
     }
@@ -528,6 +535,9 @@ public class ProtectionListener implements Listener {
 
             plugin.debug("Checking protection in area: " + area.getName());
 
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+
             // Check toggle state first
             boolean toggleState = area.getToggleState(permission);
             if (!toggleState) {
@@ -551,7 +561,7 @@ public class ProtectionListener implements Listener {
                 }
             }
 
-            boolean result = !area.getSetting(permission);
+            boolean result = !currentDTO.settings().optBoolean(permission);
             permissionCache.put(cacheKey, result);
             return result;
         } finally {

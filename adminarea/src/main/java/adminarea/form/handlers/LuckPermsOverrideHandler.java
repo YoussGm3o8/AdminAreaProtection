@@ -2,6 +2,8 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaBuilder;
+import adminarea.area.AreaDTO;
 import adminarea.form.IFormHandler;
 import adminarea.constants.AdminAreaConstants;
 import adminarea.data.FormTrackingData;
@@ -103,25 +105,50 @@ public class LuckPermsOverrideHandler extends BaseFormHandler {
             return;
         }
 
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+
+        // Update group permissions
+        Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
         for (String groupName : track.getGroups()) {
-            area.setGroupPermission(groupName, "access", true);
+            updatedGroupPerms.put(groupName, Map.of("access", true));
         }
+
+        // Create updated area using builder
+        Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+            .groupPermissions(updatedGroupPerms)
+            .build();
         
-        plugin.saveArea(area);
+        plugin.updateArea(updatedArea);
         player.sendMessage(plugin.getLanguageManager().get("messages.form.trackPermissionsApplied"));
     }
 
     private void handleGroupSelection(Player player, FormResponseCustom response, Area area) {
         String groupName = response.getDropdownResponse(0).getElementContent();
         boolean hasAccess = response.getToggleResponse(1);
+
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+
+        // Update group permissions
+        Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
+        updatedGroupPerms.put(groupName, Map.of("access", hasAccess));
+
+        // Create updated area using builder
+        Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+            .groupPermissions(updatedGroupPerms)
+            .build();
         
-        area.setGroupPermission(groupName, "access", hasAccess);
-        plugin.saveArea(area);
-        
+        plugin.updateArea(updatedArea);
         player.sendMessage(plugin.getLanguageManager().get("messages.form.groupPermissionsUpdated"));
     }
 
     private void handleOverrideEdit(Player player, FormResponseCustom response, Area area) {
+        // Get current DTO
+        AreaDTO currentDTO = area.toDTO();
+
+        // Update group permissions
+        Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
         int index = 0;
         for (String groupName : plugin.getGroupNames()) {
             if (response.getToggleResponse(index)) {
@@ -129,12 +156,19 @@ public class LuckPermsOverrideHandler extends BaseFormHandler {
                 groupPerms.put("build", response.getToggleResponse(index + 1));
                 groupPerms.put("break", response.getToggleResponse(index + 2));
                 groupPerms.put("interact", response.getToggleResponse(index + 3));
-                area.setGroupPermissions(groupName, groupPerms);
+                updatedGroupPerms.put(groupName, groupPerms);
+            } else {
+                updatedGroupPerms.remove(groupName);
             }
             index += 4;
         }
+
+        // Create updated area using builder
+        Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+            .groupPermissions(updatedGroupPerms)
+            .build();
         
-        plugin.saveArea(area);
+        plugin.updateArea(updatedArea);
         player.sendMessage(plugin.getLanguageManager().get("messages.form.permissionOverridesUpdated"));
     }
 }

@@ -10,13 +10,15 @@ import adminarea.form.handlers.CreateAreaHandler;
 import adminarea.form.handlers.DeleteAreaHandler;
 import adminarea.form.handlers.EditAreaHandler;
 import adminarea.form.handlers.LuckPermsOverrideHandler;
-import adminarea.form.handlers.PlayerAreaHandler;
 import adminarea.form.LuckPermsOverrideForm;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.player.PlayerFormRespondedEvent;
+import cn.nukkit.form.response.FormResponse;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
+import cn.nukkit.form.window.FormWindowCustom;
+import cn.nukkit.form.window.FormWindowSimple;
 import cn.nukkit.plugin.PluginBase;
 import io.micrometer.core.instrument.Timer;
 
@@ -28,18 +30,7 @@ public class FormResponseListener implements Listener {
 
     public FormResponseListener(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
-        this.formRegistry = new FormRegistry(plugin);
-        initializeHandlers();
-    }
-
-    private void initializeHandlers() {
-        // Register all form handlers
-        formRegistry.registerHandler(new CreateAreaHandler(plugin));
-        formRegistry.registerHandler(new EditAreaHandler(plugin));
-        formRegistry.registerHandler(new DeleteAreaHandler(plugin));
-        formRegistry.registerHandler(new AreaListHandler(plugin));
-        formRegistry.registerHandler(new PlayerAreaHandler(plugin));
-        formRegistry.registerHandler(new LuckPermsOverrideHandler(plugin));
+        this.formRegistry = plugin.getFormRegistry();
     }
 
     @EventHandler
