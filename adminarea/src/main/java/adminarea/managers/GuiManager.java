@@ -5,12 +5,13 @@ import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
 import adminarea.constants.AdminAreaConstants;
+import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.form.FormFactory;
 import adminarea.form.FormRegistry;
 import adminarea.form.validation.FormValidator;
 import adminarea.form.validation.ValidationResult;
 import adminarea.permissions.PermissionToggle;
+import adminarea.util.FormLogger;
 import adminarea.form.handlers.*;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
@@ -22,340 +23,174 @@ import cn.nukkit.form.element.ElementInput;
 import cn.nukkit.form.element.ElementLabel;
 import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.level.Position;
+import cn.nukkit.level.particle.DustParticle;
+import cn.nukkit.math.Vector3;
+import cn.nukkit.scheduler.TaskHandler;
 import io.micrometer.core.instrument.Timer;
 import adminarea.interfaces.IGuiManager;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Deque;
-import java.util.ArrayDeque;
-import java.util.HashMap;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class GuiManager implements IGuiManager {
+public class GuiManager {
     private final AdminAreaProtectionPlugin plugin;
-    private final FormFactory formFactory;
     private final FormRegistry formRegistry;
-
-    // Add thread monitoring
     private final AtomicBoolean cleanupRunning = new AtomicBoolean(false);
     private final Map<String, Deque<String>> navigationHistory = new ConcurrentHashMap<>();
-    private static final long FORM_EXPIRY_TIME = 300000; // 5 minutes in ms
+    private final long FORM_EXPIRY_TIME = 900000; // 15 minutes
+    private final FormLogger formLogger;
+    private final Map<String, TaskHandler> visualizationTasks = new ConcurrentHashMap<>();
 
     public GuiManager(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
-        // Initialize FormFactory first
-        this.formFactory = new FormFactory(plugin);
-        // Then create FormRegistry
         this.formRegistry = plugin.getFormRegistry();
-        this.formRegistry.initialize(); // Initialize the registry once
-    }
-
-    private boolean checkPermission(Player player, String permission) {
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try {
-            if (!player.hasPermission(permission)) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
-                return false;
-            }
-            return true;
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "permission_check");
-        }
-    }
-
-    @Override
-    public void openMainMenu(Player player) {
-        plugin.getLogger().info(String.format(
-            "[GUI] Opening main menu for player %s",
-            player.getName()
-        ));
-        checkThreadSafety("openMainMenu");
-        if (!checkPermission(player, AdminAreaConstants.Permissions.MANAGE)) {
-            return;
-        }
-        try {
-            FormWindow form = formFactory.createMainMenu();
-            plugin.getFormIdMap().put(player.getName(), 
-                new FormTrackingData(AdminAreaConstants.FORM_MAIN_MENU, System.currentTimeMillis()));
-            sendForm(player, form, AdminAreaConstants.FORM_MAIN_MENU);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening main menu", e);
-        }
-    }
-
-    public void openCreateForm(Player player) {
-        checkThreadSafety("openCreateForm");
-        Timer.Sample formTimer = plugin.getPerformanceMonitor().startTimer();
-        try {
-            Position[] positions = plugin.getPlayerPositions().get(player.getName());
-            FormWindow form = formFactory.createAreaForm(positions);
-            sendForm(player, form, AdminAreaConstants.FORM_CREATE_AREA);
-            if (plugin.getConfigManager().isDebugEnabled()) {
-                plugin.getLogger().debug("Opened create form for player: " + player.getName());
-            }
-        } catch (Exception e) {
-            plugin.getPerformanceMonitor().stopTimer(formTimer, "form_create_show_failed");
-            handleGuiError(player, "Error opening create form", e);
-        }
-    }
-
-    public void openEditForm(Player player, Area area) {
-        try {
-            if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
-                return;
-            }
-            FormWindow form = createEditForm(area);
-            plugin.getFormIdMap().put(player.getName() + "_editing", 
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            sendForm(player, form, AdminAreaConstants.FORM_EDIT_AREA);
-            if (plugin.getConfigManager().isDebugEnabled()) {
-                plugin.getLogger().debug("Opened edit form for area: " + area.getName());
-            }
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening edit form", e);
-        }
-    }
-
-    public void openAreaListForm(Player player, String title, String content, String formId) {
-        try {
-            FormWindow form = formFactory.createAreaListForm(title, content, plugin.getAreas());
-            sendForm(player, form, formId);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening area list", e);
-        }
+        this.formRegistry.initialize();
+        this.formLogger = new FormLogger(plugin);
     }
 
     public void openLuckPermsOverrideForm(Player player, Area area) {
-        checkThreadSafety("openLuckPermsOverrideForm");
-        try {
-            if (!plugin.isLuckPermsEnabled()) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.luckpermsNotAvailable"));
-                return;
-            }
-            if (!plugin.getLuckPermsApi().getUserManager().isLoaded(player.getUniqueId())) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.luckpermsUserNotLoaded"));
-                return;
-            }
-            FormWindow form = formFactory.createLuckPermsOverrideForm(area);
-            sendForm(player, form, AdminAreaConstants.FORM_OVERRIDE_EDIT);
-            plugin.getFormIdMap().put(player.getName() + "_editing", new FormTrackingData(area.getName(), System.currentTimeMillis()));
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening permissions form", e);
-        }
-    }
-
-    public void openEditList(Player player) {
-        try {
-            String content = plugin.getLanguageManager().get("gui.editArea.selectArea");
-            openAreaListForm(player, plugin.getLanguageManager().get("gui.editArea.title"), content, AdminAreaConstants.FORM_EDIT_LIST);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening edit list", e);
-        }
-    }
-
-    public void openDeleteList(Player player) {
-        try {
-            FormWindow form = formFactory.createDeleteAreaForm();
-            if (form != null) {
-                sendForm(player, form, AdminAreaConstants.FORM_DELETE_SELECT);
-            } else {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createDeleteForm"));
-            }
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening delete list", e);
-        }
-    }
-
-    public void openPlayerAreaManagement(Player player) {
-        try {
-            if (!player.hasPermission("adminarea.admin")) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.noPermission"));
-                return;
-            }
-            FormWindow form = formFactory.createPlayerAreaManagementForm();
-            sendForm(player, form, AdminAreaConstants.FORM_PLAYER_MANAGEMENT);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening player management", e);
-        }
-    }
-
-    public void openDeleteArea(Player player, Area area) {
-        try {
-            String message = plugin.getLanguageManager().get("gui.deleteArea.confirmMessage") + area.getName() + "?";
-            FormWindow form = formFactory.createDeleteConfirmForm(area.getName(), message);
-            sendForm(player, form, AdminAreaConstants.FORM_DELETE_CONFIRM);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening delete confirmation", e);
-        }
-    }
-
-    @Override
-    public void openAreaSettings(Player player, Area area) {
-        plugin.getLogger().info(String.format(
-            "[GUI] Opening area settings for player %s, area %s",
-            player.getName(),
-            area.getName()
-        ));
-        try {
-            FormWindow form = formFactory.createAreaSettingsMenu(area);
-            pushForm(player, AdminAreaConstants.FORM_AREA_SETTINGS);
-            plugin.getFormIdMap().put(player.getName() + "_editing", 
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            sendForm(player, form, AdminAreaConstants.FORM_AREA_SETTINGS);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening area settings", e);
-        }
+        openFormById(player, FormIds.GROUP_PERMISSIONS, area);
     }
 
     public void openLuckPermsGroupList(Player player, Area area) {
-        try {
-            checkLuckPermsAvailable(player);
-            checkThreadSafety("openLuckPermsGroupList");
-
-            FormWindow form = formFactory.createLuckPermsGroupListForm(area);
-            if (form != null) {
-                plugin.getFormIdMap().put(player.getName() + "_editing", 
-                    new FormTrackingData(area.getName(), System.currentTimeMillis()));
-                sendForm(player, form, AdminAreaConstants.FORM_GROUP_SELECT);
-            }
-        } catch (IllegalStateException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.luckpermsNotAvailable"));
-        } catch (Exception e) {
-            handleGuiError(player, "Failed to open group list", e);
-        }
-    }
-
-    public void showError(Player player, String message) {
-        try {
-            FormWindow form = formFactory.createErrorForm(message);
-            sendForm(player, form, AdminAreaConstants.FORM_ERROR);
-        } catch (Exception e) {
-            player.sendMessage("§c" + message);
-        }
+        openFormById(player, FormIds.GROUP_SELECT, area);
     }
 
     public void openBasicSettings(Player player, Area area) {
-        try {
-            FormWindow form = createBasicSettingsForm(area);
-            plugin.getFormIdMap().put(player.getName() + "_editing", 
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            sendForm(player, form, AdminAreaConstants.FORM_BASIC_SETTINGS);
-        } catch (Exception e) {
-            handleGuiError(player, "Error opening basic settings", e);
-        }
+        openFormById(player, FormIds.BASIC_SETTINGS, area);
     }
 
     public void openProtectionSettings(Player player, Area area) {
+        openFormById(player, FormIds.PROTECTION_SETTINGS, area);
+    }
+
+    public void openBuildingPermissions(Player player, Area area) {
+        openFormById(player, FormIds.BUILDING_SETTINGS, area);
+    }
+
+    public void openMainMenu(Player player) {
+        openFormById(player, FormIds.MAIN_MENU, null);
+    }
+
+    public void openEditForm(Player player, Area area) {
+        openFormById(player, FormIds.EDIT_AREA, area); 
+    }
+
+    public void openSettingsMenu(Player player) {
+        openFormById(player, FormIds.PLUGIN_SETTINGS, null);
+    }
+
+    public void openEditListForm(Player player) {
+        openFormById(player, FormIds.EDIT_LIST, null);
+    }
+
+    public void openCreateForm(Player player) {
+        openFormById(player, FormIds.CREATE_AREA, null);
+    }
+
+    public void openDeleteList(Player player) {
+        openFormById(player, FormIds.DELETE_LIST, null);
+    }
+
+    public void openFormById(Player player, String formId, Area area) {
+        Timer.Sample formTimer = plugin.getPerformanceMonitor().startTimer();
         try {
-            FormWindow form = formFactory.createProtectionSettingsForm(area);
-            plugin.getFormIdMap().put(player.getName() + "_editing", 
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            sendForm(player, form, AdminAreaConstants.FORM_PROTECTION_SETTINGS);
+            // Get handler and validate
+            var handler = formRegistry.getHandler(formId);
+            if (handler == null) {
+                plugin.getLogger().error("No handler found for form ID: " + formId);
+                return;
+            }
+
+            // Set form tracking data before creating form
+            plugin.getFormIdMap().put(player.getName(),
+                new FormTrackingData(formId, System.currentTimeMillis()));
+
+            // Create and send form
+            FormWindow form;
+            if (area != null) {
+                form = handler.createForm(player, area);
+                // Store area being edited if provided
+                plugin.getFormIdMap().put(player.getName() + "_editing",
+                    new FormTrackingData(area.getName(), System.currentTimeMillis()));
+            } else {
+                form = handler.createForm(player);
+            }
+
+            if (form != null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug(String.format("[Form] Sending form %s to %s:", formId, player.getName()));
+                    if (form instanceof FormWindowCustom customForm) {
+                        plugin.debug(String.format("  Type: Custom\n  Title: %s\n  Elements: %d",
+                            customForm.getTitle(), customForm.getElements().size()));
+                    } else if (form instanceof FormWindowSimple simpleForm) {
+                        plugin.debug(String.format("  Type: Simple\n  Title: %s\n  Buttons: %d",
+                            simpleForm.getTitle(), simpleForm.getButtons().size()));
+                    }
+                    plugin.debug("[Form] Current form tracking data:");
+                    var currentData = plugin.getFormIdMap().get(player.getName());
+                    if (currentData != null) {
+                        plugin.debug(String.format("  Current Form: %s (%.1fs ago)",
+                            currentData.getFormId(),
+                            (System.currentTimeMillis() - currentData.getCreationTime()) / 1000.0));
+                    }
+                    var editingData = plugin.getFormIdMap().get(player.getName() + "_editing");
+                    if (editingData != null) {
+                        plugin.debug(String.format("  Editing Area: %s (%.1fs ago)",
+                            editingData.getFormId(),
+                            (System.currentTimeMillis() - editingData.getCreationTime()) / 1000.0));
+                    }
+                }
+
+                // Push current form to navigation history
+                pushForm(player, formId);
+                player.showFormWindow(form);
+            }
         } catch (Exception e) {
-            handleGuiError(player, 
-                "Failed to open protection settings: " + e.getMessage(), e);
+            plugin.getPerformanceMonitor().stopTimer(formTimer, "form_open_failed");
+            handleGuiError(player, "Error opening form: " + formId, e);
+            // Only cleanup on error
+            cleanup(player);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(formTimer, "form_open");
         }
     }
 
-    public void sendForm(Player player, FormWindow form, String formId) {
-        Timer.Sample formTimer = plugin.getPerformanceMonitor().startTimer();
-        try {
-            // Add detailed logging
-            plugin.getLogger().info(String.format(
-                "[GUI] Sending form '%s' (ID: %s) to player %s",
-                form.getClass().getSimpleName(),
-                formId,
-                player.getName()
-            ));
+    private void logFormSend(Player player, FormWindow form, String formId) {
+        if (!plugin.isDebugMode()) return;
+        
+        plugin.debug(String.format("[GUI] Sending form %s to %s:", 
+            formId, player.getName()));
 
-            if (plugin.isDebugMode()) {
-                if (form instanceof FormWindowCustom) {
-                    plugin.getLogger().debug(String.format(
-                        "[GUI] Custom form details:\n" +
-                        "  Title: %s\n" +
-                        "  Elements: %d",
-                        ((FormWindowCustom) form).getTitle(),
-                        ((FormWindowCustom) form).getElements().size()
-                    ));
-                } else if (form instanceof FormWindowSimple) {
-                    plugin.getLogger().debug(String.format(
-                        "[GUI] Simple form details:\n" +
-                        "  Title: %s\n" +
-                        "  Content: %s\n" +
-                        "  Buttons: %d",
-                        ((FormWindowSimple) form).getTitle(),
-                        ((FormWindowSimple) form).getContent(),
-                        ((FormWindowSimple) form).getButtons().size()
-                    ));
-                }
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug(String.format("[GUI] Sending form %s to player %s", 
-                    formId, player.getName()));
-            }
-            
-            cleanup();
-            
-            // Store form data
-            plugin.getFormIdMap().put(player.getName(), 
-                new FormTrackingData(formId, System.currentTimeMillis()));
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug(String.format("[GUI] Form tracking data stored for %s: %s",
-                    player.getName(), formId));
-            }
-            
-            player.showFormWindow(form);
-            
-        } catch (Exception e) {
-            plugin.getPerformanceMonitor().stopTimer(formTimer, "form_show_failed");
-            handleGuiError(player, "Error showing form", e);
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(formTimer, "form_show");
+        if (form instanceof FormWindowCustom customForm) {
+            plugin.debug(String.format("  Type: Custom\n  Title: %s\n  Elements: %d",
+                customForm.getTitle(), customForm.getElements().size()));
+        } else if (form instanceof FormWindowSimple simpleForm) {
+            plugin.debug(String.format("  Type: Simple\n  Title: %s\n  Buttons: %d",
+                simpleForm.getTitle(), simpleForm.getButtons().size()));
         }
     }
 
     private void handleGuiError(Player player, String message, Exception e) {
-        plugin.getLogger().error(String.format(
-            "[GUI] Error occurred:\n" +
-            "  Player: %s\n" +
-            "  Message: %s\n" +
-            "  Exception: %s\n" +
-            "  Cause: %s",
-            player.getName(),
-            message,
-            e.getClass().getName(),
-            e.getMessage()
-        ));
-        String detailedError = String.format("%s: %s", message, e.toString());
-        plugin.getLogger().error(detailedError);
+        // Log error details
+        String error = String.format("[GUI] %s: %s", message, e.getMessage());
+        plugin.getLogger().error(error);
         
+        // Log debug info if enabled
         if (plugin.isDebugMode()) {
             plugin.debug("[GUI] Error Details:");
             plugin.debug("  Player: " + player.getName());
             plugin.debug("  Message: " + message);
             plugin.debug("  Exception: " + e.getClass().getName());
             plugin.debug("  Cause: " + e.getMessage());
-            
-            // Log stack trace
-            StackTraceElement[] trace = e.getStackTrace();
-            if (trace.length > 0) {
-                plugin.debug("  Stack trace:");
-                for (int i = 0; i < Math.min(5, trace.length); i++) {
-                    plugin.debug("    " + trace[i].toString());
-                }
-            }
+            e.printStackTrace();
         }
 
+        // Notify player
         player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
     }
 
-    @Override
     public boolean validateForm(Player player, FormResponseCustom response, String formType) {
         Timer.Sample timer = plugin.getPerformanceMonitor().startTimer();
         try {
@@ -380,44 +215,49 @@ public class GuiManager implements IGuiManager {
     public void cleanup() {
         // Prevent concurrent cleanup runs
         if (!cleanupRunning.compareAndSet(false, true)) {
-            plugin.getLogger().debug("[GUI] Cleanup already running, skipping...");
             return;
         }
 
-        plugin.getLogger().debug("[GUI] Starting form cleanup");
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             final long currentTime = System.currentTimeMillis();
             
-            // Cleanup form tracking data
+            // Only cleanup expired form data
             plugin.getFormIdMap().entrySet().removeIf(entry -> {
                 FormTrackingData data = entry.getValue();
-                boolean expired = currentTime - data.getCreationTime() > FORM_EXPIRY_TIME;
-                if (expired && plugin.isDebugMode()) {
-                    plugin.debug("Removing expired form data for: " + entry.getKey());
-                }
-                return expired;
+                return currentTime - data.getCreationTime() > FORM_EXPIRY_TIME;
             });
 
-            // Cleanup navigation history
-            navigationHistory.entrySet().removeIf(entry -> {
-                boolean empty = entry.getValue().isEmpty();
-                if (empty && plugin.isDebugMode()) {
-                    plugin.debug("Removing empty navigation history for: " + entry.getKey());
-                }
-                return empty;
-            });
+            // Don't clear navigation history to maintain state
+            navigationHistory.entrySet().removeIf(entry -> 
+                entry.getValue().isEmpty() && !plugin.getFormIdMap().containsKey(entry.getKey()));
 
-        } catch (Exception e) {
-            plugin.getLogger().error("Error during form cleanup", e);
         } finally {
             cleanupRunning.set(false);
-            plugin.getPerformanceMonitor().stopTimer(sample, "form_cleanup");
-            plugin.getLogger().debug("[GUI] Form cleanup complete");
+            if (plugin.isDebugMode()) {
+                plugin.debug("Form cleanup completed");
+            }
         }
     }
 
-    // Add method to check thread safety during development
+    public void cleanup(Player player) {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Cleaning up form data for " + player.getName());
+            formLogger.logFormData(player.getName());
+        }
+        
+        // Remove all form tracking data
+        plugin.getFormIdMap().remove(player.getName());
+        plugin.getFormIdMap().remove(player.getName() + "_editing");
+        
+        // Clear navigation history
+        clearNavigationHistory(player);
+        
+        // Remove any custom form data keys
+        String playerName = player.getName();
+        plugin.getFormIdMap().entrySet().removeIf(entry -> 
+            entry.getKey().startsWith(playerName + "_"));
+    }
+
     private void checkThreadSafety(String operation) {
         if (plugin.isDebugMode() && !plugin.getServer().isPrimaryThread()) {
             plugin.getLogger().warning(String.format(
@@ -441,240 +281,29 @@ public class GuiManager implements IGuiManager {
         return history != null ? history.poll() : null;
     }
 
-    public FormWindow createEditForm(Area area) {
-        if (area == null) return null;
-        
-        FormWindowSimple form = new FormWindowSimple("Edit Area: " + area.getName(), "Select what to edit:");
-        
-        // Basic options with clear distinction between categories
-        form.addButton(new ElementButton("Area Settings\n§7Basic area configuration"));
-        form.addButton(new ElementButton("Protection Settings\n§7Manage protection flags"));
-        
-        // Category-specific buttons with unique identifiers
-        form.addButton(new ElementButton("Building Settings\n§7Building and interaction"));
-        form.addButton(new ElementButton("Environment Settings\n§7Natural events"));
-        form.addButton(new ElementButton("Entity Settings\n§7Mobs and entities"));
-        form.addButton(new ElementButton("Technical Settings\n§7Redstone and mechanics"));
-        form.addButton(new ElementButton("Special Settings\n§7Other permissions"));
-        
-        // LuckPerms integration button
-        if (plugin.isLuckPermsEnabled()) {
-            form.addButton(new ElementButton("Group Permissions\n§7LuckPerms groups"));
-        }
-        
-        form.addButton(new ElementButton("Back to Main Menu"));
-        
-        return form;
-    }
-
-    @Override
-    public void openBuildingPermissions(Player player, Area area) {
-        FormWindow form = createCategoryForm(area, PermissionToggle.Category.BUILDING);
-        sendForm(player, form, AdminAreaConstants.FORM_BUILDING_SETTINGS);
-    }
-
-    @Override
-    public void openEnvironmentSettings(Player player, Area area) {
-        FormWindow form = createCategoryForm(area, PermissionToggle.Category.ENVIRONMENT);
-        sendForm(player, form, AdminAreaConstants.FORM_ENVIRONMENT_SETTINGS);
-    }
-
-    @Override
-    public void openEntityControls(Player player, Area area) {
-        FormWindow form = createCategoryForm(area, PermissionToggle.Category.ENTITY);
-        sendForm(player, form, AdminAreaConstants.FORM_ENTITY_SETTINGS);
-    }
-
-    @Override
-    public void openRedstoneAndMechanics(Player player, Area area) {
-        FormWindow form = createCategoryForm(area, PermissionToggle.Category.TECHNICAL);
-        sendForm(player, form, AdminAreaConstants.FORM_TECHNICAL_SETTINGS);
-    }
-
-    @Override
-    public void openSpecialPermissions(Player player, Area area) {
-        FormWindow form = createCategoryForm(area, PermissionToggle.Category.SPECIAL);
-        sendForm(player, form, AdminAreaConstants.FORM_SPECIAL_SETTINGS);
-    }
-
-    public FormWindow createBuildingPermissionsForm(Area area) {
-        return createCategoryForm(area, PermissionToggle.Category.BUILDING);
-    }
-
-    public FormWindow createEnvironmentSettingsForm(Area area) {
-        return createCategoryForm(area, PermissionToggle.Category.ENVIRONMENT);
-    }
-
-    public FormWindow createEntityControlsForm(Area area) {
-        return createCategoryForm(area, PermissionToggle.Category.ENTITY);
-    }
-
-    public FormWindow createRedstoneAndMechanicsForm(Area area) {
-        return createCategoryForm(area, PermissionToggle.Category.TECHNICAL);
-    }
-
-    public FormWindow createSpecialPermissionsForm(Area area) {
-        return createCategoryForm(area, PermissionToggle.Category.SPECIAL);
-    }
-
-    public FormWindow createCategoryForm(Area area, PermissionToggle.Category category) {
-        FormWindowCustom form = new FormWindowCustom(category.getDisplayName() + ": " + area.getName());
-        
-        // Add header label
-        form.addElement(new ElementLabel("§2" + category.getDisplayName() + " Settings"));
-
-        // Add category-specific toggles based on direct attributes
-        switch (category) {
-            case BUILDING -> addBuildingToggles(form, area);
-            case ENVIRONMENT -> addEnvironmentToggles(form, area);
-            case ENTITY -> addEntityToggles(form, area);
-            case TECHNICAL -> addTechnicalToggles(form, area);
-            case SPECIAL -> addSpecialToggles(form, area);
-        }
-
-        return form;
-    }
-
-    private void addBuildingToggles(FormWindowCustom form, Area area) {
-        AreaDTO dto = area.toDTO();
-        AreaDTO.Permissions perms = dto.permissions();
-        form.addElement(new ElementToggle("Allow Building", perms.allowBuild()));
-        form.addElement(new ElementToggle("Allow Breaking", perms.allowBreak()));
-        form.addElement(new ElementToggle("Allow Container Access", perms.allowContainer()));
-        form.addElement(new ElementToggle("Allow Item Frame Usage", perms.allowItemFrame()));
-        form.addElement(new ElementToggle("Allow Armor Stand Usage", perms.allowArmorStand()));
-    }
-
-    private void addEnvironmentToggles(FormWindowCustom form, Area area) {
-        AreaDTO dto = area.toDTO();
-        AreaDTO.Permissions perms = dto.permissions();
-        form.addElement(new ElementToggle("Allow Fire Spread", perms.allowFire()));
-        form.addElement(new ElementToggle("Allow Liquid Flow", perms.allowLiquid()));
-        form.addElement(new ElementToggle("Allow Block Spread", perms.allowBlockSpread()));
-        form.addElement(new ElementToggle("Allow Leaf Decay", perms.allowLeafDecay()));
-        form.addElement(new ElementToggle("Allow Ice Form/Melt", perms.allowIceForm()));
-        form.addElement(new ElementToggle("Allow Snow Form/Melt", perms.allowSnowForm()));
-    }
-
-    private void addEntityToggles(FormWindowCustom form, Area area) {
-        AreaDTO dto = area.toDTO();
-        AreaDTO.Permissions perms = dto.permissions();
-        form.addElement(new ElementToggle("Allow PvP", perms.allowPvP()));
-        form.addElement(new ElementToggle("Allow Monster Spawning", perms.allowMonsterSpawn()));
-        form.addElement(new ElementToggle("Allow Animal Spawning", perms.allowAnimalSpawn()));
-        form.addElement(new ElementToggle("Allow Entity Damage", perms.allowDamageEntities()));
-        form.addElement(new ElementToggle("Allow Animal Breeding", perms.allowBreeding()));
-        form.addElement(new ElementToggle("Allow Monster Targeting", perms.allowMonsterTarget()));
-        form.addElement(new ElementToggle("Allow Leashing", perms.allowLeashing()));
-    }
-
-    private void addTechnicalToggles(FormWindowCustom form, Area area) {
-        AreaDTO dto = area.toDTO();
-        AreaDTO.Permissions perms = dto.permissions();
-        form.addElement(new ElementToggle("Allow Redstone", perms.allowRedstone()));
-        form.addElement(new ElementToggle("Allow Pistons", perms.allowPistons()));
-        form.addElement(new ElementToggle("Allow Hoppers", perms.allowHopper()));
-        form.addElement(new ElementToggle("Allow Dispensers", perms.allowDispenser()));
-    }
-
-    private void addSpecialToggles(FormWindowCustom form, Area area) {
-        AreaDTO dto = area.toDTO();
-        AreaDTO.Permissions perms = dto.permissions();
-        form.addElement(new ElementToggle("Allow Item Drops", perms.allowItemDrop()));
-        form.addElement(new ElementToggle("Allow Item Pickup", perms.allowItemPickup()));
-        form.addElement(new ElementToggle("Allow Vehicle Placement", perms.allowVehiclePlace()));
-        form.addElement(new ElementToggle("Allow Vehicle Entry", perms.allowVehicleEnter()));
-        form.addElement(new ElementToggle("Allow Flight", perms.allowFlight()));
-        form.addElement(new ElementToggle("Allow Ender Pearl", perms.allowEnderPearl()));
-        form.addElement(new ElementToggle("Allow Chorus Fruit", perms.allowChorusFruit()));
-    }
-
-    @Override
-    public void handleEditFormResponse(Player player, int buttonId, Area area) {
-        plugin.getLogger().info(String.format(
-            "[GUI] Player %s clicked button %d in edit form for area %s",
-            player.getName(),
-            buttonId,
-            area != null ? area.getName() : "null"
-        ));
-        checkThreadSafety("handleEditFormResponse");
-        try {
-            // Add Object parameter and type check
-            if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
-                return;
-            }
-
-            switch (buttonId) {
-                case 0 -> openBasicSettings(player, area);
-                case 1 -> openProtectionSettings(player, area);
-                case 2 -> openBuildingPermissions(player, area);
-                case 3 -> openEnvironmentSettings(player, area);
-                case 4 -> openEntityControls(player, area);
-                case 5 -> openRedstoneAndMechanics(player, area);
-                case 6 -> openSpecialPermissions(player, area);
-                case 7 -> {
-                    if (plugin.isLuckPermsEnabled()) {
-                        openLuckPermsGroupList(player, area);
-                    } else {
-                        plugin.saveArea(area);
-                        openMainMenu(player);
-                    }
-                }
-                case 8 -> {
-                    plugin.saveArea(area);
-                    openMainMenu(player);
-                }
-                default -> player.sendMessage("§cInvalid selection.");
+    public void handleBackNavigation(Player player) {
+        String previousForm = popForm(player);
+        if (previousForm != null) {
+            // Get area context if it exists
+            FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
+            Area area = null;
+            if (areaData != null) {
+                area = plugin.getArea(areaData.getFormId());
             }
             
-            // Update form tracking
-            plugin.getFormIdMap().put(player.getName() + "_editing", 
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            
-            if (plugin.getConfigManager().isDebugEnabled()) {
-                plugin.getLogger().debug("Processed edit form response for area: " + area.getName() 
-                    + ", button: " + buttonId);
-            }
-        } catch (Exception e) {
-            plugin.getLogger().error("Error handling edit form response", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.updateArea", 
-                Map.of("error", e.getMessage())));
+            // Open previous form with area context if needed
+            openFormById(player, previousForm, area);
+        } else {
+            // If no history, go to main menu
+            openFormById(player, FormIds.MAIN_MENU, null);
         }
     }
 
-    public FormWindow createBasicSettingsForm(Area area) {
-        FormWindowCustom form = new FormWindowCustom("Basic Settings: " + area.getName());
-        
-        AreaDTO dto = area.toDTO();
-        
-        // Basic area properties
-        form.addElement(new ElementLabel("§2General Settings"));
-        form.addElement(new ElementInput("Area Name", "Enter area name", dto.name()));
-        form.addElement(new ElementInput("Priority", "Enter priority (0-100)", 
-            String.valueOf(dto.priority())));
-            
-        // Display settings
-        form.addElement(new ElementLabel("§2Display Settings"));
-        form.addElement(new ElementToggle("Show Area Title", dto.showTitle()));
-        form.addElement(new ElementInput("Enter Message", "Message shown when entering", 
-            dto.enterMessage() != null ? dto.enterMessage() : ""));
-        form.addElement(new ElementInput("Leave Message", "Message shown when leaving", 
-            dto.leaveMessage() != null ? dto.leaveMessage() : ""));
-            
-        return form;
+    public void clearNavigationHistory(Player player) {
+        navigationHistory.remove(player.getName());
     }
 
-    private void handleSpecialResponse(FormResponseCustom response, AreaBuilder builder) {
-        int index = 1;
-        // Set each permission individually using setPermission
-        builder.setPermission("allowItemDrop", response.getToggleResponse(index++))
-               .setPermission("allowItemPickup", response.getToggleResponse(index++))
-               .setPermission("allowCreeper", response.getToggleResponse(index++))
-               .setPermission("allowChorusFruit", response.getToggleResponse(index++));
-    }
-
-    private void checkLuckPermsAvailable(Player player) throws IllegalStateException {
+    protected void checkLuckPermsAvailable(Player player) {
         if (!plugin.isLuckPermsEnabled()) {
             throw new IllegalStateException("LuckPerms is not available");
         }
@@ -683,126 +312,71 @@ public class GuiManager implements IGuiManager {
         }
     }
 
-    @Override 
-    public void openLuckPermsGroupPermissions(Player player, Area area, String groupName) {
-        if (player == null) {
-            return;
+    public void visualizeArea(Player player, Area area) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            stopVisualization(player);
+
+            // Calculate visualization points more efficiently
+            List<Vector3> points = calculateVisualizationPoints(area);
+            Iterator<Vector3> iterator = points.iterator();
+
+            TaskHandler task = plugin.getServer().getScheduler().scheduleRepeatingTask(plugin, () -> {
+                if (!iterator.hasNext()) {
+                    return;
+                }
+
+                // Spawn particles in batches for better performance
+                for (int i = 0; i < 10 && iterator.hasNext(); i++) {
+                    Vector3 point = iterator.next();
+                    spawnParticle(player, point, new DustParticle(point, 255, 0, 0));
+                }
+            }, 5);
+
+            visualizationTasks.put(player.getName(), task);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "area_visualize");
+        }
+    }
+
+    public void stopVisualization(Player player) {
+        TaskHandler task = visualizationTasks.remove(player.getName());
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
+    private List<Vector3> calculateVisualizationPoints(Area area) {
+        List<Vector3> points = new ArrayList<>();
+        int spacing = 2; // Adjust spacing between particles
+        AreaDTO.Bounds bounds = area.toDTO().bounds();
+
+        // Calculate edges more efficiently
+        for (double x = bounds.xMin(); x <= bounds.xMax(); x += spacing) {
+            addEdgePoints(points, x, bounds.yMin(), bounds.zMin(), bounds.yMax(), bounds.zMax());
         }
         
-        checkThreadSafety("openLuckPermsGroupPermissions");
-        if (!checkPermission(player, AdminAreaConstants.Permissions.LUCKPERMS_EDIT)) {
-            return;
+        for (double y = bounds.yMin(); y <= bounds.yMax(); y += spacing) {
+            addEdgePoints(points, bounds.xMin(), y, bounds.zMin(), bounds.xMax(), bounds.zMax());
         }
-        try {
-            // Validate parameters
-            if (player == null || area == null || groupName == null) {
-                plugin.debug("Invalid parameters for openLuckPermsGroupPermissions");
-                return;
-            }
-
-            checkLuckPermsAvailable(player);
-
-            FormWindow form = formFactory.createGroupPermissionForm(area, groupName);
-            if (form != null) {
-                // Store both area and group tracking data
-                plugin.getFormIdMap().put(player.getName() + "_editing", 
-                    new FormTrackingData(area.getName(), System.currentTimeMillis()));
-                plugin.getFormIdMap().put(player.getName() + "_group",
-                    new FormTrackingData(groupName, System.currentTimeMillis()));
-                    
-                sendForm(player, form, AdminAreaConstants.FORM_GROUP_PERMISSIONS);
-                
-                if (plugin.getConfigManager().isDebugEnabled()) {
-                    plugin.debug("Opened LuckPerms group permissions form for " + 
-                        groupName + " in area " + area.getName());
-                }
-            }
-        } catch (IllegalStateException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.luckpermsNotAvailable"));
-        } catch (Exception e) {
-            handleGuiError(player, "Failed to open group permissions", e);
+        
+        for (double z = bounds.zMin(); z <= bounds.zMax(); z += spacing) {
+            addEdgePoints(points, bounds.xMin(), bounds.yMin(), z, bounds.xMax(), bounds.yMax());
         }
+
+        Collections.shuffle(points); // Randomize for better visual effect
+        return points;
     }
 
-    @Override
-    public void handleBackNavigation(Player player) {
-        String previousForm = popForm(player);
-        if (previousForm != null) {
-            FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
-            if (areaData != null) {
-                Area area = plugin.getArea(areaData.getFormId());
-                if (area != null) {
-                    openFormById(player, previousForm, area);
-                }
-            }
-        }
+    private void addEdgePoints(List<Vector3> points, double x, double y, double z, double maxY, double maxZ) {
+        points.add(new Vector3(x, y, z));
+        points.add(new Vector3(x, y, maxZ));
+        points.add(new Vector3(x, maxY, z));
+        points.add(new Vector3(x, maxY, maxZ));
     }
 
-    private void openFormById(Player player, String formId, Area area) {
-        switch (formId) {
-            case AdminAreaConstants.FORM_MAIN_MENU -> openMainMenu(player);
-            case AdminAreaConstants.FORM_AREA_SETTINGS -> openAreaSettings(player, area);
-            case AdminAreaConstants.FORM_EDIT_AREA -> openEditForm(player, area);
-            // Add cases for other form types
-        }
+    private void spawnParticle(Player player, Vector3 point, DustParticle particle) {
+        particle.setComponents(point.x, point.y, point.z);
+        player.getLevel().addParticle(particle);
     }
-
-    /**
-     * Opens a form showing all groups in a LuckPerms track
-     * @param player The player to show the form to
-     * @param area The area being edited
-     * @param trackName The name of the LuckPerms track
-     */
-    public void openTrackGroupsForm(Player player, Area area, String trackName) {
-        checkThreadSafety("openTrackGroupsForm");
-        try {
-            // Validate LuckPerms availability
-            checkLuckPermsAvailable(player);
-            
-            // Get groups in track
-            List<String> groups = plugin.getGroupsByTrack(trackName);
-            if (groups.isEmpty()) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.luckperms.noGroupsInTrack", 
-                    Map.of("track", trackName)));
-                return;
-            }
-
-            FormWindow form = formFactory.createTrackGroupsForm(trackName);
-            if (form != null) {
-                // Store tracking data
-                plugin.getFormIdMap().put(player.getName() + "_editing", 
-                    new FormTrackingData(area.getName(), System.currentTimeMillis()));
-                plugin.getFormIdMap().put(player.getName() + "_track",
-                    new FormTrackingData(trackName, System.currentTimeMillis()));
-
-                // Push form to navigation history
-                pushForm(player, AdminAreaConstants.FORM_TRACK_GROUPS);
-                
-                // Send form
-                sendForm(player, form, AdminAreaConstants.FORM_TRACK_GROUPS);
-
-                if (plugin.getConfigManager().isDebugEnabled()) {
-                    plugin.debug("Opened track groups form for track: " + trackName + 
-                        " in area: " + area.getName());
-                }
-            }
-        } catch (IllegalStateException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.luckpermsNotAvailable"));
-        } catch (Exception e) {
-            handleGuiError(player, "Failed to open track groups form", e);
-        }
-    }
-
-    public void openListForm(Player player) {
-        String title = plugin.getLanguageManager().get("gui.areaList.title");
-        String content = plugin.getLanguageManager().get("gui.areaList.content");
-        FormWindow form = plugin.getFormFactory().createAreaListForm(title, content, plugin.getAreas());
-        player.showFormWindow(form);
-    }
-
-    public void openDeleteSelectForm(Player player) {
-        FormWindow form = plugin.getFormFactory().createDeleteAreaForm();
-        player.showFormWindow(form);
-    }
-
 }

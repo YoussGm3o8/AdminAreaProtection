@@ -43,7 +43,7 @@ public class ValidationUtils {
         }
     }
 
-    public static void validateCoordinates(int x, int y, int z) {
+    public void validateCoordinates(int x, int y, int z) {
         if (y < -64 || y > 320) {
             throw new IllegalArgumentException("Y coordinate must be between -64 and 320");
         }

@@ -22,18 +22,23 @@ public class AreaBuilder {
     private String enterMessage;
     private String leaveMessage;
     private Map<String, Boolean> permissions;
+    private Map<String, Map<String, Boolean>> trackPermissions;
+    private Map<String, Map<String, Boolean>> playerPermissions;
+    private boolean isGlobal = false;
 
     public AreaBuilder() {
         this.settings = new JSONObject();
-        this.groupPermissions = new HashMap<>();
-        this.inheritedPermissions = new HashMap<>();
+        this.groupPermissions = new HashMap<>(8, 1.0f);
+        this.inheritedPermissions = new HashMap<>(4, 1.0f);
         this.toggleStates = new JSONObject();
         this.defaultToggleStates = new JSONObject();
         this.inheritedToggleStates = new JSONObject();
-        this.permissions = new HashMap<>();
+        this.permissions = new HashMap<>(8, 1.0f);
         this.priority = 0;
         this.showTitle = true;
         initializeDefaultPermissions();
+        this.trackPermissions = new HashMap<>(4, 1.0f);
+        this.playerPermissions = new HashMap<>(8, 1.0f);
     }
 
     private void initializeDefaultPermissions() {
@@ -57,12 +62,23 @@ public class AreaBuilder {
     }
 
     public AreaBuilder coordinates(int xMin, int xMax, int yMin, int yMax, int zMin, int zMax) {
-        this.xMin = Math.min(xMin, xMax);
-        this.xMax = Math.max(xMin, xMax);
-        this.yMin = Math.min(yMin, yMax);
-        this.yMax = Math.max(yMin, yMax);
-        this.zMin = Math.min(zMin, zMax);
-        this.zMax = Math.max(zMin, zMax);
+        this.xMin = xMin;
+        this.xMax = xMax;
+        this.yMin = yMin;
+        this.yMax = yMax;
+        this.zMin = zMin;
+        this.zMax = zMax;
+        
+        // Auto-detect if this is a global area
+        this.isGlobal = xMin <= -29000000 && xMax >= 29000000 &&
+                       zMin <= -29000000 && zMax >= 29000000;
+        
+        return this;
+    }
+
+    public AreaBuilder global(String world) {
+        this.world = world;
+        this.isGlobal = true;
         return this;
     }
 
@@ -144,16 +160,36 @@ public class AreaBuilder {
         return this;
     }
 
+    public AreaBuilder trackPermissions(Map<String, Map<String, Boolean>> trackPermissions) {
+        this.trackPermissions = new HashMap<>(trackPermissions);
+        return this;
+    }
+
+    public AreaBuilder playerPermissions(Map<String, Map<String, Boolean>> playerPermissions) {
+        this.playerPermissions = new HashMap<>(playerPermissions);
+        return this;
+    }
+
     public Area build() {
         if (name == null || world == null) {
             throw new IllegalStateException("Area name and world must be set");
         }
 
-        // Create bounds record
-        AreaDTO.Bounds bounds = new AreaDTO.Bounds(xMin, xMax, yMin, yMax, zMin, zMax);
+        // Create bounds record - use global bounds if this is a global area
+        AreaDTO.Bounds bounds = isGlobal ? 
+            AreaDTO.Bounds.createGlobal() : 
+            new AreaDTO.Bounds(xMin, xMax, yMin, yMax, zMin, zMax);
 
         // Create permissions record
         AreaDTO.Permissions permissionsRecord = AreaDTO.Permissions.fromMap(permissions);
+
+        // For global areas, optimize memory usage
+        if (isGlobal) {
+            // Use smaller maps for global areas since they typically have fewer permissions
+            groupPermissions = new HashMap<>(4, 1.0f);
+            trackPermissions = new HashMap<>(2, 1.0f);
+            playerPermissions = new HashMap<>(4, 1.0f);
+        }
 
         // Create DTO
         AreaDTO dto = new AreaDTO(
@@ -170,7 +206,9 @@ public class AreaBuilder {
             inheritedToggleStates,
             permissionsRecord,
             enterMessage != null ? enterMessage : "",
-            leaveMessage != null ? leaveMessage : ""
+            leaveMessage != null ? leaveMessage : "",
+            trackPermissions,
+            playerPermissions
         );
 
         // Create Area instance
@@ -198,7 +236,9 @@ public class AreaBuilder {
               .defaultToggleStates(dto.defaultToggleStates())
               .inheritedToggleStates(dto.inheritedToggleStates())
               .enterMessage(dto.enterMessage())
-              .leaveMessage(dto.leaveMessage());
+              .leaveMessage(dto.leaveMessage())
+              .trackPermissions(dto.trackPermissions())
+              .playerPermissions(dto.playerPermissions());
 
         // Set permissions from the DTO's permission record
         builder.setPermission("allowBlockBreak", dto.permissions().allowBlockBreak());

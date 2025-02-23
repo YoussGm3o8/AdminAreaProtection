@@ -1,12 +1,19 @@
 # AdminAreaProtection Configuration
 
 # General settings
-debug: false
+debug: false  # Set to true to enable debug logging
+debugStackTraces: false  # Set to true to show stack traces in debug mode
 enableMessages: true
 allowRegularAreaCreation: false
 maxAreaPriority: 100
 
 # Wand settings
+defaultAreaSize:
+  x: 30000000  # Default world size
+  y: 
+    min: -64
+    max: 320
+  z: 30000000
 wandItemType: 280  # Item ID for the wand (280 = stick)
 particleVisualization: true
 visualizationDuration: 10  # seconds

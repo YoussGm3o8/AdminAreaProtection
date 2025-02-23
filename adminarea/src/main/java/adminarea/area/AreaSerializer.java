@@ -91,7 +91,9 @@ public class AreaSerializer {
             inheritedToggleStates,
             permissions,
             (String) data.getOrDefault("enterMessage", ""),
-            (String) data.getOrDefault("leaveMessage", "")
+            (String) data.getOrDefault("leaveMessage", ""),
+            (Map<String, Map<String, Boolean>>) data.getOrDefault("trackPermissions", new HashMap<>()),
+            (Map<String, Map<String, Boolean>>) data.getOrDefault("playerPermissions", new HashMap<>())
         );
 
         // Create Area instance using private constructor via reflection

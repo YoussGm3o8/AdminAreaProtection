@@ -2,13 +2,24 @@ package adminarea.form;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import cn.nukkit.Player;
 import cn.nukkit.form.window.FormWindow;
 
 public interface IFormHandler {
     String getFormId();
+    
+    /**
+     * Creates a form for a player without area context
+     */
     FormWindow createForm(Player player);
+
+    /**
+     * Creates a form for a player with area context
+     */
+    FormWindow createForm(Player player, Area area);
+    
     void handleResponse(Player player, Object response);
     
     default boolean canHandle(String formId) {
@@ -25,35 +36,30 @@ public interface IFormHandler {
                 throw new IllegalStateException("Plugin not found");
             }
 
-            // Get form tracking data to determine previous form
+            // Get area context 
             FormTrackingData trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
             if (trackingData != null) {
                 Area area = plugin.getArea(trackingData.getFormId());
-                if (area != null) {
-                    // Return to edit form if we have area context
-                    plugin.getGuiManager().openEditForm(player, area);
-                    return;
+                if (area != null && !getFormId().equals(FormIds.MAIN_MENU)) {
+                    // Return to main menu if not already there
+                    plugin.getGuiManager().openMainMenu(player);
                 }
             }
-
-            // Fallback to main menu if no context available
-            plugin.getGuiManager().openMainMenu(player);
             
-            if (plugin.getConfigManager().isDebugEnabled()) {
+            // Log cancel
+            if (plugin.isDebugMode()) {
                 plugin.debug("Form cancelled by player: " + player.getName());
             }
 
         } catch (Exception e) {
-            // Log the error first
+            // Handle errors
             AdminAreaProtectionPlugin plugin = player.getServer().getPluginManager()
                 .getPlugin("AdminAreaProtection") instanceof AdminAreaProtectionPlugin p ? p : null;
                 
             if (plugin != null) {
                 plugin.getLogger().error("Error handling form cancel", e);
                 player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-                plugin.getGuiManager().openMainMenu(player);
             } else {
-                // Ultimate fallback if plugin instance is not available
                 player.sendMessage("§cAn error occurred. Please try again.");
             }
         }

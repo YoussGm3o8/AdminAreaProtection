@@ -30,7 +30,14 @@ public class ConfigManager {
         defaults.put("debug", false);
         defaults.put("maxAreaPriority", 100);
         defaults.put("wandItemType", 280); // Stick by default
-        defaults.put("particleVisualization", true);
+        
+        // Particle visualization settings
+        Map<String, Object> particleVisualization = new HashMap<>();
+        particleVisualization.put("enabled", true);
+        particleVisualization.put("duration", 10); // seconds
+        defaults.put("particleVisualization", particleVisualization);
+        
+        // Add flat defaults for numeric validation
         defaults.put("visualizationDuration", 10); // seconds
         defaults.put("cacheExpiry", 5); // minutes
         defaults.put("undoHistorySize", 10);
@@ -141,6 +148,10 @@ public class ConfigManager {
         templateDescs.put("creative_zone", "Full building permissions");
         templateDescs.put("safe_spawn", "Safe spawn area with no PvP/mobs");
         defaults.put("templateDescriptions", templateDescs);
+
+        // Debug settings
+        defaults.put("debug", false);
+        defaults.put("debugStackTraces", false);
     }
 
     public void load() {
@@ -151,6 +162,9 @@ public class ConfigManager {
 
         config = new Config(configFile, Config.YAML);
         
+        // Migrate old config format if needed
+        migrateOldConfig();
+        
         // Convert YAML maps to JSONObjects where needed
         if (config.exists("defaultToggleStates")) {
             Map<String, Object> defaultToggles = config.getSection("defaultToggleStates").getAllMap();
@@ -160,6 +174,12 @@ public class ConfigManager {
         if (config.exists("inheritedToggles")) {
             Map<String, Object> inherited = config.getSection("inheritedToggles").getAllMap();
             defaults.put("inheritedToggles", convertMapToJson(inherited));
+        }
+
+        // Ensure debug mode is properly saved to config
+        if (!config.exists("debug")) {
+            config.set("debug", false);
+            config.save();
         }
 
         validate();
@@ -187,7 +207,7 @@ public class ConfigManager {
         validateNumericRange("cacheExpiry", 1, 60);
         validateNumericRange("undoHistorySize", 1, 50);
         validateNumericRange("selectionCooldown", 50, 5000);
-        validateNumericRange("visualizationDuration", 1, 60);
+        validateNumericRange("particleVisualization.duration", 1, 60);
         
         // Validate title timings
         validateTitleTimings("title.enter");
@@ -198,11 +218,85 @@ public class ConfigManager {
         }
     }
 
+    private void migrateOldConfig() {
+        // Migrate old particleVisualization boolean to new section format
+        if (config.exists("particleVisualization") && !(config.get("particleVisualization") instanceof ConfigSection)) {
+            boolean oldValue = config.getBoolean("particleVisualization", true);
+            config.set("particleVisualization", null); // Remove old value
+            
+            // Create new section with old enabled value and default duration
+            Map<String, Object> newSection = new HashMap<>();
+            newSection.put("enabled", oldValue);
+            newSection.put("duration", 10);
+            config.set("particleVisualization", newSection);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Migrated particleVisualization from boolean to section");
+            }
+        }
+    }
+
     private void validateNumericRange(String key, int min, int max) {
-        int value = config.getInt(key, (Integer) defaults.get(key));
-        if (value < min || value > max) {
-            plugin.getLogger().warning("Config key '" + key + "' had invalid value " + value + 
-                " (must be between " + min + " and " + max + "). Reset to default: " + defaults.get(key));
+        try {
+            // Handle nested keys (e.g. particleVisualization.duration)
+            String[] parts = key.split("\\.");
+            int value;
+            
+            if (parts.length > 1) {
+                // Get the default value first
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nestedDefaults = (Map<String, Object>) defaults.get(parts[0]);
+                int defaultValue = nestedDefaults != null ? (Integer) nestedDefaults.get(parts[1]) : 10;
+                
+                // Try to get the actual value
+                Object section = config.get(parts[0]);
+                if (section instanceof ConfigSection) {
+                    ConfigSection configSection = (ConfigSection) section;
+                    value = configSection.getInt(parts[1], defaultValue);
+                } else {
+                    // If not a section, use default and create the section
+                    value = defaultValue;
+                    Map<String, Object> newSection = new HashMap<>();
+                    if (parts[0].equals("particleVisualization")) {
+                        newSection.put("enabled", true);
+                        newSection.put("duration", value);
+                    }
+                    config.set(parts[0], newSection);
+                }
+            } else {
+                value = config.getInt(key, (Integer) defaults.get(key));
+            }
+            
+            if (value < min || value > max) {
+                int defaultValue = (Integer) defaults.get(key);
+                plugin.getLogger().warning("Config key '" + key + "' had invalid value " + value + 
+                    " (must be between " + min + " and " + max + "). Reset to default: " + defaultValue);
+                if (parts.length > 1) {
+                    ConfigSection section = config.getSection(parts[0]);
+                    section.set(parts[1], defaultValue);
+                } else {
+                    config.set(key, defaultValue);
+                }
+            }
+        } catch (Exception e) {
+            // If any error occurs, set to default value
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error validating " + key + ": " + e.getMessage());
+            }
+            setDefaultValue(key);
+        }
+    }
+
+    private void setDefaultValue(String key) {
+        String[] parts = key.split("\\.");
+        if (parts.length > 1) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nestedDefaults = (Map<String, Object>) defaults.get(parts[0]);
+            if (nestedDefaults != null) {
+                Map<String, Object> newSection = new HashMap<>(nestedDefaults);
+                config.set(parts[0], newSection);
+            }
+        } else {
             config.set(key, defaults.get(key));
         }
     }
@@ -234,14 +328,18 @@ public class ConfigManager {
     }
 
     public boolean isEnabled(String feature) {
-        return config.getBoolean(feature, (Boolean) defaults.get(feature));
+        // Handle null or missing values by returning the default if available
+        if (feature == null) return false;
+        
+        Boolean defaultValue = (Boolean) defaults.get(feature);
+        return config.getBoolean(feature, defaultValue != null ? defaultValue : false);
     }
 
     // Add debug mode checker
     public boolean isDebugEnabled() {
         return config.getBoolean("debug", false);
     }
-
+ 
     public Config getConfig() {
         return config;
     }
@@ -270,11 +368,66 @@ public class ConfigManager {
     }
 
     public boolean isParticleVisualizationEnabled() {
-        return config.getBoolean("particleVisualization", true);
+        try {
+            Object section = config.get("particleVisualization");
+            
+            // Handle different types of the config value
+            if (section instanceof ConfigSection) {
+                return ((ConfigSection) section).getBoolean("enabled", true);
+            } else if (section instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) section;
+                Object enabled = map.get("enabled");
+                return enabled instanceof Boolean ? (Boolean) enabled : true;
+            } else if (section instanceof Boolean) {
+                // Legacy format
+                return (Boolean) section;
+            }
+            
+            // If we get here, either the section doesn't exist or is invalid
+            // Set default values and return default
+            Map<String, Object> defaultSection = new HashMap<>();
+            defaultSection.put("enabled", true);
+            defaultSection.put("duration", 10);
+            config.set("particleVisualization", defaultSection);
+            return true;
+            
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error getting particle visualization enabled state: " + e.getMessage());
+            }
+            return true; // Default to enabled on error
+        }
     }
 
     public int getVisualizationDuration() {
-        return config.getInt("visualizationDuration", 10);
+        try {
+            Object section = config.get("particleVisualization");
+            
+            // Handle different types of the config value
+            if (section instanceof ConfigSection) {
+                return ((ConfigSection) section).getInt("duration", 10);
+            } else if (section instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) section;
+                Object duration = map.get("duration");
+                return duration instanceof Number ? ((Number) duration).intValue() : 10;
+            }
+            
+            // If we get here, either the section doesn't exist or is invalid
+            // Set default values and return default
+            Map<String, Object> defaultSection = new HashMap<>();
+            defaultSection.put("enabled", true);
+            defaultSection.put("duration", 10);
+            config.set("particleVisualization", defaultSection);
+            return 10;
+            
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error getting visualization duration: " + e.getMessage());
+            }
+            return 10; // Default duration on error
+        }
     }
 
     public int getCacheExpiryMinutes() {
@@ -363,7 +516,12 @@ public class ConfigManager {
      * Gets a boolean config value with default fallback
      */
     public boolean getBoolean(String path, boolean defaultValue) {
-        return config.getBoolean(path, defaultValue);
+        if (!config.exists(path)) {
+            config.set(path, defaultValue);
+            config.save();
+            return defaultValue;
+        }
+        return config.getBoolean(path);
     }
 
     public JSONObject getDefaultPermissions() {
@@ -386,5 +544,37 @@ public class ConfigManager {
 
     public String getTemplateDescription(String templateName) {
         return config.getString("templateDescriptions." + templateName, "No description available");
+    }
+
+    /**
+     * Sets a configuration value and optionally saves the config.
+     * @param path The configuration path
+     * @param value The value to set
+     */
+    public void set(String path, Object value) {
+        if (path == null) return;
+        
+        try {
+            config.set(path, value);
+            // Save immediately to ensure changes are persisted
+            config.save();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Updated config value " + path + " to: " + value);
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to save config value: " + path, e);
+        }
+    }
+
+    /**
+     * Gets an integer value from config with default fallback
+     */
+    public int getInt(String path, int defaultValue) {
+        if (!config.exists(path)) {
+            set(path, defaultValue);
+            return defaultValue;
+        }
+        return config.getInt(path);
     }
 }

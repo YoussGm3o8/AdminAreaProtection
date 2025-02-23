@@ -3,6 +3,7 @@ package adminarea.area;
 import org.json.JSONObject;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
 
 public record AreaDTO(
     String name,
@@ -18,13 +19,25 @@ public record AreaDTO(
     JSONObject inheritedToggleStates,
     Permissions permissions,
     String enterMessage,
-    String leaveMessage
+    String leaveMessage,
+    Map<String, Map<String, Boolean>> trackPermissions,
+    Map<String, Map<String, Boolean>> playerPermissions
 ) {
+    private static final Bounds GLOBAL_BOUNDS = new Bounds(
+        -29000000, 29000000,
+        -64, 320,
+        -29000000, 29000000
+    );
+
     public record Bounds(
         int xMin, int xMax,
         int yMin, int yMax, 
         int zMin, int zMax
     ) {
+        public static Bounds createGlobal() {
+            return GLOBAL_BOUNDS;
+        }
+
         public Bounds {
             // Validate and normalize bounds
             if (xMin > xMax) {
@@ -45,9 +58,24 @@ public record AreaDTO(
         }
 
         public boolean contains(double x, double y, double z) {
+            // Fast path for global bounds
+            if (this == GLOBAL_BOUNDS) {
+                return y >= yMin && y <= yMax; // Only check Y bounds for global areas
+            }
+            
             return x >= xMin && x <= xMax &&
                    y >= yMin && y <= yMax &&
                    z >= zMin && z <= zMax;
+        }
+
+        public boolean isGlobal() {
+            return this == GLOBAL_BOUNDS;
+        }
+
+        public long volume() {
+            return (long)(xMax - xMin + 1) * 
+                   (long)(yMax - yMin + 1) * 
+                   (long)(zMax - zMin + 1);
         }
     }
     
@@ -217,5 +245,28 @@ public record AreaDTO(
         inheritedToggleStates = inheritedToggleStates != null ? inheritedToggleStates : new JSONObject();
         enterMessage = enterMessage != null ? enterMessage : "";
         leaveMessage = leaveMessage != null ? leaveMessage : "";
+        trackPermissions = trackPermissions != null ? trackPermissions : new HashMap<>();
+        playerPermissions = playerPermissions != null ? playerPermissions : new HashMap<>();
+    }
+
+    // Override accessors to return mutable copies
+    @Override
+    public Map<String, Map<String, Boolean>> groupPermissions() {
+        return new HashMap<>(groupPermissions);
+    }
+
+    @Override
+    public Map<String, Map<String, Boolean>> inheritedPermissions() {
+        return new HashMap<>(inheritedPermissions);
+    }
+
+    @Override
+    public Map<String, Map<String, Boolean>> trackPermissions() {
+        return new HashMap<>(trackPermissions);
+    }
+
+    @Override
+    public Map<String, Map<String, Boolean>> playerPermissions() {
+        return new HashMap<>(playerPermissions);
     }
 }

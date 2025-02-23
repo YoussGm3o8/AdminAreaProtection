@@ -1,6 +1,8 @@
 package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.area.Area;
+import adminarea.constants.FormIds;
 import adminarea.form.IFormHandler;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponse;
@@ -15,31 +17,90 @@ public abstract class BaseFormHandler implements IFormHandler {
         this.plugin = plugin;
     }
 
+    protected void validateFormId() {
+        String formId = getFormId();
+        if (formId == null || formId.trim().isEmpty()) {
+            throw new IllegalStateException("Form handler must provide a non-null, non-empty formId");
+        }
+    }
+
     @Override
     public void handleResponse(Player player, Object response) {
-        if (player == null || response == null) {
-            // Navigate back to a safe place if needed
-            plugin.getGuiManager().openMainMenu(player);
-            return;
-        }
         try {
+            // Save current form tracking data
+            var currentFormData = plugin.getFormIdMap().get(player.getName());
+            var editingData = plugin.getFormIdMap().get(player.getName() + "_editing");
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Handling form response with tracking data:");
+                if (currentFormData != null) {
+                    plugin.debug("  Current form: " + currentFormData.getFormId());
+                }
+                if (editingData != null) {
+                    plugin.debug("  Editing area: " + editingData.getFormId());
+                }
+            }
+
+            // Handle null response (form closed) first
+            if (response == null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Form was closed by player, cleaning up");
+                }
+                cleanup(player);
+                return;
+            }
+
+            // Handle the response based on form type
             if (response instanceof FormResponseCustom) {
                 handleCustomResponse(player, (FormResponseCustom) response);
             } else if (response instanceof FormResponseSimple) {
                 handleSimpleResponse(player, (FormResponseSimple) response);
             }
+
+            // Check if we're transitioning to a new form
+            var newFormData = plugin.getFormIdMap().get(player.getName());
+            if (newFormData == null || newFormData.equals(currentFormData)) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("No form transition detected, cleaning up");
+                }
+                cleanup(player);
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Form transition detected, preserving data");
+                plugin.debug("  New form: " + newFormData.getFormId());
+            }
         } catch (Exception e) {
             plugin.getLogger().error("Error handling form response", e);
-            player.sendMessage("§cAn error occurred while processing your input.");
-            plugin.getGuiManager().openMainMenu(player);
+            cleanup(player);
+            throw e;
         }
     }
 
     @Override
-    public FormWindow createForm(Player player) {
-        // Base implementation returns null for safety
-        // Each handler should override this with proper null checks
-        return null;
+    public void handleCancel(Player player) {
+        var currentFormData = plugin.getFormIdMap().get(player.getName());
+        
+        // Just cleanup for all forms when cancelled/closed
+        cleanup(player);
+    }
+
+    protected void cleanup(Player player) {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Cleaning up form data in BaseFormHandler");
+            var currentForm = plugin.getFormIdMap().get(player.getName());
+            if (currentForm != null) {
+                plugin.debug("  Removing form data: " + currentForm.getFormId());
+            }
+        }
+        // Remove both regular and editing form data
+        plugin.getFormIdMap().remove(player.getName());
+        plugin.getFormIdMap().remove(player.getName() + "_editing");
+        // Clear navigation history
+        plugin.getGuiManager().clearNavigationHistory(player);
+    }
+
+    @Override
+    public FormWindow createForm(Player player, Area area) {
+        return createForm(player);
     }
 
     protected abstract void handleCustomResponse(Player player, FormResponseCustom response);

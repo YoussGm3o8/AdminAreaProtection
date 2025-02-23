@@ -1,37 +1,37 @@
 package adminarea.form.handlers;
 
-import adminarea.AdminAreaProtectionPlugin;
-import adminarea.area.Area;
-import adminarea.form.IFormHandler;
-import adminarea.constants.AdminAreaConstants;
-import adminarea.constants.FormIds;
-import adminarea.data.FormTrackingData;
-import cn.nukkit.Player;
-import cn.nukkit.form.element.ElementButton;
-import cn.nukkit.form.response.FormResponseSimple;
-import cn.nukkit.form.response.FormResponseCustom;
-import cn.nukkit.form.window.FormWindow;
-import cn.nukkit.form.window.FormWindowSimple;
-
 import java.util.List;
 
-public class DeleteAreaHandler extends BaseFormHandler {
-    public DeleteAreaHandler(AdminAreaProtectionPlugin plugin) {
+import adminarea.AdminAreaProtectionPlugin;
+import adminarea.area.Area;
+import adminarea.constants.AdminAreaConstants;
+import adminarea.constants.FormIds;
+import cn.nukkit.Player;
+import cn.nukkit.form.element.ElementButton;
+import cn.nukkit.form.response.FormResponseCustom;
+import cn.nukkit.form.response.FormResponseSimple;
+import cn.nukkit.form.window.FormWindow;
+import cn.nukkit.form.window.FormWindowSimple;
+import adminarea.data.FormTrackingData;
+
+public class AreaEditListHandler extends BaseFormHandler {
+
+    public AreaEditListHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
         validateFormId();
     }
 
     @Override
     public String getFormId() {
-        return FormIds.DELETE_LIST;
+        return FormIds.EDIT_LIST;
     }
 
     @Override
     public FormWindow createForm(Player player) {
         try {
             FormWindowSimple form = new FormWindowSimple(
-                plugin.getLanguageManager().get("gui.deleteArea.title"),
-                plugin.getLanguageManager().get("gui.deleteArea.content")
+                plugin.getLanguageManager().get("gui.editArea.listtitle"),
+                plugin.getLanguageManager().get("gui.editArea.selectPrompt")
             );
 
             List<Area> areas = plugin.getAreas();
@@ -58,7 +58,7 @@ public class DeleteAreaHandler extends BaseFormHandler {
 
             return form;
         } catch (Exception e) {
-            plugin.getLogger().error("Error creating delete area form", e);
+            plugin.getLogger().error("Error creating area edit list form", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             cleanup(player);
             return null;
@@ -83,51 +83,35 @@ public class DeleteAreaHandler extends BaseFormHandler {
             
             if (buttonId < 0 || buttonId >= areas.size()) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+                // Set form tracking data before reopening edit list
+                plugin.getFormIdMap().put(player.getName(),
+                    new FormTrackingData(FormIds.EDIT_LIST, System.currentTimeMillis()));
+                plugin.getGuiManager().openEditListForm(player);
                 return;
             }
 
             Area area = areas.get(buttonId);
             if (area == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+                // Set form tracking data before reopening edit list
+                plugin.getFormIdMap().put(player.getName(),
+                    new FormTrackingData(FormIds.EDIT_LIST, System.currentTimeMillis()));
+                plugin.getGuiManager().openEditListForm(player);
                 return;
             }
 
-            // Store area being deleted and show confirmation form
+            // Store area being edited
             plugin.getFormIdMap().put(player.getName() + "_editing", 
                 new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            plugin.getGuiManager().openFormById(player, FormIds.DELETE_CONFIRM, area);
+            // Set form tracking data before opening edit area form
+            plugin.getFormIdMap().put(player.getName(),
+                new FormTrackingData(FormIds.EDIT_AREA, System.currentTimeMillis()));
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
 
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling delete area response", e);
+            plugin.getLogger().error("Error handling area edit list response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             handleCancel(player);
-        }
-    }
-
-    @Override
-    public void handleCancel(Player player) {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Delete area selection cancelled");
-        }
-        plugin.getGuiManager().handleBackNavigation(player);
-    }
-
-    private void processAreaDeletion(Player player, Area area) {
-        if (area == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
-            plugin.getGuiManager().openMainMenu(player);
-            return;
-        }
-
-        try {
-            plugin.removeArea(area);
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.deleted")
-                .replace("%area%", area.getName()));
-            plugin.getGuiManager().openMainMenu(player);
-        } catch (Exception e) {
-            plugin.getLogger().error("Error deleting area: " + area.getName(), e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.deleteFailed"));
-            plugin.getGuiManager().openMainMenu(player);
         }
     }
 }

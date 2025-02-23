@@ -6,129 +6,153 @@ import adminarea.constants.AdminAreaConstants;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import cn.nukkit.Player;
+import cn.nukkit.form.element.ElementButton;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
+import cn.nukkit.form.window.FormWindowSimple;
+
+import java.util.HashMap;
+import java.util.Map;
 
 public class EditAreaHandler extends BaseFormHandler {
 
-    private final String formId = FormIds.EDIT_AREA;
-
     public EditAreaHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
+        validateFormId();
     }
 
     @Override
     public String getFormId() {
-        return AdminAreaConstants.FORM_EDIT_AREA;
+        return FormIds.EDIT_AREA;
+    }
+
+    @Override
+    public FormWindow createForm(Player player, Area area) {
+        try {
+            Map<String, String> placeholders = new HashMap<>();
+            placeholders.put("area", area.getName());
+
+            FormWindowSimple form = new FormWindowSimple(
+                plugin.getLanguageManager().get("gui.editArea.title", placeholders),
+                plugin.getLanguageManager().get("gui.editArea.content")
+            );
+
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.basicSettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.buildingSettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.environmentSettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.entitySettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.technicalSettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.specialSettings")));
+
+            if (plugin.isLuckPermsEnabled()) {
+                form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.groupPermissions")));
+            }
+
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.playerPermissions")));
+
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating edit area form", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            return null;
+        }
     }
 
     @Override
     public FormWindow createForm(Player player) {
-        // Safely handle null player
-        if (player == null) {
+        FormTrackingData data = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (data == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
             return null;
         }
 
-        // Get the area being edited from tracking data
-        FormTrackingData trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        if (trackingData == null) {
-            return null;
-        }
-
-        Area area = plugin.getArea(trackingData.getFormId());
+        Area area = plugin.getArea(data.getFormId());
         if (area == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
             return null;
         }
 
-        return plugin.getGuiManager().createEditForm(area);
+        FormWindowSimple form = new FormWindowSimple(
+            "Edit Area - " + area.getName(),
+            "Choose a category to edit:"
+        );
+
+        form.addButton(new ElementButton("Basic Settings"));
+        form.addButton(new ElementButton("Building Settings"));
+        form.addButton(new ElementButton("Environment Settings"));
+        form.addButton(new ElementButton("Entity Settings"));
+        form.addButton(new ElementButton("Technical Settings"));
+        form.addButton(new ElementButton("Special Settings"));
+        
+        if (plugin.getLuckPermsApi() != null) {
+            form.addButton(new ElementButton("LuckPerms Settings"));
+            form.addButton(new ElementButton("Player Settings"));
+        }
+
+        return form;
     }
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
-        // Edit form doesn't use custom responses
-        throw new UnsupportedOperationException("This handler only supports simple forms");
+        // Not used for simple form
     }
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        if (player == null || response == null) {
+        if (response == null) {
+            handleCancel(player);
             return;
         }
 
-        try {
-            // Store form data
-            plugin.getFormIdMap().put(player.getName(),
-                new FormTrackingData(AdminAreaConstants.FORM_EDIT_AREA, System.currentTimeMillis()));
+        FormTrackingData data = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (data == null) return;
 
-            FormTrackingData trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
-            if (trackingData == null) {
+        Area area = plugin.getArea(data.getFormId());
+        if (area == null) return;
+
+        String formId;
+        switch (response.getClickedButtonId()) {
+            case 0:
+                formId = FormIds.BASIC_SETTINGS;
+                break;
+            case 1:
+                formId = FormIds.BUILDING_SETTINGS;
+                break;
+            case 2:
+                formId = FormIds.ENVIRONMENT_SETTINGS;
+                break;
+            case 3:
+                formId = FormIds.ENTITY_SETTINGS;
+                break;
+            case 4:
+                formId = FormIds.TECHNICAL_SETTINGS;
+                break;
+            case 5:
+                formId = FormIds.SPECIAL_SETTINGS;
+                break;
+            case 6:
+                if (plugin.getLuckPermsApi() != null) {
+                    formId = FormIds.LUCKPERMS_SETTINGS;
+                    break;
+                }
                 return;
-            }
-
-            Area area = plugin.getArea(trackingData.getFormId());
-            if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+            case 7:
+                if (plugin.getLuckPermsApi() != null) {
+                    formId = FormIds.PLAYER_SETTINGS;
+                    break;
+                }
                 return;
-            }
-
-            plugin.getGuiManager().handleEditFormResponse(player, response.getClickedButtonId(), area);
-
-        } catch (Exception e) {
-            handleError(player, e);
+            default:
+                return;
         }
+
+        plugin.getGuiManager().openFormById(player, formId, area);
     }
 
-    private void handleError(Player player, Exception e) {
-        plugin.getLogger().error(e.getMessage(), e);
-        player.sendMessage(plugin.getLanguageManager().get("messages.errorOccurred"));
-    }
-
-    public void handle(EditAreaFormData formData) {
-        // Example of data flow:
-        // 1. Get data from the form
-        String areaId = formData.getAreaId();
-        String newAreaName = formData.getNewAreaName();
-
-        // 2. Validate the data
-        if (areaId == null || areaId.isEmpty()) {
-            System.err.println("Error: Area ID is required.");
-            return;
-        }
-
-        // 3. Update the database
-        updateAreaInDatabase(areaId, newAreaName);
-
-        // 4. Confirm the update to the user (e.g., display a success message)
-        System.out.println("Area updated successfully.");
-    }
-
-    private void updateAreaInDatabase(String areaId, String newAreaName) {
-        // Implementation to update the area in the database
-        // ...
-    }
-
-    public static class EditAreaFormData {
-        private String areaId;
-        private String newAreaName;
-        // ... other fields ...
-
-        public String getAreaId() {
-            return areaId;
-        }
-
-        public void setAreaId(String areaId) {
-            this.areaId = areaId;
-        }
-
-        public String getNewAreaName() {
-            return newAreaName;
-        }
-
-        public void setNewAreaName(String newAreaName) {
-            this.newAreaName = newAreaName;
-        }
-
-        // ... getters and setters for other fields ...
+    private Area getEditingArea(Player player) {
+        var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (areaData == null) return null;
+        return plugin.getArea(areaData.getFormId());
     }
 }

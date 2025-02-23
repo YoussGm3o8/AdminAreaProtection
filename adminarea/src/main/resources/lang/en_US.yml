@@ -1,5 +1,5 @@
 messages:
-  prefix: "§8[§bAreaProtect§8] §r"
+  prefix: "§8[§6AdminArea§8]§r "
   reload: "§aConfiguration reloaded successfully."
   noPermission: "{prefix}§cYou don't have permission to do this."
   areaNotFound: "{prefix}§cArea '{area}' not found."
@@ -12,6 +12,8 @@ messages:
   invalidCoordinates: "§cInvalid coordinates provided."
   invalidName: "§cInvalid area name. Use only letters, numbers, and underscores."
   invalidPriority: "§cInvalid priority. Must be between 0 and 100."
+  positionsSetToCurrent: "{prefix}§aPositions set to current location."
+  bypassToggled: "{prefix}§aBypass mode {status}"
   
   # Core protection messages
   blockBreak: "{prefix}§cYou cannot break blocks in {area}!"
@@ -50,17 +52,24 @@ messages:
   positionSet: "{prefix}§aPosition %s set to (%d, %d, %d)"
   bothPositionsSet: "{prefix}§aYou have set both positions. Use /area create to create an area."
   positionsNotSet: "{prefix}Please set both positions first with /area pos1 and /area pos2"
-  positionsSetToCurrent: "{prefix}Positions set to current location"
   
   # Bypass messages
   bypassEnabled: "{prefix}§aBypass mode enabled"
   bypassDisabled: "{prefix}§cBypass mode is disabled when LuckPerms integration is active."
-  bypassToggled: "{prefix}§aBypass mode {status}"
   
   # Error messages
   undoNoActions: "{prefix}§cNo actions to undo!"
-  errorProcessingInput: "{prefix}§cAn error occurred while processing your input"
+  errorProcessingInput: "{prefix}§cAn error occurred while processing your input."
   errorCreatingForm: "{prefix}§cError creating form"
+  invalidDirection: "{prefix}§cInvalid direction! Use: up, down, north, south, east, west"
+  selectPositions: "{prefix}§cYou must first select two positions!"
+  differentWorlds: "{prefix}§cBoth areas must be in the same world to merge!"
+  mergeFailed: "{prefix}§cFailed to merge areas: {error}"
+  visualizeFailed: "{prefix}§cFailed to visualize area: {error}"
+  statsError: "{prefix}§cError retrieving area statistics: {error}"
+  exportFailed: "{prefix}§cFailed to export statistics: {error}"
+  resetFailed: "{prefix}§cFailed to reset statistics: {error}"
+  reloadError: "{prefix}§cError reloading configuration: {error}"
   
   # LuckPerms messages
   luckpermsUnavailable: "{prefix}§cLuckPerms is not available"
@@ -108,6 +117,8 @@ messages:
     breeding: "{prefix}§cAnimal breeding is not allowed in {area}"
     monsterTarget: "{prefix}§cMonsters cannot target players in {area}"
     leashing: "{prefix}§cLeashing entities is not allowed in {area}"
+    taming: "{prefix}§cTaming animals is not allowed in {area}"
+    shootProjectile: "{prefix}§cShooting projectiles is not allowed in {area}"
     
     # Items & Drops Protection
     itemDrop: "{prefix}§cDropping items is not allowed in {area}"
@@ -136,22 +147,29 @@ messages:
 
   # Form/GUI messages
   form:
+    error:
+      generic: "{prefix}§cAn error occurred while processing your request."
+      invalidInput: "{prefix}§cInvalid input provided. Please check your entries."
+      invalidForm: "{prefix}§cInvalid form data received."
+      invalidSession: "{prefix}§cYour session has expired. Please try again."
+      missingName: "{prefix}§cPlease provide a name for the area."
+      missingResponses: "{prefix}§cPlease fill in all required fields."
+      noAreaSelected: "{prefix}§cNo area is currently selected."
+      saveChanges: "{prefix}§cFailed to save changes: {error}"
     luckpermsNotLoaded: "{prefix}§cLuckPerms data is not loaded for this player."
-    createError: "{prefix}§cError creating form: {error}"
     permissionDenied: "{prefix}§cYou don't have permission to manage player areas"
-    formError: "{prefix}§cError: Form could not be created"
-    createDeleteFormError: "{prefix}Error creating delete form"
-    noPermission: "{prefix}You don't have permission to perform this action"
-    luckpermsNotAvailable: "{prefix}LuckPerms integration is not available"
+    createError: "{prefix}§cError creating form: {error}"
     trackPermissionsApplied: "{prefix}Track permissions applied successfully!"
     groupPermissionsUpdated: "{prefix}Group permissions updated for {group} in {area}"
+    playerPermissionsUpdated: "{prefix}Player permissions updated for {player} in {area}"
     permissionOverridesUpdated: "{prefix}Permission overrides updated successfully!"
-    luckpermsNotFound: "{prefix}Track not found!"
-    errorCreatingForm: "{prefix}§cError creating form."
+    formError: "{prefix}§cError: Form could not be created"
+    createDeleteFormError: "{prefix}Error creating delete form"
+    luckpermsNotAvailable: "{prefix}LuckPerms integration is not available"
     groupNotFound: "{prefix}§cGroup '{group}' not found."
-
-    error:
-      generic: "An error occurred: {error}"
+    trackNotFound: "{prefix}§cTrack '{track}' not found."
+    playerNotFound: "{prefix}§cPlayer '{player}' not found."
+    areaPermissionResetWarning: "{prefix}§eWarning: Editing area permissions will reset all LuckPerms and individual permissions for this area."
 
   # Command usage messages
   usage:
@@ -166,24 +184,33 @@ messages:
     positionsNeeded: "{prefix}§cYou need to set both positions first!"
     undoSuccess: "{prefix}§aUndid last selection"
     noActionsToUndo: "{prefix}§cNo actions to undo!"
+    selectionComplete: "{prefix}§aBoth positions set! Use /area create to create your area"
+    pos1Set: "§aPosition 1 set at: §e{x}, {y}, {z}"
+    pos2Set: "§aPosition 2 set at: §e{x}, {y}, {z}"
+    notSet: "§cPositions not set! Use the wand to set both positions first."
+    notBoth: "§cBoth positions must be set to create an area!"
     lore:
       line1: "§7Left-click to set position 1"
       line2: "§7Right-click to set position 2"
       line3: "§eSneak + Left-click to undo"
       line4: "§eSneak + Right-click to create area"
     positionSet: "{prefix}Set position {position} at ({x}, {y}, {z})"
-    pos1Set: "§aPosition 1 set at: §e{x}, {y}, {z}"
-    pos2Set: "§aPosition 2 set at: §e{x}, {y}, {z}"
-    notSet: "§cPositions not set! Use the wand to set both positions first."
-    notBoth: "§cBoth positions must be set to create an area!"
 
   # Success messages
   success:
+    expandSuccess: "{prefix}§aExpanded selection {direction} by {amount} blocks"
     mergeComplete: "{prefix}§aAreas merged successfully into: {area}"
     visualizeStarted: "{prefix}§aVisualization started for area: {area}"
     statsExported: "{prefix}§aStatistics exported successfully!"
     statsReset: "{prefix}§aStatistics reset successfully!"
-    expandSuccess: "{prefix}§aExpanded selection {direction} by {amount} blocks"
+    areaCreated: "{prefix}Area '{area}' created successfully!"
+    areaDeleted: "{prefix}Area '{area}' deleted successfully!"
+    areaUpdated: "{prefix}Area '{area}' updated successfully!"
+    settingsSaved: "{prefix}Settings saved successfully!"
+    permissionsUpdated: "{prefix}Permissions updated successfully!"
+    trackPermissionsApplied: "{prefix}Track permissions applied successfully!"
+    groupPermissionsUpdated: "{prefix}Group permissions updated for {group} in {area}"
+    playerPermissionsUpdated: "{prefix}Player permissions updated for {player} in {area}"
 
   # Error messages
   error:
@@ -191,48 +218,48 @@ messages:
     selectPositions: "{prefix}§cYou must first select two positions!"
     numberFormat: "{prefix}§cInvalid number format in input fields"
     updateArea: "{prefix}§cError updating area: {error}"
-    selectPositions: "{prefix}§cYou must select both positions first."
     invalidCategory: "{prefix}§cInvalid category, valid categories: {categories}"
+    invalidNumber: "{prefix}§cInvalid number format. Please enter a valid number."
+    invalidForm: "{prefix}§cInvalid form data provided."
+    noAreaSelected: "{prefix}§cNo area is currently selected."
+    saveChanges: "{prefix}§cFailed to save changes: {error}"
+    generic: "{prefix}§cAn unexpected error occurred."
+    noPermission: "{prefix}§cYou don't have permission to do that!"
+    invalidArea: "{prefix}§cInvalid area name!"
+    invalidGroup: "{prefix}§cInvalid group name!"
+    invalidTrack: "{prefix}§cInvalid track name!"
+    invalidPlayer: "{prefix}§cInvalid player name!"
+    luckpermsNotEnabled: "{prefix}§cLuckPerms integration is not enabled!"
 
   # Permissions related
   permissions:
-    createArea: "{prefix}You don't have permission to create areas"
+    createArea: "{prefix}§cYou don't have permission to create areas."
     listAreas: "{prefix}You don't have permission to list areas"
     wandUse: "{prefix}You don't have permission to use the wand"
-    bypass: "{prefix}You don't have permission to use bypass mode"
-    debug: "{prefix}You don't have permission to use debug mode"
-    reload: "{prefix}You don't have permission to reload the configuration"
+    bypass: "{prefix}§cYou don't have permission to use bypass mode."
+    debug: "{prefix}§cYou don't have permission to use debug mode."
+    reload: "{prefix}§cYou don't have permission to reload the configuration."
     stats:
       view: "{prefix}You don't have permission to view statistics"
       export: "{prefix}You don't have permission to export statistics"
       reset: "{prefix}You don't have permission to reset statistics"
-    modifySelection: "{prefix}You don't have permission to modify selections"
-    exportStats: "{prefix}You don't have permission to export statistics"
-    resetStats: "{prefix}You don't have permission to reset statistics"
-    viewStats: "{prefix}You don't have permission to view statistics"
-    clearSelection: "{prefix}You don't have permission to clear selections"
-    undoSelection: "{prefix}You don't have permission to undo selections"
-    useWand: "{prefix}You don't have permission to use the selection wand"
-    createArea: "{prefix}You don't have permission to create areas"
-    debugMode: "{prefix}You don't have permission to toggle debug mode"
-    createArea: "{prefix}§cYou don't have permission to create areas."
-    listAreas: "{prefix}§cYou don't have permission to list areas."
-    bypass: "{prefix}§cYou don't have permission to use bypass mode."
+    modifySelection: "{prefix}§cYou don't have permission to modify selections."
     exportStats: "{prefix}§cYou don't have permission to export statistics."
     resetStats: "{prefix}§cYou don't have permission to reset statistics."
     viewStats: "{prefix}§cYou don't have permission to view statistics."
-    undoSelection: "{prefix}§cYou don't have permission to undo selections."
-    clearSelection: "{prefix}§cYou don't have permission to clear selections."
-    modifySelection: "{prefix}§cYou don't have permission to modify selections."
+    clearSelection: "{prefix}You don't have permission to clear selections"
+    undoSelection: "{prefix}You don't have permission to undo selections"
+    useWand: "{prefix}You don't have permission to use the selection wand"
+    createArea: "{prefix}§cYou don't have permission to create areas."
     debugMode: "{prefix}§cYou don't have permission to use debug mode."
-    toggleArea: "§cYou do not have permission to manage area toggles!"
+    toggleArea: "{prefix}§cYou don't have permission to toggle area protection!"
 
   # Area related
   area:
     list:
-      empty: "{prefix}There are no protected areas"
-      header: "{prefix}=== Protected Areas ==="
-      entry: "{prefix}- {name} §7(World: {world}, Priority: {priority})"
+      empty: "{prefix}§cNo protected areas found."
+      header: "§2Protected Areas:"
+      entry: "§7- {area} (World: {world}, Priority: {priority})"
     merged: "{prefix}Areas merged successfully into: {area}"
     delete:
       success: "{prefix}Area '{area}' deleted successfully"
@@ -240,39 +267,38 @@ messages:
       success: "{prefix}Areas merged successfully into: {area}"
     visualize:
       success: "{prefix}Started visualization for area: {area}"
-    created: "§aArea {name} created successfully!"
-    deleted: "§aArea {name} deleted successfully!"
+    created: "{prefix}§aArea '{area}' created successfully!"
+    deleted: "{prefix}§aArea '{area}' deleted successfully!"
     edited: "§aArea {name} edited successfully!"
-    notFound: "§cArea {name} not found!"
-    exists: "§cAn area with that name already exists!"
+    notFound: "{prefix}§cArea '{area}' not found!"
+    exists: "{prefix}§cAn area with that name already exists!"
     delete:
       success: "{prefix}§aArea '{area}' has been deleted."
     merge:
       success: "{prefix}§aAreas merged into new area '{area}'."
     visualize:
       success: "{prefix}§aVisualization enabled for area '{area}'."
+      complete: "{prefix}§aVisualization stopped for area '{area}'."
+    noAreas: "{prefix}§eNo protected areas available."
+    updated: "{prefix}§aArea '{area}' updated successfully."
+    tooLargeToVisualize: "{prefix}§cThis area is too large to visualize (over 1,000,000 blocks). Please use a smaller area."
 
   # Stats related
   stats:
-    header: "{prefix}=== Stats for {area} ==="
-    uptime: "{prefix}Uptime: {time}"
-    entry: "{prefix}{event}: {count}"
-    export:
-      success: "{prefix}Statistics exported successfully"
-    reset:
-      success: "{prefix}Statistics reset successfully"
-    header: "{prefix}§eStatistics for area '{area}':"
-    uptime: "§7Uptime: §f{uptime}"
+    header: "{prefix}§e=== Statistics for {area} ==="
+    general: "{prefix}§7Size: §f{size} blocks §7| Priority: §f{priority}"
+    activity: "{prefix}§7Visits: §f{visits} §7| Blocks: §f{blocks} §7| PvP: §f{pvp} §7| Containers: §f{containers}"
     entry: "§7{event}: §f{count}"
     export:
       success: "{prefix}§aStatistics exported successfully."
     reset:
       success: "{prefix}§aStatistics reset successfully."
+    uptime: "§7Uptime: §f{uptime}"
 
   # Debug related  
   debug:
-    enabled: "{prefix}Debug mode enabled"
-    disabled: "{prefix}Debug mode disabled"
+    enabled: "{prefix}§aDebug mode enabled"
+    disabled: "{prefix}§cDebug mode disabled"
     debugModeToggled: "{prefix}Debug mode {status}"
 
   # Config related
@@ -326,114 +352,173 @@ commands:
 
 gui:
   mainMenu:
-    title: "Area Protection"
-    content: "Select an option:"
+    title: "§6Area Protection"
+    content: "§7Select an option to manage protected areas:"
     buttons:
-      createArea: "Create Area"
-      editArea: "Edit Area"
-      deleteArea: "Delete Area"
-      managePermissions: "Manage Player Permissions"
-      luckPermsIntegration: "LuckPerms Integration"
-      areaSettings: "Area Settings"
-      listAreas: "List Areas"
-      toggleProtection: "Toggle Protection"
-      reloadConfig: "Reload Config"
+      createArea: "§a➕ Create Area\n§7Create a new protected area"
+      editArea: "§e✏ Edit Area\n§7Modify an existing area"
+      deleteArea: "§c❌ Delete Area\n§7Remove a protected area"
+      pluginSettings: "§b⚙ Settings\n§7Configure plugin options"
+      back: "§7« Back"
 
   createArea:
-    title: "Create New Area"
+    title: "Create Protected Area"
+    header: "§2Enter Area Details\n§7Fill in the required information below"
+    labels:
+      name: "Area Name"
+      namePlaceholder: "Enter a unique name for this area"
+      priority: "Priority"
+      priorityPlaceholder: "Enter priority (0-100)"
+      defaultPriority: "50"
+      showTitle: "Show Area Title\n§7Enable/disable area titles and messages"
+      showMessages: "Show Area Messages\n§7Configure enter/leave messages"
+      protectWorld: "Protect Entire World"
+      bounds: "\n§2Area Bounds\n§7Current selection coordinates"
+      pos1x: "First Position X"
+      pos1y: "First Position Y"
+      pos1z: "First Position Z"
+      pos2x: "Second Position X"
+      pos2y: "Second Position Y"
+      pos2z: "Second Position Z"
+      coordPlaceholder: "Enter {axis} coordinate"
+      protection: "\n§2Protection Settings\n§7Configure area permissions"
+      enterMessage: "Enter Message"
+      enterPlaceholder: "Message shown when entering area"
+      leaveMessage: "Leave Message"
+      leavePlaceholder: "Message shown when leaving area"
+
+  editArea:
+    title: "§6Edit Area: {area}"
+    content: "§7Choose a category to edit:"
+    buttons:
+      basicSettings: "§b⚙ Basic Settings\n§7Configure basic area properties"
+      buildingSettings: "§a🏗 Building Settings\n§7Configure building permissions"
+      environmentSettings: "§2🌿 Environment Settings\n§7Configure environment controls"
+      entitySettings: "§6🐾 Entity Settings\n§7Configure entity permissions"
+      technicalSettings: "§c⚡ Technical Settings\n§7Configure redstone & mechanics"
+      specialSettings: "§d✨ Special Settings\n§7Configure special permissions"
+      groupPermissions: "§e👥 Group Permissions\n§7Configure group access"
+      playerPermissions: "§7« Back"
+
+  buildingSettings:
+    title: "§aBuilding Settings"
+    content: "§7Configure building permissions for this area:"
+    toggles:
+      allowBlockPlace: "§aBlock Placement\n§7Allow placing blocks"
+      allowBlockBreak: "§cBlock Breaking\n§7Allow breaking blocks"
+      allowInteract: "§eInteractions\n§7Allow interacting with blocks"
+      allowContainers: "§6Container Access\n§7Allow accessing containers"
+      allowItemFrames: "§bItem Frames\n§7Allow item frame interactions"
+      allowArmorStands: "§dArmor Stands\n§7Allow armor stand interactions"
+
+  environmentSettings:
+    title: "§2Environment Settings"
+    content: "§7Configure environment controls for this area:"
+    toggles:
+      allowFire: "§cFire Spread\n§7Allow fire to spread"
+      allowLiquid: "§bLiquid Flow\n§7Allow liquids to flow"
+      allowBlockSpread: "§aBlock Spread\n§7Allow blocks to spread"
+      allowLeafDecay: "§2Leaf Decay\n§7Allow leaves to decay"
+      allowIceChange: "§bIce Changes\n§7Allow ice to form/melt"
+      allowSnowChange: "§fSnow Changes\n§7Allow snow to form/melt"
+
+  entitySettings:
+    title: "§6Entity Settings"
+    content: "§7Configure entity permissions for this area:"
+    toggles:
+      allowPvP: "§cPvP\n§7Allow player vs player combat"
+      allowMonsterSpawn: "§4Monster Spawning\n§7Allow hostile mobs to spawn"
+      allowAnimalSpawn: "§aAnimal Spawning\n§7Allow passive mobs to spawn"
+      allowDamageEntities: "§eEntity Damage\n§7Allow damaging entities"
+      allowBreeding: "§dAnimal Breeding\n§7Allow breeding animals"
+      allowMonsterTarget: "§cMonster Targeting\n§7Allow monsters to target players"
+      allowLeashing: "§6Leashing\n§7Allow using leads on entities"
+
+  technicalSettings:
+    title: "§cTechnical Settings"
+    content: "§7Configure redstone & mechanics for this area:"
+    toggles:
+      allowRedstone: "§cRedstone\n§7Allow redstone mechanisms"
+      allowPistons: "§ePistons\n§7Allow piston movement"
+      allowHoppers: "§7Hoppers\n§7Allow hopper transfers"
+      allowDispensers: "§bDispensers\n§7Allow dispenser activation"
+
+  specialSettings:
+    title: "§dSpecial Settings"
+    content: "§7Configure special permissions for this area:"
+    toggles:
+      allowFlight: "§bFlight\n§7Allow flying in this area"
+      allowEnderPearl: "§5Ender Pearl\n§7Allow ender pearl teleportation"
+      allowChorusFruit: "§dChorus Fruit\n§7Allow chorus fruit teleportation"
+      allowFallDamage: "§cFall Damage\n§7Enable fall damage"
+      allowHunger: "§6Hunger\n§7Enable hunger depletion"
+
+  deleteArea:
+    title: "Delete Area"
+    content: "Select an area to delete:"
+    confirmTitle: "Confirm Delete"
+    confirmPrompt: "Are you sure you want to delete area '{area}'?"
+    buttons:
+      confirm: "§cConfirm Delete"
+      cancel: "§aCancel"
+
+  basicSettings:
+    title: "Basic Settings: {area}"
+    sections:
+      general: "§2General Settings"
+      display: "\n§2Display Settings"
     labels:
       name: "Area Name"
       namePlaceholder: "Enter area name"
       priority: "Priority"
       priorityPlaceholder: "Enter priority (0-100)"
-      globalArea: "Global Area"
-      coordinates: "Coordinates"
-      showTitle: "Show Title"
+      showTitle: "Show Area Title"
       enterMessage: "Enter Message"
       enterPlaceholder: "Message shown when entering"
       leaveMessage: "Leave Message"
       leavePlaceholder: "Message shown when leaving"
-      name: "Area Name"
-      namePlaceholder: "Enter area name"
-      priority: "Priority"
-      priorityPlaceholder: "0-100"
-      globalArea: "Global Area"
 
-  editArea:
-    title: "Edit Area: {area}"
-    selectPrompt: "Select an area to edit:"
-    selectArea: "Select an area to edit:"
-    title: "Edit Area"
-    selectArea: "Select an area to edit:"
+  protectionSettings:
+    title: "Protection Settings: {area}"
 
-  deleteArea:
-    title: "Delete Area"
-    confirmPrompt: "Are you sure you want to delete area: {area}?"
-    selectPrompt: "Select an area to delete:"
-    buttons:
-      confirm: "§cConfirm Delete"
-      cancel: "§aCancel"
-    confirmMessage: "Are you sure you want to delete area "
+  pluginSettings:
+    title: "Plugin Settings"
+    sections:
+      general: "§2General Settings"
+      area: "\n§2Area Settings"
+      tools: "\n§2Tool Settings"
+      cache: "\n§2Cache Settings"
+      integrations: "\n§2Integrations"
+    labels:
+      debugMode: "Debug Mode"
+      debugStackTraces: "Debug Stack Traces"
+      enableMessages: "Enable Messages"
+      allowRegularAreaCreation: "Allow Regular Area Creation"
+      maxAreaPriority: "Max Area Priority"
+      maxAreaPriorityPlaceholder: "1-1000"
+      mostRestrictiveMerge: "Most Restrictive Area Merge"
+      wandItemType: "Wand Item Type"
+      wandItemTypePlaceholder: "Item ID"
+      particleVisualization: "Particle Visualization"
+      visualizationDuration: "Visualization Duration"
+      visualizationDurationPlaceholder: "Seconds"
+      selectionCooldown: "Selection Cooldown"
+      selectionCooldownPlaceholder: "Milliseconds"
+      cacheExpiryTime: "Cache Expiry Time"
+      cacheExpiryTimePlaceholder: "Minutes"
+      undoHistorySize: "Undo History Size"
+      undoHistorySizePlaceholder: "1-50"
+      luckpermsIntegration: "LuckPerms Integration"
+      inheritLuckpermsPermissions: "Inherit LuckPerms Permissions"
+      luckpermsUpdateInterval: "LuckPerms Update Interval"
+      luckpermsUpdateIntervalPlaceholder: "Seconds"
 
-  permissions:
-    title: "Permission Settings"
-    toggles:
-      allowBlockBreak: "Allow breaking blocks in the area"
-      allowBlockPlace: "Allow placing blocks in the area"
-      allowInteract: "Allow interacting with blocks and items"
-      allowPvP: "Allow PvP combat"
-      allowMobSpawn: "Allow hostile mob spawning in the area"
-      allowRedstone: "Allow redstone mechanisms to function"
-      allowBuild: "Allow building in the area"
-      allowBreak: "Allow breaking blocks in the area"
-      allowContainer: "Allow accessing containers"
-      allowItemFrame: "Allow interacting with item frames"
-      allowArmorStand: "Allow interacting with armor stands"
-      allowPistons: "Allow piston movement"
-      allowHopper: "Allow hopper operation"
-      allowDispenser: "Allow dispenser operation"
-      allowFire: "Allow fire spread"
-      allowLiquid: "Allow liquid flow"
-      allowBlockSpread: "Allow block spreading"
-      allowLeafDecay: "Allow leaf decay"
-      allowIceForm: "Allow ice formation"
-      allowSnowForm: "Allow snow formation"
-      allowMonsterSpawn: "Allow monster spawning in the area"
-      allowAnimalSpawn: "Allow animal spawning in the area"
-      allowDamageEntities: "Allow damaging entities"
-      allowBreeding: "Allow animal breeding"
-      allowMonsterTarget: "Allow monsters targeting players"
-      allowLeashing: "Allow leashing entities"
-      allowItemDrop: "Allow dropping items"
-      allowItemPickup: "Allow picking up items"
-      allowXPDrop: "Allow XP drops"
-      allowXPPickup: "Allow XP pickup"
-      allowTNT: "Allow TNT explosions"
-      allowCreeper: "Allow creeper explosions"
-      allowBedExplosion: "Allow bed explosions"
-      allowCrystalExplosion: "Allow crystal explosions"
-      allowVehiclePlace: "Allow placing vehicles"
-      allowVehicleBreak: "Allow destroying vehicles"
-      allowVehicleEnter: "Allow entering vehicles"
-      allowVehicleCollide: "Allow vehicle collisions"
-      allowFallDamage: "Allow fall damage"
-      allowHunger: "Allow hunger"
-      allowFlight: "Allow flight"
-      allowEnderPearl: "Allow ender pearl usage"
-      allowChorusFruit: "Allow chorus fruit usage"
+  categorySettings:
+    title: "{category}: {area}"
+    header: "§2Configure {category} Permissions\n§7Toggle settings below"
 
-  areaSettings:
-    title: "Area Settings"
-    basicSettings: "Basic Settings"
-    protectionSettings: "Protection Settings"
-    groupPermissions: "Group Permissions"
-    description:
-      priority: "Sets the priority level of the area (higher numbers = higher priority)"
-      mergeBehavior: "Determines how overlapping area permissions are handled"
-    useMostRestrictiveMerge: true
-    
   luckperms:
-    title: "LuckPerms Integration"
+    title: "Edit {group} Permissions"
     groupSelect: "Select Group"
     trackSelect: "Select Track"
     groupPerms: "Group Permissions"
@@ -461,3 +546,59 @@ titles:
     default:
       main: "§eLeaving {area}"
       subtitle: "Goodbye from {area}!"
+
+gui:
+  permissions:
+    toggles:
+      # Building Category
+      allowBlockPlace: "Controls whether {player} can place blocks in this area"
+      allowBlockBreak: "Controls whether {player} can break blocks in this area"
+      allowInteract: "Controls whether {player} can interact with blocks and items"
+      allowContainer: "Controls whether {player} can access containers"
+      allowItemFrame: "Controls whether {player} can interact with item frames"
+      allowArmorStand: "Controls whether {player} can interact with armor stands"
+      
+      # Technical Category
+      allowRedstone: "Controls whether redstone mechanisms can function"
+      allowPistons: "Controls whether pistons can push/pull blocks"
+      allowHopper: "Controls whether hoppers can transfer items"
+      allowDispenser: "Controls whether dispensers/droppers can function"
+      
+      # Environment Category
+      allowFire: "Controls whether fire can spread"
+      allowLiquid: "Controls whether liquids can flow"
+      allowBlockSpread: "Controls grass, mycelium, and vine spreading"
+      allowLeafDecay: "Controls whether leaves decay when logs are removed"
+      allowIceForm: "Controls ice formation and melting"
+      allowSnowForm: "Controls snow formation and melting"
+      
+      # Entity Category
+      allowPvP: "Controls whether {player} can engage in PvP combat"
+      allowMonsterSpawn: "Controls hostile mob spawning"
+      allowAnimalSpawn: "Controls passive mob spawning"
+      allowDamageEntities: "Controls whether {player} can damage entities"
+      allowBreeding: "Controls whether {player} can breed animals"
+      allowMonsterTarget: "Controls whether monsters can target {player}"
+      allowLeashing: "Controls whether {player} can use leads on entities"
+      allowShootProjectile: "Controls whether {player} can shoot projectiles"
+      
+      # Items & Drops Category
+      allowItemDrop: "Controls whether {player} can drop items"
+      allowItemPickup: "Controls whether {player} can pick up items"
+      allowXPDrop: "Controls whether experience orbs drop"
+      allowXPPickup: "Controls whether {player} can collect experience"
+
+      # Special Category
+      allowTNT: "Controls whether {player} can use TNT"
+      allowCreeper: "Controls whether creepers can damage {player}"
+      allowBedExplosion: "Controls whether beds can explode"
+      allowCrystalExplosion: "Controls whether end crystals can explode"
+      allowVehiclePlace: "Controls whether {player} can place vehicles"
+      allowVehicleBreak: "Controls whether {player} can break vehicles"
+      allowVehicleEnter: "Controls whether {player} can enter vehicles"
+      allowVehicleCollide: "Controls whether vehicles can collide with {player}"
+      allowFallDamage: "Controls whether {player} takes fall damage"
+      allowHunger: "Controls whether {player} loses hunger"
+      allowFlight: "Controls whether {player} can fly"
+      allowEnderPearl: "Controls whether {player} can use ender pearls"
+      allowChorusFruit: "Controls whether {player} can use chorus fruit"

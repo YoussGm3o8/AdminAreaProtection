@@ -20,6 +20,7 @@ public class OverrideEditHandler extends BaseFormHandler {
 
     public OverrideEditHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
+        validateFormId();
     }
 
     @Override
@@ -92,7 +93,9 @@ public class OverrideEditHandler extends BaseFormHandler {
             Map<String, Boolean> overrides = new HashMap<>();
             int index = 0;
             for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                overrides.put(toggle.getPermissionNode(), response.getToggleResponse(index++));
+                Boolean value = response.getToggleResponse(index);
+                overrides.put(toggle.getPermissionNode(), value != null ? value : false);
+                index++;
             }
 
             // Create updated permissions map

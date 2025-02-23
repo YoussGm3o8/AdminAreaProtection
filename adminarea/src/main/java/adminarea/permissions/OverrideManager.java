@@ -35,6 +35,7 @@ public class OverrideManager implements AutoCloseable {
     private final Object dbLock = new Object(); // Lock for database operations
     private static final int CACHE_SIZE = 1000;
     private static final long CACHE_DURATION = TimeUnit.MINUTES.toMillis(5);
+    private final PermissionChecker permissionChecker;
 
     private record PermissionOverride(
         String target,
@@ -54,6 +55,7 @@ public class OverrideManager implements AutoCloseable {
             .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
             .build();
         this.dataSource = initializeDataSource();
+        this.permissionChecker = new PermissionChecker(plugin);
         
         initializeDatabase();
         setupScheduledTasks();
@@ -480,6 +482,14 @@ public class OverrideManager implements AutoCloseable {
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "set_group_overrides");
         }
+    }
+
+    /**
+     * Gets the permission checker instance.
+     * @return The PermissionChecker instance
+     */
+    public PermissionChecker getPermissionChecker() {
+        return permissionChecker;
     }
 
     @Override

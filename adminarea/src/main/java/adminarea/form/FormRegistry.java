@@ -4,57 +4,71 @@ import java.util.HashMap;
 import java.util.Map;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.constants.FormIds;
 import adminarea.form.handlers.*;
 
 public class FormRegistry {
-    private final Map<String, IFormHandler> handlers = new HashMap<>();
     private final AdminAreaProtectionPlugin plugin;
-    private volatile boolean initialized = false;
+    private final Map<String, IFormHandler> handlers = new HashMap<>();
 
     public FormRegistry(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
     }
 
-    public synchronized void initialize() {
-        if (initialized) {
-            return;
-        }
+    public void initialize() {
+        plugin.debug("Initializing FormRegistry...");
         registerDefaultHandlers();
-        initialized = true;
     }
 
     private void registerDefaultHandlers() {
-        registerHandler(new MainMenuHandler(plugin));
-        registerHandler(new CreateAreaHandler(plugin));
-        registerHandler(new EditAreaHandler(plugin));
-        registerHandler(new DeleteAreaHandler(plugin));
-        registerHandler(new AreaListHandler(plugin));
-        registerHandler(new LuckPermsOverrideHandler(plugin));
-        registerHandler(new PermissionSettingsHandler(plugin));
+        plugin.debug("Registering default form handlers...");
+        try {
+            // Core handlers
+            registerHandler(new MainMenuHandler(plugin));
+            registerHandler(new CreateAreaHandler(plugin));
+            registerHandler(new EditAreaHandler(plugin));
+            registerHandler(new DeleteAreaHandler(plugin));
+            registerHandler(new AreaEditListHandler(plugin));
+            registerHandler(new DeleteConfirmHandler(plugin));
+            
+            // Settings handlers
+            registerHandler(new BasicSettingsHandler(plugin));
+            registerHandler(new BuildingSettingsHandler(plugin));
+            registerHandler(new EnvironmentSettingsHandler(plugin));
+            registerHandler(new EntitySettingsHandler(plugin));
+            registerHandler(new TechnicalSettingsHandler(plugin));
+            registerHandler(new SpecialSettingsHandler(plugin));
+            registerHandler(new PluginSettingsHandler(plugin));
+            
+            // LuckPerms integration handlers
+            registerHandler(new LuckPermsSettingsHandler(plugin));
+            registerHandler(new PlayerSettingsHandler(plugin));
+            registerHandler(new GroupPermissionsHandler(plugin));
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Registered handlers: " + handlers.keySet());
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error registering handlers", e);
+        }
     }
 
-    public synchronized void registerHandler(IFormHandler handler) {
-        if (handler == null || handler.getFormId() == null || handler.getFormId().trim().isEmpty()) {
-            throw new IllegalArgumentException("Handler or its form ID is invalid");
-        }
-        
+    private void registerHandler(IFormHandler handler) {
         String formId = handler.getFormId();
-        if (handlers.containsKey(formId)) {
-            plugin.getLogger().debug("Handler already exists for form ID: " + formId + ", skipping registration");
-            return;
+        if (formId == null || formId.trim().isEmpty()) {
+            throw new IllegalStateException("Form handler must provide a non-null, non-empty formId");
         }
-        
         handlers.put(formId, handler);
-        if (plugin.isDebugMode()) {
-            plugin.debug("Registered form handler: " + handler.getClass().getSimpleName() + " for ID: " + formId);
-        }
     }
 
     public IFormHandler getHandler(String formId) {
         return handlers.get(formId);
     }
 
-    public void clearHandlers() {
-        handlers.clear();
+    @Override
+    public String toString() {
+        return "FormRegistry{" +
+                "handlers=" + handlers.keySet() +
+                '}';
     }
 }

@@ -18,16 +18,16 @@ import org.json.JSONObject;
 import java.util.List;
 import java.util.Map;
 
-public class TechnicalSettingsHandler extends BaseFormHandler {
+public class SpecialSettingsHandler extends BaseFormHandler {
 
-    public TechnicalSettingsHandler(AdminAreaProtectionPlugin plugin) {
+    public SpecialSettingsHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
         validateFormId();
     }
 
     @Override
     public String getFormId() {
-        return FormIds.TECHNICAL_SETTINGS;
+        return FormIds.SPECIAL_SETTINGS;
     }
 
     @Override
@@ -39,17 +39,17 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom("Technical Settings: " + area.getName());
+        FormWindowCustom form = new FormWindowCustom("Special Settings: " + area.getName());
         
         // Add header with clear instructions
-        form.addElement(new ElementLabel("§2Configure Technical Permissions\n§7Toggle settings below"));
+        form.addElement(new ElementLabel("§2Configure Special Permissions\n§7Toggle settings below"));
         
         // Get area settings
         AreaDTO dto = area.toDTO();
         JSONObject settings = dto.settings();
 
         // Add toggles for this category
-        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.TECHNICAL);
+        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
         if (toggles != null) {
             for (PermissionToggle toggle : toggles) {
                 String description = plugin.getLanguageManager().get(
@@ -75,7 +75,7 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
             JSONObject updatedSettings = new JSONObject(currentDTO.settings());
 
             // Get category toggles
-            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.TECHNICAL);
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
             if (toggles == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
                 plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
@@ -108,7 +108,7 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling technical settings", e);
+            plugin.getLogger().error("Error handling special settings", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
             plugin.getGuiManager().openMainMenu(player);
         }
@@ -116,7 +116,7 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        // Technical settings only use custom form responses
+        // Special settings only use custom form responses
         plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
     }
 

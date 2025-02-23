@@ -164,7 +164,7 @@ public class WandListener implements Listener {
 
         // Notify if both positions are set
         if (positions[0] != null && positions[1] != null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.selectionComplete"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.selectionComplete"));
         }
 
         // Start or update visualization
@@ -292,7 +292,7 @@ public class WandListener implements Listener {
 
     private boolean isHoldingWand(Player player) {
         Item item = player.getInventory().getItemInHand();
-        return item.hasCustomName() && "§aArea Wand".equals(item.getCustomName());
+        return item.hasCustomName() && "§bArea Wand".equals(item.getCustomName());
     }
 
     private boolean isOnCooldown(Player player) {

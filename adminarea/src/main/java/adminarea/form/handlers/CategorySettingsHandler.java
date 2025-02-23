@@ -4,26 +4,29 @@ import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
-import adminarea.constants.AdminAreaConstants;
-import adminarea.data.FormTrackingData;
-import adminarea.form.IFormHandler;
+import adminarea.constants.FormIds;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
+import cn.nukkit.form.element.ElementLabel;
+import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
+import cn.nukkit.form.window.FormWindowCustom;
+import org.json.JSONObject;
 
 import java.util.List;
 import java.util.Map;
 
-import org.json.JSONObject;
-
 public class CategorySettingsHandler extends BaseFormHandler {
     private final String formId;
+    private final PermissionToggle.Category category;
 
     public CategorySettingsHandler(AdminAreaProtectionPlugin plugin, String formId) {
         super(plugin);
         this.formId = formId;
+        this.category = getCategoryFromFormId(formId);
+        validateFormId();
     }
 
     @Override
@@ -31,84 +34,112 @@ public class CategorySettingsHandler extends BaseFormHandler {
         return formId;
     }
 
-    @Override
-    public FormWindow createForm(Player player) {
-        FormTrackingData formData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        String areaName = formData != null ? formData.getFormId() : null;
-        Area area = plugin.getArea(areaName);
-        
-        if (area == null) {
-            return null;
-        }
-
-        PermissionToggle.Category category = getCategoryFromFormId(formId);
-        return plugin.getGuiManager().createCategoryForm(area, category);
+    @Override 
+    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
+        // Category settings only use custom form responses
+        plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
     }
 
     @Override
-    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        // Category settings only use custom forms
-        throw new UnsupportedOperationException("Category settings only support custom forms");
+    public FormWindow createForm(Player player) {
+        return createForm(player, getEditingArea(player));
+    }
+
+    @Override
+    public FormWindow createForm(Player player, Area area) {
+        if (area == null) return null;
+
+        FormWindowCustom form = new FormWindowCustom(category.getDisplayName() + ": " + area.getName());
+        
+        // Add header with clear instructions
+        form.addElement(new ElementLabel("§2Configure " + category.getDisplayName() + " Permissions\n§7Toggle settings below"));
+        
+        // Get area settings
+        AreaDTO dto = area.toDTO();
+        JSONObject settings = dto.settings();
+
+        // Add toggles for this category
+        List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
+        if (categoryToggles != null) {
+            for (PermissionToggle toggle : categoryToggles) {
+                String description = plugin.getLanguageManager().get(
+                    "gui.permissions.toggles." + toggle.getPermissionNode());
+                form.addElement(new ElementToggle(
+                    toggle.getDisplayName() + "\n§7" + description,
+                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                ));
+            }
+        }
+        
+        return form;
     }
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
-        FormTrackingData formData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        Area area = plugin.getArea(formData != null ? formData.getFormId() : null);
-        
-        if (area == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
-            return;
-        }
+        try {
+            Area area = getEditingArea(player);
+            if (area == null) return;
 
-        processCategorySettings(player, response, area);
+            // Get current DTO
+            AreaDTO currentDTO = area.toDTO();
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
+
+            // Get category toggles
+            List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
+            if (categoryToggles == null) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+                return;
+            }
+
+            // Skip header label element (index 0)
+            // Process each toggle starting at index 1
+            for (int i = 0; i < categoryToggles.size(); i++) {
+                Boolean value = response.getToggleResponse(i + 1);
+                if (value == null) {
+                    player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidForm"));
+                    plugin.getGuiManager().openFormById(player, getFormId(), area);
+                    return;
+                }
+                updatedSettings.put(categoryToggles.get(i).getPermissionNode(), value);
+            }
+
+            // Create updated area
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .settings(updatedSettings)
+                .build();
+
+            // Save changes
+            plugin.updateArea(updatedArea); 
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
+                Map.of("area", area.getName())));
+
+            // Return to edit menu
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+
+        } catch (Exception e) {
+            plugin.getLogger().error("Error handling category settings", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+            plugin.getGuiManager().openMainMenu(player);
+        }
     }
 
-
-    private void processCategorySettings(Player player, FormResponseCustom customResponse, Area area) {
-        try {
-            PermissionToggle.Category category = getCategoryFromFormId(formId);
-            List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
-
-            if (categoryToggles != null) {
-                // Get current area data
-                AreaDTO currentDTO = area.toDTO();
-                
-                // Create new settings object based on current settings
-                JSONObject updatedSettings = new JSONObject(currentDTO.settings());
-                
-                // Process toggle settings
-                int toggleIndex = 1;
-                for (PermissionToggle toggle : categoryToggles) {
-                    boolean value = customResponse.getToggleResponse(toggleIndex++);
-                    updatedSettings.put(toggle.getPermissionNode(), value);
-                }
-                
-                // Create updated area using builder
-                Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                    .settings(updatedSettings)
-                    .build();
-                
-                // Update area in plugin
-                plugin.updateArea(updatedArea);
-                player.sendMessage(plugin.getLanguageManager().get("messages.settingsUpdated"));
-                
-                // Return to area edit menu
-                plugin.getGuiManager().openAreaSettings(player, updatedArea);
-            }
-        } catch (Exception e) {
-            plugin.getLogger().error("Failed to save category settings", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+    private Area getEditingArea(Player player) {
+        var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (areaData == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
+            return null;
         }
+        return plugin.getArea(areaData.getFormId());
     }
 
     private PermissionToggle.Category getCategoryFromFormId(String formId) {
         return switch (formId) {
-            case AdminAreaConstants.FORM_BUILDING_SETTINGS -> PermissionToggle.Category.BUILDING;
-            case AdminAreaConstants.FORM_ENVIRONMENT_SETTINGS -> PermissionToggle.Category.ENVIRONMENT;
-            case AdminAreaConstants.FORM_ENTITY_SETTINGS -> PermissionToggle.Category.ENTITY;
-            case AdminAreaConstants.FORM_TECHNICAL_SETTINGS -> PermissionToggle.Category.TECHNICAL;
-            case AdminAreaConstants.FORM_SPECIAL_SETTINGS -> PermissionToggle.Category.SPECIAL;
+            case FormIds.BUILDING_SETTINGS -> PermissionToggle.Category.BUILDING;
+            case FormIds.ENVIRONMENT_SETTINGS -> PermissionToggle.Category.ENVIRONMENT;
+            case FormIds.ENTITY_SETTINGS -> PermissionToggle.Category.ENTITY;
+            case FormIds.TECHNICAL_SETTINGS -> PermissionToggle.Category.TECHNICAL;
+            case FormIds.SPECIAL_SETTINGS -> PermissionToggle.Category.SPECIAL;
             default -> throw new IllegalStateException("Unknown category form ID: " + formId);
         };
     }

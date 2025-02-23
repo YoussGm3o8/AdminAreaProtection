@@ -35,13 +35,13 @@ import adminarea.listeners.WandListener;
 import adminarea.managers.AreaManager;
 import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
-import adminarea.managers.GuiSubmitManager;
 import adminarea.managers.LanguageManager;
 import adminarea.permissions.OverrideManager;  // Updated import path
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
 import adminarea.area.AreaSerializer;
 import adminarea.config.ConfigManager;
+import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.event.LuckPermsGroupChangeEvent;
@@ -50,7 +50,6 @@ import adminarea.util.PerformanceMonitor;
 import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
 import adminarea.exception.DatabaseException;
-import adminarea.form.FormFactory;
 import adminarea.form.FormRegistry;
 import adminarea.permissions.LuckPermsCache;
 import adminarea.permissions.PermissionToggle;
@@ -73,24 +72,19 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     private AreaManager areaManager;
     private PerformanceMonitor performanceMonitor; // Add performance monitor
     private GuiManager guiManager;
-    private GuiSubmitManager guiSubmitManager;
 
     private WandListener wandListener; // Add WandListener
 
     private boolean enableMessages;
     private LanguageManager languageManager;
 
-    private boolean debugMode = false;
-
-    private FormFactory formFactory;
+    private boolean debugMode = false;  // Change initial value to false
 
     private LuckPermsCache luckPermsCache;
 
     private ValidationUtils validationUtils;
 
     private FormRegistry formRegistry;
-    
-    private AreaSerializer areaSerializer;
     
         /**
          * Initializes the plugin, loads configuration, and sets up required components.
@@ -111,6 +105,12 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 // Initialize config manager first
                 configManager = new ConfigManager(this);
                 configManager.load();
+    
+                // Set debug mode right after config load
+                debugMode = configManager.getBoolean("debug", false);
+                if (debugMode) {
+                    getLogger().info("Debug mode enabled from config");
+                }
     
                 // Ensure data folder exists and copy config.yml if missing
                 if (!getDataFolder().exists()) {
@@ -181,14 +181,20 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     return;
                 }
     
-                // Initialize FormRegistry before GUI components
+                // Initialize FormRegistry before GUI manager
                 formRegistry = new FormRegistry(this);
                 formRegistry.initialize();
+                
+                // Verify handlers were registered
+                if (formRegistry.getHandler(FormIds.MAIN_MENU) == null) {
+                    getLogger().error("MainMenuHandler was not registered!");
+                }
+                if (formRegistry.getHandler(FormIds.CREATE_AREA) == null) {
+                    getLogger().error("CreateAreaHandler was not registered!");
+                }
     
-                // Initialize GUI managers
-                formFactory = new FormFactory(this);
+                // Initialize GUI managers after form registry
                 guiManager = new GuiManager(this);
-                guiSubmitManager = new GuiSubmitManager(this);
     
                 wandListener = new WandListener(this); // Initialize WandListener
     
@@ -210,6 +216,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getServer().getPluginManager().registerEvents(new VehicleListener(this, protectionListener), this);
     
                 // Initialize AreaCommand
+    
                 areaCommand = new AreaCommand(this);
     
                 // Register the command
@@ -263,11 +270,13 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          * Reloads configuration values from disk and updates cached settings.
          */
         public void reloadConfigValues() {
-            enableMessages = configManager.isEnabled("enableMessages");
-            debugMode = configManager.isEnabled("debug");
+            // Make debug mode update first
+            debugMode = configManager.getBoolean("debug", false);
             if (debugMode) {
-                getLogger().info("Debug mode enabled");
+                getLogger().info("Debug mode reloaded: enabled");
             }
+            enableMessages = configManager.isEnabled("enableMessages");
+            // ...existing code...
         }
     
         public ConfigManager getConfigManager() {
@@ -288,6 +297,16 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 }
                 if (!(sender instanceof Player)) {
                     sender.sendMessage("§cThis command can only be used by players!");
+                    return true;
+                }
+                Player player = (Player) sender;
+                if (args.length == 0) {
+                    // Only open main menu if there's no current form tracking data
+                    if (!formIdMap.containsKey(player.getName())) {
+                        formIdMap.put(player.getName(), 
+                            new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
+                        guiManager.openMainMenu(player);
+                    }
                     return true;
                 }
                 return areaCommand.execute(sender, label, args);
@@ -466,110 +485,147 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     
         public void saveArea(Area area) {
             if (area == null) return;
-            // Save area to configuration
-            this.getConfig().set("areas." + area.getName(), AreaSerializer.serialize(area));
-        this.saveConfig();
-    }
+            
+            try {
+                // Save area to database instead of config
+                dbManager.saveArea(area);
+                // Add to area manager
+                areaManager.addArea(area);
+                if (isDebugMode()) {
+                    debug("Area saved successfully: " + area.getName());
+                }
+            } catch (DatabaseException e) {
+                getLogger().error("Failed to save area: " + area.getName(), e);
+                throw new RuntimeException("Could not save area", e);
+            }
+        }
     
-    public void updateArea(Area area) {
-        // Update the area in your storage system
-        getAreaManager().updateArea(area);
-        // Trigger any necessary updates or events
-    }
-
-    // Add getter for GUI manager
-    public GuiManager getGuiManager() {
-        return guiManager;
-    }
-
-    public WandListener getWandListener() {
-        return wandListener;
-    }
-
-    public void setDebugMode(boolean enabled) {
-        this.debugMode = enabled;
-        getLogger().info("Debug mode " + (enabled ? "enabled" : "disabled"));
-    }
-
-    public boolean isDebugMode() {
-        return debugMode;
-    }
-
-    public LanguageManager getLanguageManager() {
-        return languageManager;
-    }
-
-    public void debug(String message) {
-        if (debugMode) {
-            getLogger().debug("[Debug] " + message);
-        }
-    }
-
-    public FormFactory getFormFactory() {
-        return formFactory;
-    }
-
-    public boolean isLuckPermsEnabled() {
-        return luckPermsApi != null && luckPermsCache != null;
-    }
-
-    public List<String> getGroupsByTrack(String trackName) {
-        if (!isLuckPermsEnabled()) return Collections.emptyList();
-        return new ArrayList<>(luckPermsCache.getTrackGroups(trackName));
-    }
-
-    public List<String> getGroupInheritance(String groupName) {
-        if (!isLuckPermsEnabled()) return Collections.emptyList();
-        return luckPermsCache.getInheritanceChain(groupName);
-    }
-
-    /**
-     * Gets the plugin's override manager.
-     * @return The OverrideManager instance
-     */
-    public OverrideManager getOverrideManager() {
-        return overrideManager;
-    }
-
-    /**
-     * Gets the validation utilities instance.
-     * @return The ValidationUtils instance
-     */
-    public ValidationUtils getValidationUtils() {
-        return validationUtils;
-    }
-
-    public boolean hasValidSelection(Player player) {
-        Position[] positions = playerPositions.get(player.getName());
-        return positions != null && positions[0] != null && positions[1] != null;
-    }
-
-    public Map<String, Object> getPlayerSelection(Player player) {
-        Position[] positions = playerPositions.get(player.getName());
-        if (!hasValidSelection(player)) {
-            return null;
+        public void updateArea(Area area) {
+            // Update the area in your storage system
+            getAreaManager().updateArea(area);
+            // Trigger any necessary updates or events
         }
 
-        Map<String, Object> selection = new HashMap<>();
-        selection.put("x1", positions[0].getFloorX());
-        selection.put("x2", positions[1].getFloorX());
-        selection.put("y1", positions[0].getFloorY());
-        selection.put("y2", positions[1].getFloorY());
-        selection.put("z1", positions[0].getFloorZ());
-        selection.put("z2", positions[1].getFloorZ());
-        return selection;
-    }
+        // Add getter for GUI manager
+        public GuiManager getGuiManager() {
+            return guiManager;
+        }
 
-    /**
-     * Gets the form registry instance
-     * @return The FormRegistry instance
-     */
-    public FormRegistry getFormRegistry() {
-        return formRegistry;
-    }
+        public WandListener getWandListener() {
+            return wandListener;
+        }
 
-    public GuiSubmitManager getGuiSubmitManager() {
-        return guiSubmitManager;
-    }
+        public void setDebugMode(boolean enabled) {
+            this.debugMode = enabled;
+            getLogger().info("Debug mode " + (enabled ? "enabled" : "disabled"));
+        }
+
+        public boolean isDebugMode() {
+            return debugMode;
+        }
+
+        public LanguageManager getLanguageManager() {
+            return languageManager;
+        }
+
+        public void debug(String message) {
+            if (debugMode) {
+                getLogger().info("[Debug] " + message); // Change to info instead of debug
+            }
+        }
+
+        public boolean isLuckPermsEnabled() {
+            return luckPermsApi != null && luckPermsCache != null;
+        }
+
+        public List<String> getGroupsByTrack(String trackName) {
+            if (!isLuckPermsEnabled()) return Collections.emptyList();
+            return new ArrayList<>(luckPermsCache.getTrackGroups(trackName));
+        }
+
+        public List<String> getGroupInheritance(String groupName) {
+            if (!isLuckPermsEnabled()) return Collections.emptyList();
+            return luckPermsCache.getInheritanceChain(groupName);
+        }
+
+        /**
+         * Gets the plugin's override manager.
+         * @return The OverrideManager instance
+         */
+        public OverrideManager getOverrideManager() {
+            return overrideManager;
+        }
+
+        /**
+         * Gets the validation utilities instance.
+         * @return The ValidationUtils instance
+         */
+        public ValidationUtils getValidationUtils() {
+            return validationUtils;
+        }
+
+        public boolean hasValidSelection(Player player) {
+            Position[] positions = playerPositions.get(player.getName());
+            return positions != null && positions[0] != null && positions[1] != null;
+        }
+
+        public Map<String, Object> getPlayerSelection(Player player) {
+            Position[] positions = playerPositions.get(player.getName());
+            if (!hasValidSelection(player)) {
+                return null;
+            }
+
+            Map<String, Object> selection = new HashMap<>();
+            selection.put("x1", positions[0].getFloorX());
+            selection.put("x2", positions[1].getFloorX());
+            selection.put("y1", positions[0].getFloorY());
+            selection.put("y2", positions[1].getFloorY());
+            selection.put("z1", positions[0].getFloorZ());
+            selection.put("z2", positions[1].getFloorZ());
+            return selection;
+        }
+
+        /**
+         * Gets the form registry instance
+         * @return The FormRegistry instance
+         */
+        public FormRegistry getFormRegistry() {
+            return formRegistry;
+        }
+
+        public boolean isPlayerInTrack(Player player, String trackName) {
+            if (!isLuckPermsEnabled() || player == null || trackName == null) {
+                return false;
+            }
+            
+            try {
+                var user = luckPermsApi.getUserManager().getUser(player.getUniqueId());
+                if (user == null) return false;
+                
+                var track = luckPermsApi.getTrackManager().getTrack(trackName);
+                if (track == null) return false;
+                
+                // Check if player has any group in this track
+                String currentGroup = user.getPrimaryGroup();
+                return track.getGroups().contains(currentGroup);
+            } catch (Exception e) {
+                getLogger().error("Error checking track membership", e);
+                return false;
+            }
+        }
+
+        public String getPrimaryGroup(Player player) {
+            if (!isLuckPermsEnabled() || player == null) {
+                return null;
+            }
+            
+            try {
+                var user = luckPermsApi.getUserManager().getUser(player.getUniqueId());
+                return user != null ? user.getPrimaryGroup() : null;
+            } catch (Exception e) {
+                getLogger().error("Error getting primary group", e);
+                return null;
+            }
+        }
 
 }

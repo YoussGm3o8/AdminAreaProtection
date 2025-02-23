@@ -8,6 +8,7 @@ import cn.nukkit.event.Listener;
 import cn.nukkit.event.player.PlayerDropItemEvent;
 import cn.nukkit.event.inventory.InventoryPickupItemEvent;
 import io.micrometer.core.instrument.Timer;
+import cn.nukkit.level.Position;
 
 public class ItemListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
@@ -22,9 +23,21 @@ public class ItemListener implements Listener {
     public void onItemDrop(PlayerDropItemEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            if (protectionListener.handleProtection(event.getPlayer(), event.getPlayer(), "item_drop")) {
+            Player player = event.getPlayer();
+            Position dropPos = player.getPosition();
+            
+            // Get area at position
+            var area = plugin.getHighestPriorityArea(
+                dropPos.getLevel().getName(),
+                dropPos.getX(),
+                dropPos.getY(),
+                dropPos.getZ()
+            );
+            
+            // Check permission using the permission checker
+            if (area != null && !plugin.getOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemDrop")) {
                 event.setCancelled(true);
-                protectionListener.sendProtectionMessage(event.getPlayer(), "messages.protection.itemDrop");
+                protectionListener.sendProtectionMessage(player, "messages.protection.itemDrop");
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "item_drop_check");
@@ -35,10 +48,22 @@ public class ItemListener implements Listener {
     public void onItemPickup(InventoryPickupItemEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            if (event.getInventory().getHolder() instanceof Player player &&
-                protectionListener.handleProtection(event.getItem(), player, "item_pickup")) {
-                event.setCancelled(true);
-                protectionListener.sendProtectionMessage(player, "messages.protection.itemPickup");
+            if (event.getInventory().getHolder() instanceof Player player) {
+                Position itemPos = event.getItem().getPosition();
+                
+                // Get area at position
+                var area = plugin.getHighestPriorityArea(
+                    itemPos.getLevel().getName(),
+                    itemPos.getX(),
+                    itemPos.getY(),
+                    itemPos.getZ()
+                );
+                
+                // Check permission using the permission checker
+                if (area != null && !plugin.getOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemPickup")) {
+                    event.setCancelled(true);
+                    protectionListener.sendProtectionMessage(player, "messages.protection.itemPickup");
+                }
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "item_pickup_check");

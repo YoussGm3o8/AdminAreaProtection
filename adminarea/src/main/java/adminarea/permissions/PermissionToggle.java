@@ -438,12 +438,34 @@ public class PermissionToggle implements AutoCloseable {
     // Returns the default player-relevant toggles for LuckPerms overrides
     public static PermissionToggle[] getPlayerToggles() {
         return new PermissionToggle[] {
-            new PermissionToggle("Allow PvP", "allowPvP", true, Category.ENTITY),
-            new PermissionToggle("Allow Block Break", "allowBlockBreak", true, Category.BUILDING),
-            new PermissionToggle("Allow Block Place", "allowBlockPlace", true, Category.BUILDING),
-            new PermissionToggle("Allow Object Interaction", "allowInteract", true, Category.BUILDING),
-            new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL),
-            new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL)
+            // Building toggles
+            new PermissionToggle("Block Breaking", "allowBlockBreak", false, Category.BUILDING),
+            new PermissionToggle("Block Placement", "allowBlockPlace", false, Category.BUILDING),
+            new PermissionToggle("Interact", "allowInteract", false, Category.BUILDING),
+            new PermissionToggle("Container Access", "allowContainer", false, Category.BUILDING),
+            new PermissionToggle("Item Frames", "allowItemFrame", false, Category.BUILDING),
+            new PermissionToggle("Armor Stands", "allowArmorStand", false, Category.BUILDING),
+
+            // Entity toggles
+            new PermissionToggle("PvP", "allowPvP", false, Category.ENTITY),
+            new PermissionToggle("Entity Damage", "allowDamageEntities", false, Category.ENTITY),
+            new PermissionToggle("Breeding", "allowBreeding", true, Category.ENTITY),
+            new PermissionToggle("Leashing", "allowLeashing", true, Category.ENTITY),
+            new PermissionToggle("Taming", "allowTaming", true, Category.ENTITY),
+            new PermissionToggle("Shoot Projectiles", "allowShootProjectile", false, Category.ENTITY),
+
+            // Items & Drops toggles
+            new PermissionToggle("Drop Items", "allowItemDrop", true, Category.ITEMS),
+            new PermissionToggle("Pickup Items", "allowItemPickup", true, Category.ITEMS),
+            new PermissionToggle("Pickup XP", "allowXPPickup", true, Category.ITEMS),
+
+            // Special toggles
+            new PermissionToggle("Flight", "allowFlight", false, Category.SPECIAL),
+            new PermissionToggle("Ender Pearl", "allowEnderPearl", false, Category.SPECIAL),
+            new PermissionToggle("Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
+            new PermissionToggle("Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL)
         };
     }
 
@@ -451,6 +473,7 @@ public class PermissionToggle implements AutoCloseable {
         BUILDING("Building"),
         ENVIRONMENT("Environment"),
         ENTITY("Entity Controls"),
+        ITEMS("Items & Drops"),
         TECHNICAL("Redstone & Mechanics"),
         SPECIAL("Special Permissions");
 
@@ -467,67 +490,72 @@ public class PermissionToggle implements AutoCloseable {
 
     public static Map<Category, List<PermissionToggle>> getTogglesByCategory() {
         Map<Category, List<PermissionToggle>> toggles = new EnumMap<>(Category.class);
-    
+
         // Building toggles
         toggles.put(Category.BUILDING, Arrays.asList(
-            new PermissionToggle("Allow Building", PERM_BUILD, false, Category.BUILDING),
-            new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING),
-            new PermissionToggle("Allow Interaction", PERM_INTERACT, false, Category.BUILDING),
-            new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
-            new PermissionToggle("Allow Item Frame Access", "allowItemFrame", false, Category.BUILDING),
-            new PermissionToggle("Allow Armor Stand Access", "allowArmorStand", false, Category.BUILDING)
+            new PermissionToggle("Block Breaking", "allowBlockBreak", false, Category.BUILDING),
+            new PermissionToggle("Block Placement", "allowBlockPlace", false, Category.BUILDING),
+            new PermissionToggle("Interact", "allowInteract", false, Category.BUILDING),
+            new PermissionToggle("Container Access", "allowContainer", false, Category.BUILDING),
+            new PermissionToggle("Item Frames", "allowItemFrame", false, Category.BUILDING),
+            new PermissionToggle("Armor Stands", "allowArmorStand", false, Category.BUILDING)
         ));
-    
+
         // Environment toggles
         toggles.put(Category.ENVIRONMENT, Arrays.asList(
-            new PermissionToggle("Allow Fire Spread", "allowFire", false, Category.ENVIRONMENT),
-            new PermissionToggle("Allow Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT),
-            new PermissionToggle("Allow Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT),
-            new PermissionToggle("Allow Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT),
-            new PermissionToggle("Allow Ice Form", "allowIceForm", true, Category.ENVIRONMENT),
-            new PermissionToggle("Allow Snow Form", "allowSnowForm", true, Category.ENVIRONMENT)
+            new PermissionToggle("Fire Spread", "allowFire", false, Category.ENVIRONMENT),
+            new PermissionToggle("Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT),
+            new PermissionToggle("Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT),
+            new PermissionToggle("Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT),
+            new PermissionToggle("Ice Formation", "allowIceForm", true, Category.ENVIRONMENT),
+            new PermissionToggle("Snow Formation", "allowSnowForm", true, Category.ENVIRONMENT)
         ));
-    
+
         // Entity toggles
         toggles.put(Category.ENTITY, Arrays.asList(
-            new PermissionToggle("Allow PvP", "allowPvP", false, Category.ENTITY),
-            new PermissionToggle("Allow Monster Spawning", "allowMonsterSpawn", false, Category.ENTITY),
-            new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY),
-            new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY),
-            new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY),
-            new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY),
-            new PermissionToggle("Allow Leashing", "allowLeashing", true, Category.ENTITY)
+            new PermissionToggle("PvP", "allowPvP", false, Category.ENTITY),
+            new PermissionToggle("Monster Spawn", "allowMonsterSpawn", false, Category.ENTITY),
+            new PermissionToggle("Animal Spawn", "allowAnimalSpawn", true, Category.ENTITY),
+            new PermissionToggle("Entity Damage", "allowDamageEntities", false, Category.ENTITY),
+            new PermissionToggle("Breeding", "allowBreeding", true, Category.ENTITY),
+            new PermissionToggle("Monster Targeting", "allowMonsterTarget", false, Category.ENTITY),
+            new PermissionToggle("Leashing", "allowLeashing", true, Category.ENTITY),
+            new PermissionToggle("Shoot Projectiles", "allowShootProjectile", false, Category.ENTITY)
         ));
-    
+
+        // Items & Drops toggles
+        toggles.put(Category.ITEMS, Arrays.asList(
+            new PermissionToggle("Drop Items", "allowItemDrop", true, Category.ITEMS),
+            new PermissionToggle("Pickup Items", "allowItemPickup", true, Category.ITEMS),
+            new PermissionToggle("XP Drop", "allowXPDrop", true, Category.ITEMS),
+            new PermissionToggle("XP Pickup", "allowXPPickup", true, Category.ITEMS)
+        ));
+
         // Technical toggles
         toggles.put(Category.TECHNICAL, Arrays.asList(
-            new PermissionToggle("Allow Redstone", "allowRedstone", true, Category.TECHNICAL),
-            new PermissionToggle("Allow Pistons", "allowPistons", true, Category.TECHNICAL),
-            new PermissionToggle("Allow Hoppers", "allowHopper", true, Category.TECHNICAL),
-            new PermissionToggle("Allow Dispensers", "allowDispenser", true, Category.TECHNICAL)
+            new PermissionToggle("Redstone", "allowRedstone", true, Category.TECHNICAL),
+            new PermissionToggle("Pistons", "allowPistons", true, Category.TECHNICAL),
+            new PermissionToggle("Hoppers", "allowHopper", true, Category.TECHNICAL),
+            new PermissionToggle("Dispensers", "allowDispenser", true, Category.TECHNICAL)
         ));
-    
+
         // Special toggles
         toggles.put(Category.SPECIAL, Arrays.asList(
-            new PermissionToggle("Allow Item Drops", "allowItemDrop", true, Category.SPECIAL),
-            new PermissionToggle("Allow Item Pickup", "allowItemPickup", true, Category.SPECIAL),
-            new PermissionToggle("Allow XP Drops", "allowXPDrop", true, Category.SPECIAL),
-            new PermissionToggle("Allow XP Pickup", "allowXPPickup", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Collision", "allowVehicleCollide", true, Category.SPECIAL),
-            new PermissionToggle("Allow TNT", "allowTNT", false, Category.SPECIAL),
-            new PermissionToggle("Allow Creeper", "allowCreeper", false, Category.SPECIAL),
-            new PermissionToggle("Allow Bed Explosions", "allowBedExplosion", false, Category.SPECIAL),
-            new PermissionToggle("Allow Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL),
-            new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL),
-            new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL),
-            new PermissionToggle("Allow Flight", "allowFlight", false, Category.SPECIAL),
-            new PermissionToggle("Allow Ender Pearl", "allowEnderPearl", false, Category.SPECIAL),
-            new PermissionToggle("Allow Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL)
+            new PermissionToggle("TNT", "allowTNT", false, Category.SPECIAL),
+            new PermissionToggle("Creeper Damage", "allowCreeper", false, Category.SPECIAL),
+            new PermissionToggle("Bed Explosions", "allowBedExplosion", false, Category.SPECIAL),
+            new PermissionToggle("Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
+            new PermissionToggle("Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
+            new PermissionToggle("Vehicle Collide", "allowVehicleCollide", true, Category.SPECIAL),
+            new PermissionToggle("Fall Damage", "allowFallDamage", true, Category.SPECIAL),
+            new PermissionToggle("Hunger", "allowHunger", true, Category.SPECIAL),
+            new PermissionToggle("Flight", "allowFlight", false, Category.SPECIAL),
+            new PermissionToggle("Ender Pearl", "allowEnderPearl", false, Category.SPECIAL),
+            new PermissionToggle("Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL)
         ));
-    
+
         return toggles;
     }
 
@@ -631,7 +659,17 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY),
             new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY),
             new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY),
-            new PermissionToggle("Allow Leashing", "allowLeashing", true, Category.ENTITY)
+            new PermissionToggle("Allow Leashing", "allowLeashing", true, Category.ENTITY),
+            new PermissionToggle("Allow Taming", "allowTaming", true, Category.ENTITY),
+            new PermissionToggle("Allow Shoot Projectile", "allowShootProjectile", false, Category.ENTITY)
+        ));
+        
+        // Items & Drops toggles
+        TOGGLE_MAP.put(Category.ITEMS, Arrays.asList(
+            new PermissionToggle("Allow Item Drops", "allowItemDrop", true, Category.ITEMS),
+            new PermissionToggle("Allow Item Pickup", "allowItemPickup", true, Category.ITEMS),
+            new PermissionToggle("Allow XP Drops", "allowXPDrop", true, Category.ITEMS),
+            new PermissionToggle("Allow XP Pickup", "allowXPPickup", true, Category.ITEMS)
         ));
         
         // Technical toggles
@@ -642,20 +680,16 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Dispensers", "allowDispenser", true, Category.TECHNICAL)
         ));
         
-        // Special toggles - Add missing toggles here
+        // Special toggles
         TOGGLE_MAP.put(Category.SPECIAL, Arrays.asList(
-            new PermissionToggle("Allow Item Drops", "allowItemDrop", true, Category.SPECIAL),
-            new PermissionToggle("Allow Item Pickup", "allowItemPickup", true, Category.SPECIAL),
-            new PermissionToggle("Allow XP Drops", "allowXPDrop", true, Category.SPECIAL),
-            new PermissionToggle("Allow XP Pickup", "allowXPPickup", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Collision", "allowVehicleCollide", true, Category.SPECIAL),
             new PermissionToggle("Allow TNT", "allowTNT", false, Category.SPECIAL),
             new PermissionToggle("Allow Creeper", "allowCreeper", false, Category.SPECIAL),
             new PermissionToggle("Allow Bed Explosions", "allowBedExplosion", false, Category.SPECIAL),
             new PermissionToggle("Allow Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL),
+            new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
+            new PermissionToggle("Allow Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
+            new PermissionToggle("Allow Vehicle Collision", "allowVehicleCollide", true, Category.SPECIAL),
             new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL),
             new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL),
             new PermissionToggle("Allow Flight", "allowFlight", false, Category.SPECIAL),

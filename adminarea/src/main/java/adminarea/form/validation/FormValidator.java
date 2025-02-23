@@ -1,5 +1,6 @@
 package adminarea.form.validation;
 
+import adminarea.constants.FormIds;
 import adminarea.constants.AdminAreaConstants;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
@@ -34,20 +35,16 @@ public class FormValidator {
         }
 
         return switch (formType) {
-            case AdminAreaConstants.FORM_CREATE_AREA -> validateCreateAreaForm(response);
-            case AdminAreaConstants.FORM_EDIT_AREA -> validateEditAreaForm(response);
-            case AdminAreaConstants.FORM_BASIC_SETTINGS -> {
-                String name = response.getInputResponse(1);
-                ValidationResult nameResult = validateAreaName(name);
-                yield !nameResult.isValid() ? nameResult : validatePriority(response.getInputResponse(2));
-            }
-            case AdminAreaConstants.FORM_PROTECTION_SETTINGS -> validateProtectionSettingsForm(response);
-            case AdminAreaConstants.FORM_BUILDING_SETTINGS -> validateCategoryForm(response);
-            case AdminAreaConstants.FORM_ENVIRONMENT_SETTINGS -> validateCategoryForm(response);
-            case AdminAreaConstants.FORM_ENTITY_SETTINGS -> validateCategoryForm(response);
-            case AdminAreaConstants.FORM_TECHNICAL_SETTINGS -> validateCategoryForm(response);
-            case AdminAreaConstants.FORM_SPECIAL_SETTINGS -> validateCategoryForm(response);
-            case AdminAreaConstants.FORM_GROUP_PERMISSIONS -> validateGroupPermissionsForm(response);
+            case FormIds.CREATE_AREA -> validateCreateAreaForm(response);
+            case FormIds.EDIT_AREA -> validateEditAreaForm(response);
+            case FormIds.BASIC_SETTINGS -> validateBasicSettingsForm(response);
+            case FormIds.PROTECTION_SETTINGS -> validateProtectionSettingsForm(response);
+            case FormIds.BUILDING_SETTINGS, 
+                 FormIds.ENVIRONMENT_SETTINGS,
+                 FormIds.ENTITY_SETTINGS,
+                 FormIds.TECHNICAL_SETTINGS,
+                 FormIds.SPECIAL_SETTINGS -> validateCategoryForm(response);
+            case FormIds.GROUP_PERMISSIONS -> validateGroupPermissionsForm(response);
             default -> ValidationResult.success();
         };
     }
@@ -83,10 +80,16 @@ public class FormValidator {
 
     private static String getRequiredPermission(String formType) {
         return switch(formType) {
-            case AdminAreaConstants.FORM_CREATE_AREA -> AdminAreaConstants.Permissions.AREA_CREATE;
-            case AdminAreaConstants.FORM_EDIT_AREA -> AdminAreaConstants.Permissions.AREA_EDIT;
-            case AdminAreaConstants.FORM_GROUP_PERMISSIONS -> AdminAreaConstants.Permissions.LUCKPERMS_EDIT;
-            case AdminAreaConstants.FORM_AREA_SETTINGS -> AdminAreaConstants.Permissions.SETTINGS_MANAGE;
+            case FormIds.CREATE_AREA -> AdminAreaConstants.Permissions.AREA_CREATE;
+            case FormIds.EDIT_AREA -> AdminAreaConstants.Permissions.AREA_EDIT;
+            case FormIds.BASIC_SETTINGS, 
+                FormIds.PROTECTION_SETTINGS,
+                FormIds.BUILDING_SETTINGS,
+                FormIds.ENVIRONMENT_SETTINGS, 
+                FormIds.ENTITY_SETTINGS,
+                FormIds.TECHNICAL_SETTINGS,
+                FormIds.SPECIAL_SETTINGS -> AdminAreaConstants.Permissions.SETTINGS_MANAGE;
+            case FormIds.GROUP_PERMISSIONS -> AdminAreaConstants.Permissions.LUCKPERMS_EDIT;
             default -> AdminAreaConstants.Permissions.MANAGE;
         };
     }
@@ -107,16 +110,20 @@ public class FormValidator {
 
     public static ValidationResult validateCreateAreaForm(FormResponseCustom response) {
         try {
-            String name = response.getInputResponse(0);
+            // Name is at index 1, not 0
+            String name = response.getInputResponse(1);
             ValidationResult nameResult = validateAreaName(name);
             if (!nameResult.isValid()) return nameResult;
-            String priorityStr = response.getInputResponse(1);
+            
+            // Priority is at index 2, not 1
+            String priorityStr = response.getInputResponse(2);
             ValidationResult priorityResult = validatePriority(priorityStr);
             if (!priorityResult.isValid()) return priorityResult;
 
-            // Additional validations (coordinates etc.) are merged here.
-            if (!response.getToggleResponse(2)) {
-                for (int i = 3; i <= 8; i++) {
+            // World protection toggle is at index 4
+            if (!response.getToggleResponse(4)) {
+                // Coordinates start at index 6-11 in CreateAreaHandler
+                for (int i = 6; i <= 11; i++) {
                     String coord = response.getInputResponse(i);
                     if (!coord.equals("~") && !coord.matches("^~?-?\\d+$")) {
                         return ValidationResult.error("Invalid coordinate format. Use numbers or ~ for relative coordinates");
@@ -125,6 +132,7 @@ public class FormValidator {
             }
 
             return ValidationResult.success();
+
         } catch (Exception e) {
             return ValidationResult.error("Invalid form data: " + e.getMessage());
         }
@@ -191,15 +199,16 @@ public class FormValidator {
 
     private static ValidationResult validateCategoryForm(FormResponseCustom response) {
         try {
-            // Verify all toggle responses are boolean
-            for (Object resp : response.getResponses().values()) {
-                if (resp != null && !(resp instanceof Boolean)) {
-                    return ValidationResult.error("Invalid toggle response type");
+            // Skip first element which is the header label
+            for (int i = 1; i < response.getResponses().size(); i++) {
+                Object resp = response.getResponse(i);
+                if (!(resp instanceof Boolean)) {
+                    return ValidationResult.error("Invalid toggle response type at position " + i);
                 }
             }
             return ValidationResult.success();
         } catch (Exception e) {
-            return ValidationResult.error("Invalid category form data");
+            return ValidationResult.error("Invalid category settings form data");
         }
     }
 
@@ -211,34 +220,6 @@ public class FormValidator {
             return ValidationResult.success();
         } catch (Exception e) {
             return ValidationResult.error("Invalid group permissions data");
-        }
-    }
-
-    private static ValidationResult validateOverrideForm(FormResponseCustom response) {
-        try {
-            // Validate that we have the correct number of responses
-            if (response.getResponses().size() % 4 != 0) {
-                return ValidationResult.error("Invalid form response structure");
-            }
-            return ValidationResult.success();
-        } catch (Exception e) {
-            return ValidationResult.error("Invalid override form data: " + e.getMessage());
-        }
-    }
-
-    private static ValidationResult validatePlayerManagementForm(FormResponseCustom response) {
-        try {
-            // Validate player name
-            String playerName = response.getInputResponse(0);
-            if (playerName == null || playerName.trim().isEmpty()) {
-                return ValidationResult.error("Player name cannot be empty");
-            }
-            if (!playerName.matches("^[a-zA-Z0-9_]{2,16}$")) {
-                return ValidationResult.error("Invalid player name format");
-            }
-            return ValidationResult.success();
-        } catch (Exception e) {
-            return ValidationResult.error("Invalid player management form data: " + e.getMessage());
         }
     }
 }
