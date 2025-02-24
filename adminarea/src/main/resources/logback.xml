@@ -22,6 +22,11 @@
         <appender-ref ref="FILE"/>
     </root>
 
-    <!-- Set Hikari logging to WARN to reduce verbosity -->
-    <logger name="com.zaxxer.hikari" level="WARN" />
+    <!-- HikariCP logging configuration -->
+    <logger name="com.zaxxer.hikari.pool.PoolBase" level="ERROR"/>
+    <logger name="com.zaxxer.hikari.pool.HikariPool" level="ERROR"/>
+    <logger name="com.zaxxer.hikari.HikariDataSource" level="ERROR"/>
+
+    <!-- Suppress Micrometer debug logs -->
+    <logger name="adminarea.shaded.micrometer.common.util.internal.logging" level="INFO" />
 </configuration>

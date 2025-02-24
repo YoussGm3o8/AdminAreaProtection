@@ -41,12 +41,20 @@ public class DatabaseManager {
     private HikariDataSource initializeDataSource() {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl("jdbc:sqlite:" + plugin.getDataFolder() + "/areas.db");
-        config.setMaximumPoolSize(10);
-        config.setMinimumIdle(5);
-        config.setIdleTimeout(300000); // 5 minutes
-        config.setMaxLifetime(600000); // 10 minutes
-        config.setConnectionTimeout(30000);
+        config.setMaximumPoolSize(20);  // Increased from 10 to handle more concurrent requests
+        config.setMinimumIdle(10);      // Increased to keep more connections ready
+        config.setIdleTimeout(600000);  // 10 minutes - increased to keep connections longer
+        config.setMaxLifetime(1800000); // 30 minutes - increased for longer sessions
+        config.setConnectionTimeout(5000); // 5 seconds - reduced to fail faster if there's an issue
         config.setConnectionTestQuery("SELECT 1");
+
+        // Only enable HikariCP debug logging if plugin debug mode is on
+        if (!plugin.isDebugMode()) {
+            //config.addDataSourceProperty("logger", "none");
+            //config.setPoolName("HikariPool-AdminArea");
+            //LoggerFactory.getLogger("com.zaxxer.hikari").warn("Disabling HikariCP logging");
+        }
+
         return new HikariDataSource(config);
     }
 
@@ -138,101 +146,48 @@ public class DatabaseManager {
     }
 
     public void saveArea(Area area) throws DatabaseException {
-        if (area == null) {
-            throw new DatabaseException("Cannot save null area");
-        }
-
-        AreaDTO dto = area.toDTO();
-        
-        // Ensure all settings are in toggle_states
-        JSONObject toggleStates = dto.toggleStates();
-        Map<String, Boolean> permissions = dto.permissions().toMap();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Saving area " + dto.name() + " with permissions:");
-            plugin.debug("  Initial toggle states: " + toggleStates.toString());
-            plugin.debug("  Permissions to merge: " + permissions);
-            plugin.debug("  Player permissions before save: " + dto.playerPermissions());
-        }
-
-        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
-            if (!toggleStates.has(entry.getKey())) {
-                toggleStates.put(entry.getKey(), entry.getValue());
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Adding missing toggle: " + entry.getKey() + " = " + entry.getValue());
-                }
-            }
-        }
-
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Final toggle states: " + toggleStates.toString());
-        }
-
-        // Convert player permissions to JSON
-        JSONObject playerPermsJson = new JSONObject(dto.playerPermissions());
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Player permissions JSON to save: " + playerPermsJson.toString(2));
-        }
-
-        String sql = """
-            INSERT OR REPLACE INTO areas (
-                name, world, x_min, x_max, y_min, y_max, z_min, z_max,
-                priority, show_title, group_permissions, inherited_permissions,
-                enter_message, leave_message, toggle_states, default_toggle_states,
-                inherited_toggle_states, track_permissions, player_permissions
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """;
-
         try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+             PreparedStatement stmt = conn.prepareStatement(
+                "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
+                "priority, show_title, group_permissions, inherited_permissions, enter_message, leave_message, " +
+                "toggle_states, default_toggle_states, inherited_toggle_states, track_permissions, player_permissions) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             )) {
+
+            AreaDTO dto = area.toDTO();
+            stmt.setString(1, dto.name());
+            stmt.setString(2, dto.world());
+            stmt.setInt(3, dto.bounds().xMin());
+            stmt.setInt(4, dto.bounds().xMax());
+            stmt.setInt(5, dto.bounds().yMin());
+            stmt.setInt(6, dto.bounds().yMax());
+            stmt.setInt(7, dto.bounds().zMin());
+            stmt.setInt(8, dto.bounds().zMax());
+            stmt.setInt(9, dto.priority());
+            stmt.setBoolean(10, dto.showTitle());
+
+            // Convert maps to JSON strings
+            stmt.setString(11, new JSONObject(dto.groupPermissions()).toString());
+            stmt.setString(12, new JSONObject(dto.inheritedPermissions()).toString());
+            stmt.setString(13, dto.enterMessage());
+            stmt.setString(14, dto.leaveMessage());
             
-            AreaDTO.Bounds bounds = dto.bounds();
-            ps.setString(1, dto.name());
-            ps.setString(2, dto.world());
-            ps.setInt(3, bounds.xMin());
-            ps.setInt(4, bounds.xMax());
-            ps.setInt(5, bounds.yMin());
-            ps.setInt(6, bounds.yMax());
-            ps.setInt(7, bounds.zMin());
-            ps.setInt(8, bounds.zMax());
-            ps.setInt(9, dto.priority());
-            ps.setBoolean(10, dto.showTitle());
-            ps.setString(11, new JSONObject(dto.groupPermissions()).toString());
-            ps.setString(12, new JSONObject(dto.inheritedPermissions()).toString());
-            ps.setString(13, dto.enterMessage());
-            ps.setString(14, dto.leaveMessage());
-            ps.setString(15, toggleStates.toString());
-            ps.setString(16, dto.defaultToggleStates().toString());
-            ps.setString(17, dto.inheritedToggleStates().toString());
-            ps.setString(18, new JSONObject(dto.trackPermissions()).toString());
-            ps.setString(19, playerPermsJson.toString());
-            
-            ps.executeUpdate();
-            
-            // Update cache
-            areaCache.put(dto.name(), area);
-            
+            // Save toggle states JSON
+            stmt.setString(15, dto.toggleStates().toString());
+            stmt.setString(16, dto.defaultToggleStates().toString());
+            stmt.setString(17, dto.inheritedToggleStates().toString());
+            stmt.setString(18, new JSONObject(dto.trackPermissions()).toString());
+            stmt.setString(19, new JSONObject(dto.playerPermissions()).toString());
+
+            stmt.executeUpdate();
+
             if (plugin.isDebugMode()) {
-                plugin.debug("Successfully saved area " + dto.name() + " to database");
-                plugin.debug("  Toggle states saved: " + toggleStates.toString());
-                plugin.debug("  Group permissions: " + dto.groupPermissions());
-                plugin.debug("  Track permissions: " + dto.trackPermissions());
-                plugin.debug("  Player permissions saved: " + playerPermsJson.toString(2));
-                
-                // Verify the save by reading back
-                try (PreparedStatement readPs = conn.prepareStatement("SELECT player_permissions FROM areas WHERE name = ?")) {
-                    readPs.setString(1, dto.name());
-                    try (ResultSet rs = readPs.executeQuery()) {
-                        if (rs.next()) {
-                            String savedPerms = rs.getString("player_permissions");
-                            plugin.debug("  Verified player permissions in database: " + savedPerms);
-                        }
-                    }
-                }
+                plugin.debug(String.format("Saved area to database: %s", dto.name()));
+                plugin.debug(String.format("Toggle states: %s", dto.toggleStates().toString()));
             }
-            
+
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to save area: " + area.getName(), e);
+            throw new DatabaseException("Failed to save area", e);
         }
     }
 

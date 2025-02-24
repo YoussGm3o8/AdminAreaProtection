@@ -22,6 +22,7 @@ public final class FormIds {
     public static final String ENTITY_SETTINGS = "entity_settings";
     public static final String TECHNICAL_SETTINGS = "technical_settings";
     public static final String SPECIAL_SETTINGS = "special_settings";
+    public static final String ITEMS_DROPS_SETTINGS = "itemsDropsSettings";
     
     // LuckPerms integration
     public static final String GROUP_SELECT = "group_select";

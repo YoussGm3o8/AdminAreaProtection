@@ -18,6 +18,7 @@ public class FormRegistry {
     public void initialize() {
         plugin.debug("Initializing FormRegistry...");
         registerDefaultHandlers();
+        registerHandler(new ItemsDropsHandler(plugin));
     }
 
     private void registerDefaultHandlers() {

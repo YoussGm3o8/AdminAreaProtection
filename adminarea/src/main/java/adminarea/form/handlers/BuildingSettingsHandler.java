@@ -39,10 +39,11 @@ public class BuildingSettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom("Building Settings: " + area.getName());
+        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.buildingSettings.title", 
+            Map.of("area", area.getName())));
         
         // Add header with clear instructions
-        form.addElement(new ElementLabel("§2Configure Building Permissions\n§7Toggle settings below"));
+        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.buildingSettings.header")));
         
         // Get area settings
         AreaDTO dto = area.toDTO();
@@ -55,7 +56,8 @@ public class BuildingSettingsHandler extends BaseFormHandler {
                 String description = plugin.getLanguageManager().get(
                     "gui.permissions.toggles." + toggle.getPermissionNode());
                 form.addElement(new ElementToggle(
-                    toggle.getDisplayName() + "\n§7" + description,
+                    plugin.getLanguageManager().get("gui.permissions.toggle.format", 
+                        Map.of("name", toggle.getDisplayName(), "description", description)),
                     settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
                 ));
             }
@@ -82,16 +84,33 @@ public class BuildingSettingsHandler extends BaseFormHandler {
                 return;
             }
 
+            // Track number of changes
+            int changedSettings = 0;
+
             // Skip header label element (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
-                Boolean value = response.getToggleResponse(i + 1);
-                if (value == null) {
-                    player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidForm"));
-                    plugin.getGuiManager().openFormById(player, getFormId(), area);
-                    return;
+                try {
+                    // Get current value from settings
+                    boolean currentValue = updatedSettings.optBoolean(
+                        toggles.get(i).getPermissionNode(), 
+                        toggles.get(i).getDefaultValue()
+                    );
+                    
+                    Boolean toggleResponse = response.getToggleResponse(i + 1);
+                    if (toggleResponse == null) {
+                        plugin.getLogger().debug("Null toggle response for " + toggles.get(i).getPermissionNode());
+                        continue;
+                    }
+                    
+                    // Only count as changed if value is different
+                    if (currentValue != toggleResponse) {
+                        changedSettings++;
+                        updatedSettings.put(toggles.get(i).getPermissionNode(), toggleResponse);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
                 }
-                updatedSettings.put(toggles.get(i).getPermissionNode(), value);
             }
 
             // Create updated area
@@ -101,15 +120,20 @@ public class BuildingSettingsHandler extends BaseFormHandler {
 
             // Save changes
             plugin.updateArea(updatedArea); 
+            
+            // Show success message with change count
             player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
-                Map.of("area", area.getName())));
+                Map.of(
+                    "area", area.getName(),
+                    "count", String.valueOf(changedSettings)
+                )));
 
             // Return to edit menu
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling building settings", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }
     }

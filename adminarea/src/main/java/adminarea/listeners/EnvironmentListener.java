@@ -1,5 +1,7 @@
 package adminarea.listeners;
 
+import java.util.List;
+
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import cn.nukkit.event.EventHandler;
@@ -10,6 +12,7 @@ import cn.nukkit.block.Block;
 import cn.nukkit.block.BlockID;
 import cn.nukkit.level.Position;
 import io.micrometer.core.instrument.Timer;
+import cn.nukkit.Player;
 
 public class EnvironmentListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
@@ -26,15 +29,91 @@ public class EnvironmentListener implements Listener {
             return false;
         }
 
-        // Skip if chunk is not loaded
-        if (!block.getLevel().isChunkLoaded(block.getChunkX(), block.getChunkZ())) {
-            return false;
+        try {
+            Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+            try {
+                Position pos = new Position(block.x, block.y, block.z, block.level);
+                
+                // Skip unloaded chunks entirely
+                if (!block.getLevel().isChunkLoaded(block.getChunkX(), block.getChunkZ())) {
+                    return false;
+                }
+
+                // Skip if world is being unloaded
+                if (!plugin.getServer().isLevelLoaded(block.getLevel().getName())) {
+                    return false;
+                }
+
+                // Master check with try-catch
+                try {
+                    if (!plugin.getAreaManager().shouldProcessEvent(pos, false)) {
+                        return false;
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Error in shouldProcessEvent", e);
+                    return false;
+                }
+
+                // Get the global area first - more efficient
+                Area globalArea = plugin.getAreaManager().getGlobalAreaForWorld(block.getLevel().getName());
+                if (globalArea != null) {
+                    return !globalArea.getToggleState(permission);
+                }
+
+                // Only check local areas if we're near a player
+                List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
+                    pos.getLevel().getName(),
+                    pos.getX(),
+                    pos.getY(),
+                    pos.getZ()
+                );
+
+                // No protection if no areas
+                if (areas.isEmpty()) {
+                    return false;
+                }
+
+                // Check highest priority area first
+                return !areas.get(0).getToggleState(permission);
+
+            } finally {
+                plugin.getPerformanceMonitor().stopTimer(sample, "environment_protection_check");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error checking protection", e);
+            return false; // Fail safe
+        }
+    }
+
+    /**
+     * Checks if a block is within CHUNK_CHECK_RADIUS chunks of any player
+     */
+    private boolean isNearAnyPlayer(Block block) {
+        int blockChunkX = block.getChunkX();
+        int blockChunkZ = block.getChunkZ();
+
+        for (Player player : plugin.getServer().getOnlinePlayers().values()) {
+            // Skip players in different worlds
+            if (!player.getLevel().getName().equals(block.getLevel().getName())) {
+                continue;
+            }
+
+            int playerChunkX = player.getChunkX();
+            int playerChunkZ = player.getChunkZ();
+
+            // Calculate chunk distance
+            int chunkDistance = Math.max(
+                Math.abs(playerChunkX - blockChunkX),
+                Math.abs(playerChunkZ - blockChunkZ)
+            );
+
+            // If within check radius of any player, return true
+            if (chunkDistance <= CHUNK_CHECK_RADIUS) {
+                return true;
+            }
         }
 
-        Position pos = new Position(block.x, block.y, block.z, block.level);
-        
-        // Use shouldCancel from ProtectionListener
-        return protectionListener.shouldCancel(pos, null, permission);
+        return false;
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -46,20 +125,28 @@ public class EnvironmentListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onLiquidFlow(LiquidFlowEvent event) {
-        if (shouldCheckProtection(event.getBlock(), "allowLiquidFlow")) {
+        if (shouldCheckProtection(event.getBlock(), "allowLiquid")) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockSpread(BlockSpreadEvent event) {
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        if (event == null || event.getBlock() == null) return;
+        
         try {
-            if (shouldCheckProtection(event.getBlock(), "allowBlockSpread")) {
+            Block block = event.getBlock();
+            
+            // Skip unloaded chunks
+            if (!block.getLevel().isChunkLoaded(block.getChunkX(), block.getChunkZ())) {
+                return;
+            }
+
+            if (shouldCheckProtection(block, "allowBlockSpread")) {
                 event.setCancelled(true);
             }
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "block_spread_check");
+        } catch (Exception e) {
+            plugin.getLogger().error("Error handling block spread", e);
         }
     }
 

@@ -82,7 +82,7 @@ public class DeleteAreaHandler extends BaseFormHandler {
             List<Area> areas = plugin.getAreas();
             
             if (buttonId < 0 || buttonId >= areas.size()) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
                 return;
             }
 
@@ -106,10 +106,19 @@ public class DeleteAreaHandler extends BaseFormHandler {
 
     @Override
     public void handleCancel(Player player) {
+        // Clean up data before returning to main menu
+        cleanup(player);
+        
+        // Set main menu as current form
+        plugin.getFormIdMap().put(player.getName(), 
+            new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
+            
         if (plugin.isDebugMode()) {
-            plugin.debug("Delete area selection cancelled");
+            plugin.debug("Delete area cancelled, returning to main menu");
         }
-        plugin.getGuiManager().handleBackNavigation(player);
+        
+        // Open main menu directly instead of using back navigation
+        plugin.getGuiManager().openMainMenu(player);
     }
 
     private void processAreaDeletion(Player player, Area area) {

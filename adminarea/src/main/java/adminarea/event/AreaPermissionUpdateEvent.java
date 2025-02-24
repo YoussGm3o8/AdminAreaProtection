@@ -13,15 +13,21 @@ public class AreaPermissionUpdateEvent extends Event {
     private final Area area;
     private final PermissionToggle.Category category;
     private final Player player;
-    private final Map<String, Boolean> oldPermissions;
-    private final Map<String, Boolean> newPermissions;
+    private final Map<String, Map<String, Boolean>> oldPermissions;
+    private final Map<String, Map<String, Boolean>> newPermissions;
     private boolean cancelled;
 
+    public AreaPermissionUpdateEvent(Area area, PermissionToggle.Category category, 
+                                   Map<String, Map<String, Boolean>> oldPermissions,
+                                   Map<String, Map<String, Boolean>> newPermissions) {
+        this(area, category, null, oldPermissions, newPermissions);
+    }
+
     public AreaPermissionUpdateEvent(Area area, PermissionToggle.Category category, Player player, 
-                                   Map<String, Boolean> oldPermissions,
-                                   Map<String, Boolean> newPermissions) {
+                                   Map<String, Map<String, Boolean>> oldPermissions,
+                                   Map<String, Map<String, Boolean>> newPermissions) {
         this.area = area;
-        this.category = category;
+        this.category = category; 
         this.player = player;
         this.oldPermissions = oldPermissions;
         this.newPermissions = newPermissions;
@@ -40,11 +46,11 @@ public class AreaPermissionUpdateEvent extends Event {
         return player;
     }
 
-    public Map<String, Boolean> getOldPermissions() {
+    public Map<String, Map<String, Boolean>> getOldPermissions() {
         return oldPermissions;
     }
 
-    public Map<String, Boolean> getNewPermissions() {
+    public Map<String, Map<String, Boolean>> getNewPermissions() {
         return newPermissions;
     }
 

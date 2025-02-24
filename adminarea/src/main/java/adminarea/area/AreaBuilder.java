@@ -191,6 +191,20 @@ public class AreaBuilder {
             playerPermissions = new HashMap<>(4, 1.0f);
         }
 
+        // Convert toggle states to JSONObject
+        if (toggleStates == null) {
+            toggleStates = new JSONObject();
+        }
+        
+        // Ensure all settings are included in toggleStates
+        if (settings != null) {
+            for (String key : settings.keySet()) {
+                if (key.startsWith("allow")) {
+                    toggleStates.put(key, settings.getBoolean(key));
+                }
+            }
+        }
+
         // Create DTO
         AreaDTO dto = new AreaDTO(
             name,
@@ -201,7 +215,7 @@ public class AreaBuilder {
             settings,
             groupPermissions,
             inheritedPermissions,
-            toggleStates,
+            toggleStates,  // Use the populated toggleStates
             defaultToggleStates,
             inheritedToggleStates,
             permissionsRecord,

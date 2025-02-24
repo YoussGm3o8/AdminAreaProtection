@@ -49,10 +49,12 @@ public class CategorySettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom(category.getDisplayName() + ": " + area.getName());
+        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.categorySettings.title", 
+            Map.of("category", category.getDisplayName(), "area", area.getName())));
         
         // Add header with clear instructions
-        form.addElement(new ElementLabel("§2Configure " + category.getDisplayName() + " Permissions\n§7Toggle settings below"));
+        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.categorySettings.header", 
+            Map.of("category", category.getDisplayName()))));
         
         // Get area settings
         AreaDTO dto = area.toDTO();
@@ -65,7 +67,8 @@ public class CategorySettingsHandler extends BaseFormHandler {
                 String description = plugin.getLanguageManager().get(
                     "gui.permissions.toggles." + toggle.getPermissionNode());
                 form.addElement(new ElementToggle(
-                    toggle.getDisplayName() + "\n§7" + description,
+                    plugin.getLanguageManager().get("gui.permissions.toggle.format",
+                        Map.of("name", toggle.getDisplayName(), "description", description)),
                     settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
                 ));
             }

@@ -7,6 +7,7 @@ import adminarea.event.AreaDeletedEvent;
 import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.event.LuckPermsGroupChangeEvent;
 import adminarea.event.PermissionChangeEvent;
+import adminarea.exception.DatabaseException;
 import adminarea.permissions.PermissionChecker;
 import cn.nukkit.Player;
 import cn.nukkit.block.Block;
@@ -66,6 +67,9 @@ public class ProtectionListener implements Listener {
     private static final int BATCH_SIZE = 16; // Process explosion blocks in batches
     private static final int CHUNK_CHECK_RADIUS = 4;
     private final PermissionChecker permissionChecker;
+    private final Map<String, String> playerAreaCache;
+    private static final int CHECK_INTERVAL = 5; // Ticks between checks
+    private final Map<String, Integer> lastCheckTimes;
 
     public ProtectionListener(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
@@ -80,6 +84,8 @@ public class ProtectionListener implements Listener {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
         this.permissionChecker = new PermissionChecker(plugin);
+        this.playerAreaCache = new ConcurrentHashMap<>();
+        this.lastCheckTimes = new ConcurrentHashMap<>();
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
@@ -282,73 +288,108 @@ public class ProtectionListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onLiquidFlow(LiquidFlowEvent event) {
-        if (handleProtection(event.getBlock(), null, "allowLiquidFlow")) {
+        if (handleProtection(event.getBlock(), null, "allowLiquid")) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerMove(PlayerMoveEvent event) {
-        Player player = event.getPlayer();
-        Position from = event.getFrom();
-        Position to = event.getTo();
-        
-        // Get areas for both positions
-        Area fromArea = plugin.getHighestPriorityArea(from.getLevel().getName(),
-            from.getX(), from.getY(), from.getZ());
-        Area toArea = plugin.getHighestPriorityArea(to.getLevel().getName(),
-            to.getX(), to.getY(), to.getZ());
-        
-        // If areas are different, handle enter/leave messages
-        if (fromArea != toArea) {
-            // Handle leaving area
-            if (fromArea != null) {
-                AreaDTO fromAreaDTO = fromArea.toDTO();
-                if (fromAreaDTO.showTitle() && fromAreaDTO.leaveMessage() != null) {
-                    // Create placeholders map
-                    Map<String, String> placeholders = new HashMap<>();
-                    placeholders.put("player", player.getName());
-                    placeholders.put("area", fromAreaDTO.name());
-                    
-                    // Replace placeholders in title and message
-                    String title = plugin.getLanguageManager().get("titles.leave.default.main", placeholders);
-                    String subtitle = fromAreaDTO.leaveMessage().replace("{player}", player.getName())
-                                                              .replace("{area}", fromAreaDTO.name());
-                    
-                    player.sendTitle(
-                        title,
-                        subtitle,
-                        20, // fadeIn
-                        40, // stay
-                        20  // fadeOut
-                    );
-                }
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Player player = event.getPlayer();
+            String playerName = player.getName();
+
+            // Only check every CHECK_INTERVAL ticks
+            int currentTick = player.getServer().getTick();
+            int lastCheck = lastCheckTimes.getOrDefault(playerName, 0);
+            if (currentTick - lastCheck < CHECK_INTERVAL) {
+                return;
             }
-            
-            // Handle entering area
-            if (toArea != null) {
-                AreaDTO toAreaDTO = toArea.toDTO();
-                if (toAreaDTO.showTitle() && toAreaDTO.enterMessage() != null) {
-                    // Create placeholders map
-                    Map<String, String> placeholders = new HashMap<>();
-                    placeholders.put("player", player.getName());
-                    placeholders.put("area", toAreaDTO.name());
-                    
-                    // Replace placeholders in title and message
-                    String title = plugin.getLanguageManager().get("titles.enter.default.main", placeholders);
-                    String subtitle = toAreaDTO.enterMessage().replace("{player}", player.getName())
-                                                            .replace("{area}", toAreaDTO.name());
-                    
-                    player.sendTitle(
-                        title,
-                        subtitle,
-                        20, // fadeIn
-                        40, // stay
-                        20  // fadeOut
-                    );
-                }
+            lastCheckTimes.put(playerName, currentTick);
+
+            // Skip if chunk not loaded
+            if (!player.getLevel().isChunkLoaded(player.getChunkX(), player.getChunkZ())) {
+                return;
             }
+
+            Position to = event.getTo();
+
+            // Get highest priority area at new position
+            List<Area> areasAtNewPos = plugin.getAreaManager().getAreasAtLocation(
+                to.getLevel().getName(),
+                to.getX(),
+                to.getY(),
+                to.getZ()
+            );
+
+            String currentAreaName = null;
+            if (!areasAtNewPos.isEmpty()) {
+                Area highestPriorityArea = areasAtNewPos.get(0);
+                currentAreaName = highestPriorityArea.getName();
+            }
+
+            String previousAreaName = playerAreaCache.get(playerName);
+
+            // Handle area transitions
+            if (currentAreaName == null && previousAreaName != null) {
+                // Player left an area
+                handleAreaLeave(player, previousAreaName);
+                playerAreaCache.remove(playerName);
+            } else if (currentAreaName != null && !currentAreaName.equals(previousAreaName)) {
+                // Player entered a new area or switched between areas
+                if (previousAreaName != null) {
+                    handleAreaLeave(player, previousAreaName);
+                }
+                handleAreaEnter(player, currentAreaName);
+                playerAreaCache.put(playerName, currentAreaName);
+            }
+
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "area_entry_check");
         }
+    }
+
+    private void handleAreaEnter(Player player, String areaName) {
+        Area area = plugin.getArea(areaName);
+        if (area == null || !area.toDTO().showTitle()) return;
+
+        Map<String, Object> titleConfig = plugin.getConfigManager().getTitleConfig("enter");
+        String title = (String) titleConfig.get("main");
+        String subtitle = (String) titleConfig.get("subtitle");
+
+        // Replace placeholders
+        title = title.replace("{area}", areaName);
+        subtitle = subtitle.replace("{area}", areaName);
+
+        player.sendTitle(
+            title,
+            subtitle,
+            plugin.getConfigManager().getInt("title.enter.fadeIn", 20),
+            plugin.getConfigManager().getInt("title.enter.stay", 40),
+            plugin.getConfigManager().getInt("title.enter.fadeOut", 20)
+        );
+    }
+
+    private void handleAreaLeave(Player player, String areaName) {
+        Area area = plugin.getArea(areaName);
+        if (area == null || !area.toDTO().showTitle()) return;
+
+        Map<String, Object> titleConfig = plugin.getConfigManager().getTitleConfig("leave");
+        String title = (String) titleConfig.get("main");
+        String subtitle = (String) titleConfig.get("subtitle");
+
+        // Replace placeholders
+        title = title.replace("{area}", areaName);
+        subtitle = subtitle.replace("{area}", areaName);
+
+        player.sendTitle(
+            title,
+            subtitle,
+            plugin.getConfigManager().getInt("title.leave.fadeIn", 20),
+            plugin.getConfigManager().getInt("title.leave.stay", 40),
+            plugin.getConfigManager().getInt("title.leave.fadeOut", 20)
+        );
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -586,7 +627,12 @@ public class ProtectionListener implements Listener {
             Area area = event.getArea();
             
             // Clear all permission types
-            area.clearAllPermissions();
+            try {
+                area.clearAllPermissions();
+            } catch (DatabaseException e) {
+                plugin.getLogger().error("Failed to clear permissions for area " + area.getName(), e);
+                return;
+            }
             
             // Invalidate all cached permissions for this area
             String areaPrefix = area.getName() + ":";
@@ -684,28 +730,32 @@ public class ProtectionListener implements Listener {
                 return false;
             }
 
-            // Check if the chunk is loaded and near any player
-            if (!pos.getLevel().isChunkLoaded(pos.getChunkX(), pos.getChunkZ()) || !isNearAnyPlayer(pos)) {
-                return false; // No protection if chunk is unloaded or too far from players
-            }
-
-            // Get area at position
-            Area area = plugin.getHighestPriorityArea(pos.getLevel().getName(),
-                pos.getX(), pos.getY(), pos.getZ());
-
-            // If no area or global protection is disabled, allow action
-            if (area == null && !plugin.isGlobalAreaProtection()) {
+            // Master check - if this returns false, skip all protection checks
+            if (!plugin.getAreaManager().shouldProcessEvent(pos, false)) {
                 return false;
             }
 
-            // If no area but global protection is enabled, check if player has global bypass
-            if (area == null) {
-                boolean result = !hasGlobalBypass(player);
-                return result;
+            // Get applicable areas for this position
+            List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
+                pos.getLevel().getName(),
+                pos.getX(),
+                pos.getY(),
+                pos.getZ()
+            );
+
+            // If no areas and global protection is disabled, allow action
+            if (areas.isEmpty() && !plugin.isGlobalAreaProtection()) {
+                return false;
             }
 
-            // Check permission using the permission checker
-            return !permissionChecker.isAllowed(player, area, permission);
+            // If no areas but global protection is enabled, check if player has global bypass
+            if (areas.isEmpty()) {
+                return !hasGlobalBypass(player);
+            }
+
+            // Check highest priority area first
+            Area highestPriorityArea = areas.get(0);
+            return !permissionChecker.isAllowed(player, highestPriorityArea, permission);
 
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "protection_check");
@@ -889,6 +939,13 @@ public class ProtectionListener implements Listener {
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "protection_cleanup");
         }
+        playerAreaCache.clear();
+        lastCheckTimes.clear();
+    }
+
+    public void cleanup(Player player) {
+        playerAreaCache.remove(player.getName());
+        lastCheckTimes.remove(player.getName());
     }
 
     private boolean hasGlobalBypass(Player player) {
@@ -903,29 +960,36 @@ public class ProtectionListener implements Listener {
      * Only checks within CHUNK_CHECK_RADIUS chunks of any player.
      */
     protected boolean shouldCancel(Position pos, Player player, String permission) {
-        // If position is null or in a different world, don't cancel
-        if (pos == null || pos.getLevel() == null) return false;
+        for (Area area : plugin.getAreaManager().getNearbyAreas(pos)) {
 
-        // If player has bypass permission, don't cancel
-        if (player != null && plugin.isBypassing(player.getName())) return false;
+            if (!area.getToggleState(permission)) {
+                return true;
+            }
+            // If position is null or in a different world, don't cancel
+            if (pos == null || pos.getLevel() == null) return false;
 
-        // Check if position is within range of any player
-        if (!isNearAnyPlayer(pos)) return false;
+            // If player has bypass permission, don't cancel
+            if (player != null && plugin.isBypassing(player.getName())) return false;
 
-        // Get applicable areas and check permissions
-        List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
-            pos.getLevel().getName(),
-            pos.getX(),
-            pos.getY(),
-            pos.getZ()
-        );
+            // Check if position is within range of any player
+            if (!isNearAnyPlayer(pos)) return false;
 
-        // No areas at location, don't cancel
-        if (areas.isEmpty()) return false;
+            // Get applicable areas and check permissions
+            List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
+                pos.getLevel().getName(),
+                pos.getX(),
+                pos.getY(),
+                pos.getZ()
+            );
 
-        // Check permissions in highest priority area first
-        Area highestPriorityArea = areas.get(0);
-        return !highestPriorityArea.getToggleState(permission);
+            // No areas at location, don't cancel
+            if (areas.isEmpty()) return false;
+
+            // Check permissions in highest priority area first
+            Area highestPriorityArea = areas.get(0);
+            return !highestPriorityArea.getToggleState(permission);
+        }
+        return false;
     }
 
     /**

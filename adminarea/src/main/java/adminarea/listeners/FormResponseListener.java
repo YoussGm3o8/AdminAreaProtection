@@ -211,7 +211,7 @@ public class FormResponseListener implements Listener {
         if (plugin.getGuiManager().validateForm(event.getPlayer(), response, formId)) {
             handler.handleResponse(event.getPlayer(), response);
         } else {
-            event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+            event.getPlayer().sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
         }
     }
 
@@ -271,6 +271,12 @@ public class FormResponseListener implements Listener {
             plugin.debug("  Exception: " + e.getMessage());
             e.printStackTrace();
         }
+        
+        // Clean up form tracking data
+        String playerName = event.getPlayer().getName();
+        plugin.getFormIdMap().remove(playerName);
+        plugin.getFormIdMap().remove(playerName + "_editing");
+        
         event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
     }
 

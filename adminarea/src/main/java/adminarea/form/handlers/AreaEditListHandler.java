@@ -31,7 +31,7 @@ public class AreaEditListHandler extends BaseFormHandler {
         try {
             FormWindowSimple form = new FormWindowSimple(
                 plugin.getLanguageManager().get("gui.editArea.listtitle"),
-                plugin.getLanguageManager().get("gui.editArea.selectPrompt")
+                plugin.getLanguageManager().get("gui.editArea.content")
             );
 
             List<Area> areas = plugin.getAreas();
@@ -82,7 +82,7 @@ public class AreaEditListHandler extends BaseFormHandler {
             List<Area> areas = plugin.getAreas();
             
             if (buttonId < 0 || buttonId >= areas.size()) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
                 // Set form tracking data before reopening edit list
                 plugin.getFormIdMap().put(player.getName(),
                     new FormTrackingData(FormIds.EDIT_LIST, System.currentTimeMillis()));

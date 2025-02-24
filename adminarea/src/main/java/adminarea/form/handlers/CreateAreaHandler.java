@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import org.json.JSONObject;
 import cn.nukkit.level.Position;
+import java.util.HashMap;
+import adminarea.area.AreaDTO;
 
 public class CreateAreaHandler extends BaseFormHandler {
 
@@ -61,65 +63,97 @@ public class CreateAreaHandler extends BaseFormHandler {
             boolean showTitle = response.getToggleResponse(3);
             boolean isGlobal = response.getToggleResponse(4);
 
-            // Create builder
-            AreaBuilder builder = Area.builder()
-                .name(name)
-                .priority(priority)
-                .showTitle(showTitle);
+            // Validate area name doesn't already exist
+            if (plugin.hasArea(name)) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.area.exists", 
+                    Map.of("area", name)));
+                // Reopen form to let them try again
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                return;
+            }
 
-            // Set world from player's current world
-            builder.world(player.getLevel().getName());
+            // Initialize coordinates
+            int x1, x2, y1, y2, z1, z2;
 
             // Handle coordinates if not global
             if (!isGlobal) {
                 // Get coordinates (indices 6-11)
-                int x1 = Integer.parseInt(response.getInputResponse(6));
-                int y1 = Integer.parseInt(response.getInputResponse(7));
-                int z1 = Integer.parseInt(response.getInputResponse(8));
-                int x2 = Integer.parseInt(response.getInputResponse(9));
-                int y2 = Integer.parseInt(response.getInputResponse(10));
-                int z2 = Integer.parseInt(response.getInputResponse(11));
-                builder.coordinates(x1, x2, y1, y2, z1, z2);
+                x1 = Integer.parseInt(response.getInputResponse(6));
+                y1 = Integer.parseInt(response.getInputResponse(7));
+                z1 = Integer.parseInt(response.getInputResponse(8));
+                x2 = Integer.parseInt(response.getInputResponse(9));
+                y2 = Integer.parseInt(response.getInputResponse(10));
+                z2 = Integer.parseInt(response.getInputResponse(11));
             } else {
                 // Set global coordinates
-                builder.coordinates(-29000000, 29000000, 0, 255, -29000000, 29000000);
+                x1 = -29000000;
+                x2 = 29000000;
+                y1 = 0;
+                y2 = 255;
+                z1 = -29000000;
+                z2 = 29000000;
             }
 
-            // Only process messages if show title is enabled
+            // Get enter/leave messages if show title is enabled
+            String enterMsg = "", leaveMsg = "";
             if (showTitle) {
-                String enterMsg = response.getInputResponse(12);
-                String leaveMsg = response.getInputResponse(13);
-                if (!enterMsg.isEmpty()) builder.enterMessage(enterMsg);
-                if (!leaveMsg.isEmpty()) builder.leaveMessage(leaveMsg);
+                enterMsg = response.getInputResponse(12);
+                leaveMsg = response.getInputResponse(13);
+                if (enterMsg == null) enterMsg = "";
+                if (leaveMsg == null) leaveMsg = "";
             }
 
-            // Initialize settings object
+            // Initialize settings from DTO
+            AreaDTO currentDTO = Area.builder()
+                .name(name)
+                .priority(priority)
+                .showTitle(showTitle)
+                .world(player.getLevel().getName())
+                .coordinates(x1, x2, y1, y2, z1, z2)
+                .enterMessage(enterMsg)
+                .leaveMessage(leaveMsg)
+                .build()
+                .toDTO();
+            
+            // Create new settings object for toggles
             JSONObject settings = new JSONObject();
+
+            // Track number of changes
+            int changedSettings = 0;
 
             // Process permission toggles
             int toggleIndex = 15; // Start after the protection settings label
             for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
-                toggleIndex++; // Skip category label
+                // Skip category label
+                toggleIndex++;
+                
                 List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
                 if (toggles != null) {
                     for (PermissionToggle toggle : toggles) {
                         try {
-                            Boolean value = response.getToggleResponse(toggleIndex);
-                            if (value == null) {
+                            String permissionNode = toggle.getPermissionNode();
+                            // Get toggle response at current index
+                            Object rawResponse = response.getResponse(toggleIndex);
+                            if (rawResponse instanceof Boolean) {
+                                boolean toggleValue = (Boolean) rawResponse;
+                                settings.put(permissionNode, toggleValue);
+                                changedSettings++;
                                 if (plugin.isDebugMode()) {
-                                    plugin.debug("Invalid toggle response at index " + toggleIndex + " for " + toggle.getPermissionNode());
+                                    plugin.debug("Set toggle " + permissionNode + " to " + toggleValue);
                                 }
-                                throw new IllegalArgumentException("Missing toggle value for " + toggle.getPermissionNode());
+                            } else {
+                                // Use default value if response is invalid
+                                settings.put(permissionNode, toggle.getDefaultValue());
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("Using default value for " + permissionNode + ": " + toggle.getDefaultValue());
+                                }
                             }
-                            settings.put(toggle.getPermissionNode(), value);
+                            toggleIndex++; // Move to next toggle position
                         } catch (Exception e) {
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("Error processing toggle " + toggle.getPermissionNode() + ": " + e.getMessage());
-                            }
-                            // Only use default value if we can't get the response
+                            plugin.getLogger().debug("Error processing toggle " + toggle.getPermissionNode() + ": " + e.getMessage());
                             settings.put(toggle.getPermissionNode(), toggle.getDefaultValue());
+                            toggleIndex++; // Still need to move to next position even on error
                         }
-                        toggleIndex++;
                     }
                 }
             }
@@ -133,28 +167,40 @@ public class CreateAreaHandler extends BaseFormHandler {
                 return;
             }
 
-            // Set settings and build area
-            builder.settings(settings);
-            Area area = builder.build();
+            // Create area with new settings
+            Area area = AreaBuilder.fromDTO(currentDTO)
+                .settings(settings)
+                .build();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Created area " + area.getName() + ":");
+                plugin.debug("  Settings: " + settings.toString());
+                plugin.debug("  Changed settings count: " + changedSettings);
+                plugin.debug("  Player permissions from DTO: " + area.toDTO().playerPermissions());
+                plugin.debug("  Player permissions in area: " + area.getPlayerPermissions());
+                plugin.debug("  Group permissions in area: " + area.getGroupPermissions());
+                plugin.debug("  Track permissions in area: " + area.getTrackPermissions());
+                plugin.debug("  Toggle states: " + settings.toString());
+            }
+            
+            // Successfully created area
             plugin.saveArea(area);
             
-            player.sendMessage(plugin.getLanguageManager().get("messages.areaCreated", 
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.created", 
                 Map.of("area", area.getName())));
 
-            // Set form tracking data for edit area form
+            // Clear all form tracking data
+            cleanup(player);
+            
+            // Open main menu instead of edit form
             plugin.getFormIdMap().put(player.getName(), 
-                new FormTrackingData(FormIds.EDIT_AREA, System.currentTimeMillis()));
-
-            // Store area being edited
-            plugin.getFormIdMap().put(player.getName() + "_editing",
-                new FormTrackingData(area.getName(), System.currentTimeMillis()));
-
-            // Open edit form
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+                new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
+            plugin.getGuiManager().openMainMenu(player);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling form response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.errorProcessingInput"));
+            cleanup(player);
         }
     }
 
@@ -294,8 +340,34 @@ public class CreateAreaHandler extends BaseFormHandler {
                 ""
             ));
             
-            addPermissionToggles(form);
+            // Add protection settings header
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.createArea.labels.protection")));
             
+            // Add toggles by category in a consistent order
+            for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
+                // Add category header with clear separation
+                form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.createArea.labels.categoryHeader", 
+                    Map.of("category", category.getDisplayName()))));
+                
+                List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
+                if (toggles != null) {
+                    for (PermissionToggle toggle : toggles) {
+                        // Get description from language file or use default
+                        String description = plugin.getLanguageManager().get(
+                            "gui.permissions.toggles." + toggle.getPermissionNode(),
+                            Map.of("default", toggle.getDisplayName())
+                        );
+                        
+                        // Add toggle with clear formatting
+                        form.addElement(new ElementToggle(
+                            plugin.getLanguageManager().get("gui.permissions.toggle.format",
+                                Map.of("name", toggle.getDisplayName(), "description", description)),
+                            toggle.getDefaultValue()
+                        ));
+                    }
+                }
+            }
+
             if (plugin.isDebugMode()) {
                 plugin.debug("Created create area form with tracking data: " + 
                     plugin.getFormIdMap().get(player.getName()));
@@ -312,40 +384,12 @@ public class CreateAreaHandler extends BaseFormHandler {
 
     @Override
     protected void cleanup(Player player) {
-        // Only clean up form data after successful form handling
-        // or explicit cancellation
-        if (plugin.isDebugMode()) {
-            plugin.debug("Cleaning up form data for " + player.getName());
-        }
-        super.cleanup(player);
-        // Also clean up any position data
+        // Clean up ALL form tracking data
+        plugin.getFormIdMap().remove(player.getName());
+        plugin.getFormIdMap().remove(player.getName() + "_editing");
         plugin.getPlayerPositions().remove(player.getName());
-    }
-
-    private void addPermissionToggles(FormWindowCustom form) {
-        form.addElement(new ElementLabel("\n§2Protection Settings\n§7Configure area permissions"));
-        
-        // Add toggles by category in a consistent order
-        for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
-            // Add category header with clear separation
-            form.addElement(new ElementLabel("\n§6" + category.getDisplayName()));
-            
-            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
-            if (toggles != null) {
-                for (PermissionToggle toggle : toggles) {
-                    // Get description from language file or use default
-                    String description = plugin.getLanguageManager().get(
-                        "gui.permissions.toggles." + toggle.getPermissionNode(),
-                        Map.of("default", toggle.getDisplayName())
-                    );
-                    
-                    // Add toggle with clear formatting
-                    form.addElement(new ElementToggle(
-                        "§e" + toggle.getDisplayName() + "\n§7" + description,
-                        toggle.getDefaultValue()
-                    ));
-                }
-            }
+        if (plugin.isDebugMode()) {
+            plugin.debug("Cleaned up all form data for " + player.getName() + " after area creation");
         }
     }
 }

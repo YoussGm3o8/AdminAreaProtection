@@ -399,7 +399,7 @@ public class PermissionToggle implements AutoCloseable {
     
     // Entities
     toggles.add(new PermissionToggle("Allow PvP", "allowPvP", false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Monster Spawning", "allowMonsterSpawn", false, Category.ENTITY));
+    toggles.add(new PermissionToggle("Allow Monster Spawning", PERM_MOB_SPAWN, false, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY));
@@ -420,9 +420,8 @@ public class PermissionToggle implements AutoCloseable {
     
     // Vehicles
     toggles.add(new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL));
+    toggles.add(new PermissionToggle("Allow Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL));
     toggles.add(new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Vehicle Collision", "allowVehicleCollide", true, Category.SPECIAL));
     
     // Player Effects
     toggles.add(new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL));
@@ -464,18 +463,19 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Ender Pearl", "allowEnderPearl", false, Category.SPECIAL),
             new PermissionToggle("Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL),
             new PermissionToggle("Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
-            new PermissionToggle("Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL),
             new PermissionToggle("Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL)
         };
     }
 
     public enum Category {
         BUILDING("Building"),
-        ENVIRONMENT("Environment"),
+        ENVIRONMENT("Environment"), 
         ENTITY("Entity Controls"),
         ITEMS("Items & Drops"),
         TECHNICAL("Redstone & Mechanics"),
-        SPECIAL("Special Permissions");
+        SPECIAL("Special Permissions"),
+        ALL("All Permissions");
 
         private final String displayName;
 
@@ -514,7 +514,7 @@ public class PermissionToggle implements AutoCloseable {
         // Entity toggles
         toggles.put(Category.ENTITY, Arrays.asList(
             new PermissionToggle("PvP", "allowPvP", false, Category.ENTITY),
-            new PermissionToggle("Monster Spawn", "allowMonsterSpawn", false, Category.ENTITY),
+            new PermissionToggle("Monster Spawn", PERM_MOB_SPAWN, false, Category.ENTITY),
             new PermissionToggle("Animal Spawn", "allowAnimalSpawn", true, Category.ENTITY),
             new PermissionToggle("Entity Damage", "allowDamageEntities", false, Category.ENTITY),
             new PermissionToggle("Breeding", "allowBreeding", true, Category.ENTITY),
@@ -546,9 +546,8 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Bed Explosions", "allowBedExplosion", false, Category.SPECIAL),
             new PermissionToggle("Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL),
             new PermissionToggle("Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
-            new PermissionToggle("Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL),
             new PermissionToggle("Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
-            new PermissionToggle("Vehicle Collide", "allowVehicleCollide", true, Category.SPECIAL),
             new PermissionToggle("Fall Damage", "allowFallDamage", true, Category.SPECIAL),
             new PermissionToggle("Hunger", "allowHunger", true, Category.SPECIAL),
             new PermissionToggle("Flight", "allowFlight", false, Category.SPECIAL),
@@ -624,7 +623,9 @@ public class PermissionToggle implements AutoCloseable {
     public static final String PERM_INTERACT = "allowInteract";
     public static final String PERM_ADMIN = "admin";
     public static final String PERM_BYPASS = "bypass";
-    
+    public static final String PERM_MOB_SPAWN = "allowMonsterSpawn";
+    public static final String PERM_VEHICLE_BREAK = "allowVehicleBreak";
+
     // Category-based permissions are derived from static permission map
     private static final Map<Category, List<PermissionToggle>> TOGGLE_MAP;
     
@@ -654,7 +655,7 @@ public class PermissionToggle implements AutoCloseable {
         // Entity toggles
         TOGGLE_MAP.put(Category.ENTITY, Arrays.asList(
             new PermissionToggle("Allow PvP", "allowPvP", false, Category.ENTITY),
-            new PermissionToggle("Allow Monster Spawning", "allowMonsterSpawn", false, Category.ENTITY),
+            new PermissionToggle("Allow Monster Spawning", PERM_MOB_SPAWN, false, Category.ENTITY),
             new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY),
             new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY),
             new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY),
@@ -687,9 +688,8 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Bed Explosions", "allowBedExplosion", false, Category.SPECIAL),
             new PermissionToggle("Allow Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL),
             new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Break", "allowVehicleBreak", false, Category.SPECIAL),
+            new PermissionToggle("Allow Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL),
             new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL),
-            new PermissionToggle("Allow Vehicle Collision", "allowVehicleCollide", true, Category.SPECIAL),
             new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL),
             new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL),
             new PermissionToggle("Allow Flight", "allowFlight", false, Category.SPECIAL),

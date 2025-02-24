@@ -3,11 +3,14 @@ package adminarea.managers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaDTO;
+import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.area.AreaBuilder;
 import adminarea.exception.DatabaseException;
 import adminarea.interfaces.IAreaManager;
+import adminarea.permissions.PermissionToggle;
 import adminarea.stats.AreaStatistics;
 import cn.nukkit.Player;
+import cn.nukkit.level.Level;
 import cn.nukkit.level.Position;
 import cn.nukkit.level.particle.DustParticle;
 import cn.nukkit.math.Vector3;
@@ -29,7 +32,9 @@ public class AreaManager implements IAreaManager {
     private final Map<String, AreaStatistics> areaStats = new HashMap<>();
     private final Map<String, Area> areasByName = new HashMap<>();
     private final List<Area> areas = new ArrayList<>();
-    private final Map<String, Area> globalAreasByWorld = new HashMap<>(); // Changed to single area per world
+    private final Map<String, Area> globalAreasByWorld = new HashMap<>();
+    // Add map for managing areas by world
+    private final Map<String, List<Area>> worldAreas = new HashMap<>();
     
     // Add cache for area queries with smaller size for global areas
     private final Cache<String, List<Area>> locationCache;
@@ -39,6 +44,11 @@ public class AreaManager implements IAreaManager {
     private static final long CACHE_EXPIRY = TimeUnit.MINUTES.toMillis(2); // Reduced expiry time
     private static final int CHUNK_CHECK_RADIUS = 4;
     private final DatabaseManager databaseManager;
+
+    /**
+     * Stores areas keyed by their chunk coordinates (chunkX, chunkZ).
+     */
+    private final Map<Long, Set<Area>> chunkAreaMap = new HashMap<>();
 
     public AreaManager(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
@@ -117,38 +127,64 @@ public class AreaManager implements IAreaManager {
             if (area == null) {
                 throw new IllegalArgumentException("Area cannot be null");
             }
-            if (hasArea(area.getName())) {
-                throw new IllegalStateException("Area with name " + area.getName() + " already exists");
+
+            if (plugin.isDebugMode()) {
+                plugin.debug("Adding area to memory: " + area.getName());
             }
-            
-            // Check if this is a global area
-            if (isGlobalArea(area)) {
-                // Replace any existing global area for this world
-                Area oldGlobalArea = globalAreasByWorld.put(area.getWorld(), area);
-                if (oldGlobalArea != null) {
-                    areasByName.remove(oldGlobalArea.getName().toLowerCase());
+
+            // Check for duplicate names
+            if (hasArea(area.getName())) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area with name " + area.getName() + " already exists, skipping add");
                 }
+                return;
+            }
+
+            // Add area to memory maps
+            String world = area.getWorld();
+            if (isGlobalArea(area)) {
+                globalAreasByWorld.put(world, area);
             } else {
                 areas.add(area);
-                addToSpatialIndex(area);
             }
-            
+            worldAreas.computeIfAbsent(world, k -> new ArrayList<>()).add(area);
             areasByName.put(area.getName().toLowerCase(), area);
-            nameCache.put(area.getName().toLowerCase(), area);
-            invalidateLocationCache();
-            try {
-                databaseManager.saveArea(area);
-            } catch (DatabaseException e) {
-                throw new RuntimeException("Failed to save area to database", e);
+
+            // Add to spatial index
+            addToSpatialIndex(area);
+
+            // Register area in chunkAreaMap
+            registerArea(area);
+
+            if (plugin.isDebugMode()) {
+                plugin.debug("Successfully added area: " + area.getName());
+                plugin.debug("Current areas in memory: " + areasByName.keySet());
             }
+
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_add");
         }
     }
 
+    /**
+     * Gets the global area for a specific world, if one exists.
+     * This is optimized for quick lookups of global area settings.
+     */
+    public Area getGlobalAreaForWorld(String worldName) {
+        return globalAreasByWorld.get(worldName);
+    }
+
+    /**
+     * Checks if an area is global more efficiently by checking the world map first
+     */
     private boolean isGlobalArea(Area area) {
+        // First check if it's already in the global areas map
+        if (globalAreasByWorld.containsValue(area)) {
+            return true;
+        }
+
+        // If not found in map, check bounds
         AreaDTO.Bounds bounds = area.toDTO().bounds();
-        // Consider an area global if it spans a very large region
         return bounds.xMin() <= -29000000 && bounds.xMax() >= 29000000 &&
                bounds.zMin() <= -29000000 && bounds.zMax() >= 29000000;
     }
@@ -182,6 +218,9 @@ public class AreaManager implements IAreaManager {
             locationCache.invalidateAll();
             nameCache.invalidate(area.getName().toLowerCase());
 
+            // Unregister area from chunkAreaMap
+            unregisterArea(area);
+
             if (plugin.isDebugMode()) {
                 plugin.debug("Removed area: " + area.getName() + 
                     (isGlobalArea(area) ? " (global)" : ""));
@@ -193,18 +232,64 @@ public class AreaManager implements IAreaManager {
 
     @Override
     public void updateArea(Area area) {
-        Area oldArea = getArea(area.getName());
-        if (oldArea != null) {
-            areas.remove(oldArea);
-            areas.add(area);
-            areasByName.put(area.getName().toLowerCase(), area);
-            nameCache.invalidate(area.getName().toLowerCase());
-            invalidateLocationCache();
-            try {
-                databaseManager.updateArea(area);
-            } catch (DatabaseException e) {
-                throw new RuntimeException("Failed to update area in database", e);
+        if (area == null) return;
+        
+        try {
+            // Invalidate spatial index
+            removeFromSpatialIndex(area);
+            
+            // Save updated area to database first
+            plugin.getDatabaseManager().updateArea(area);
+            
+            // Update in-memory area
+            areasByName.put(area.getName(), area);
+            
+            // Re-index the updated area
+            addToSpatialIndex(area);
+            
+            // Force reload permissions and caches
+            invalidateAreaCaches(area);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Updated area " + area.getName() + " and invalidated caches");
             }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update area: " + area.getName(), e);
+        }
+    }
+
+    /**
+     * Invalidates all caches for the specified area
+     */
+    private void invalidateAreaCaches(Area area) {
+        if (area == null) return;
+        
+        // Reload area from database to get fresh data
+        try {
+            Area freshArea = plugin.getDatabaseManager().loadAreas().stream()
+                .filter(a -> a.getName().equals(area.getName()))
+                .findFirst()
+                .orElse(area);
+            
+            // Update in memory without firing another event
+            areasByName.put(area.getName(), freshArea);
+            
+            // Fire update event ONLY if permissions actually changed
+            if (!area.getPlayerPermissions().equals(freshArea.getPlayerPermissions()) ||
+                !area.getGroupPermissions().equals(freshArea.getGroupPermissions())) {
+                
+                AreaPermissionUpdateEvent event = new AreaPermissionUpdateEvent(
+                    freshArea,                         // Area
+                    PermissionToggle.Category.ALL,     // Category
+                    null,                             // Player (null for full update)
+                    area.getGroupPermissions(),        // Old permissions
+                    freshArea.getGroupPermissions()    // New permissions
+                );
+                plugin.getServer().getPluginManager().callEvent(event);
+            }
+            
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to reload area data: " + area.getName(), e);
         }
     }
 
@@ -258,51 +343,56 @@ public class AreaManager implements IAreaManager {
     private List<Area> calculateAreasAtLocation(String world, double x, double y, double z) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            List<Area> result = new ArrayList<>();
-            
-            // First check global area for this world - more efficient lookup
-            Area globalArea = globalAreasByWorld.get(world);
-            if (globalArea != null) {
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Found global area for world " + world + ":");
-                    plugin.debug("  Player permissions: " + globalArea.getPlayerPermissions());
-                }
-                result.add(globalArea);
+            // Skip if called recursively for the same location
+            String recursionKey = String.format("%s:%d:%d:%d", world, (int)x, (int)y, (int)z);
+            if (Thread.currentThread().getStackTrace().length > 50 || 
+                !recursionChecks.add(recursionKey)) {
+                plugin.getLogger().warning("Prevented infinite recursion in area lookup at " + recursionKey);
+                return new ArrayList<>();
             }
             
-            // Only check local areas if we're near a player
-            if (isNearAnyPlayer(x, z)) {
-                // Get chunk key
-                int chunkKey = getChunkKey((int)x >> 4, (int)z >> 4);
+            try {
+                List<Area> result = new ArrayList<>();
                 
-                // Get areas from spatial index
-                Map<Integer, List<Area>> worldIndex = spatialIndex.get(world);
-                if (worldIndex != null) {
-                    List<Area> chunkAreas = worldIndex.get(chunkKey);
-                    if (chunkAreas != null) {
-                        for (Area area : chunkAreas) {
-                            if (area.isInside(world, x, y, z)) {
-                                if (plugin.isDebugMode()) {
-                                    plugin.debug("Found local area " + area.getName() + " at location:");
-                                    plugin.debug("  Player permissions: " + area.getPlayerPermissions());
+                // First check global area - most efficient
+                Area globalArea = globalAreasByWorld.get(world);
+                if (globalArea != null) {
+                    result.add(globalArea);
+                    return result; // Global area overrides all others
+                }
+                
+                // Only check local areas if we're near a player and not called recursively
+                if (isNearAnyPlayer(x, z)) {
+                    int chunkKey = getChunkKey((int)x >> 4, (int)z >> 4);
+                    Map<Integer, List<Area>> worldIndex = spatialIndex.get(world);
+                    if (worldIndex != null) {
+                        List<Area> chunkAreas = worldIndex.get(chunkKey);
+                        if (chunkAreas != null) {
+                            for (Area area : chunkAreas) {
+                                if (area.isInside(world, x, y, z)) {
+                                    result.add(area);
                                 }
-                                result.add(area);
                             }
                         }
                     }
                 }
+                
+                // Sort by priority (highest first)
+                result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()));
+                return result;
+                
+            } finally {
+                recursionChecks.remove(recursionKey);
             }
-            
-            // Sort by priority (highest first)
-            result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()));
-            return result;
             
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_lookup");
         }
     }
 
-    private boolean isNearAnyPlayer(double x, double z) {
+    private static final Set<String> recursionChecks = ConcurrentHashMap.newKeySet();
+
+    public boolean isNearAnyPlayer(double x, double z) {
         // Get chunk coordinates of the target location
         int targetChunkX = (int)x >> 4;
         int targetChunkZ = (int)z >> 4;
@@ -605,6 +695,9 @@ public class AreaManager implements IAreaManager {
                         }
                     }
                     areasByName.put(area.getName().toLowerCase(), area);
+
+                    // Register area in chunkAreaMap
+                    registerArea(area);
                 }
 
                 if (plugin.isDebugMode()) {
@@ -639,7 +732,7 @@ public class AreaManager implements IAreaManager {
             String world = position.getLevel().getName();
             double x = position.getX();
             double y = position.getY();
-            double z = position.getZ();
+            double z = position.getZ(); // Initialize z coordinate
 
             // Use the highest priority area at the location
             List<Area> areasAtLocation = getAreasAtLocation(world, x, y, z);
@@ -679,27 +772,40 @@ public class AreaManager implements IAreaManager {
      * Gets all areas that are within range of any online player.
      * This helps optimize performance by only checking areas near players.
      */
-    private List<Area> getActiveAreas() {
+    public List<Area> getActiveAreas() {
         Set<Area> activeAreas = new HashSet<>();
-        
-        // Get all online players
-        for (Player player : plugin.getServer().getOnlinePlayers().values()) {
-            // Get chunk coordinates
-            int chunkX = player.getChunkX();
-            int chunkZ = player.getChunkZ();
+        Map<Integer, Level> loadedLevels = plugin.getServer().getLevels();
+
+        // For each loaded world
+        for (Level level : loadedLevels.values()) {
+            String worldName = level.getName();
             
-            // Check chunks in radius around player
-            for (int dx = -CHUNK_CHECK_RADIUS; dx <= CHUNK_CHECK_RADIUS; dx++) {
-                for (int dz = -CHUNK_CHECK_RADIUS; dz <= CHUNK_CHECK_RADIUS; dz++) {
-                    int checkX = (chunkX + dx) << 4; // Convert chunk coordinates to block coordinates
-                    int checkZ = (chunkZ + dz) << 4;
-                    
-                    // Add any areas that overlap this chunk
-                    activeAreas.addAll(getAreasInChunk(player.getLevel().getName(), checkX, checkZ));
+            // For each player in that world
+            for (Player player : level.getPlayers().values()) {
+                int playerChunkX = player.getChunkX();
+                int playerChunkZ = player.getChunkZ();
+                
+                // Get chunks in radius around player
+                for (int dx = -CHUNK_CHECK_RADIUS; dx <= CHUNK_CHECK_RADIUS; dx++) {
+                    for (int dz = -CHUNK_CHECK_RADIUS; dz <= CHUNK_CHECK_RADIUS; dz++) {
+                        int chunkX = playerChunkX + dx;
+                        int chunkZ = playerChunkZ + dz;
+                        
+                        // Get areas containing this chunk
+                        List<Area> areasInChunk = getAreasInChunk(worldName, chunkX, chunkZ);
+                        activeAreas.addAll(areasInChunk);
+                    }
                 }
             }
         }
-        
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Active areas found: " + activeAreas.size());
+            for (Area area : activeAreas) {
+                plugin.debug("  - " + area.getName() + " in world " + area.getWorld());
+            }
+        }
+
         return new ArrayList<>(activeAreas);
     }
 
@@ -707,15 +813,18 @@ public class AreaManager implements IAreaManager {
      * Gets areas that overlap with a specific chunk
      */
     private List<Area> getAreasInChunk(String world, int chunkX, int chunkZ) {
+        int blockX = chunkX << 4; // Convert chunk coords to block coords
+        int blockZ = chunkZ << 4;
+        
         return areas.stream()
-            .filter(area -> area.getWorld().equals(world))
+            .filter(area -> area.toDTO().world().equals(world))
             .filter(area -> {
-                AreaDTO.Bounds bounds = area.getBounds();
-                // Check if chunk overlaps with area bounds
-                return bounds.xMin() <= (chunkX + 16) && bounds.xMax() >= chunkX &&
-                       bounds.zMin() <= (chunkZ + 16) && bounds.zMax() >= chunkZ;
+                var bounds = area.toDTO().bounds();
+                return blockX <= bounds.xMax() && (blockX + 16) >= bounds.xMin() &&
+                       blockZ <= bounds.zMax() && (blockZ + 16) >= bounds.zMin();
             })
-            .collect(Collectors.toList());
+            .sorted((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()))
+            .toList();
     }
 
     /**
@@ -732,5 +841,122 @@ public class AreaManager implements IAreaManager {
     public Area getHighestPriorityAreaAtPosition(Position pos) {
         if (pos == null || pos.getLevel() == null) return null;
         return getHighestPriorityArea(pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    /**
+     * Call this whenever an area is created or updated.
+     */
+    public void registerArea(Area area) {
+        // Remove from existing chunk index first:
+        unregisterArea(area);
+        // Compute chunk bounds and add to chunkAreaMap
+        for (long chunkKey : getCoveredChunks(area)) {
+            chunkAreaMap.computeIfAbsent(chunkKey, k -> new HashSet<>()).add(area);
+        }
+    }
+
+    /**
+     * Removes an area from chunkAreaMap.
+     */
+    public void unregisterArea(Area area) {
+        for (Set<Area> set : chunkAreaMap.values()) {
+            set.remove(area);
+        }
+    }
+
+    /**
+     * Returns areas within a 4-chunk radius around pos.
+     * Adjust radius to your needs.
+     */
+    public Set<Area> getNearbyAreas(Position pos) {
+        Set<Area> result = new HashSet<>();
+        int baseX = pos.getFloorX() >> 4;
+        int baseZ = pos.getFloorZ() >> 4;
+        int radius = 4;
+        for (int x = baseX - radius; x <= baseX + radius; x++) {
+            for (int z = baseZ - radius; z <= baseZ + radius; z++) {
+                long key = toLongKey(x, z);
+                Set<Area> chunkAreas = chunkAreaMap.get(key);
+                if (chunkAreas != null) {
+                    result.addAll(chunkAreas);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Helper to convert chunkX, chunkZ to a single long key.
+     */
+    private long toLongKey(int x, int z) {
+        return (((long) x) << 32) ^ (z & 0xffffffffL);
+    }
+
+    /**
+     * Determines chunk coordinates covered by the area.
+     * Calculates all chunks that intersect with the area's bounding box.
+     */
+    private List<Long> getCoveredChunks(Area area) {
+        List<Long> keys = new ArrayList<>();
+        AreaDTO.Bounds bounds = area.toDTO().bounds();
+        
+        // Convert block coordinates to chunk coordinates
+        int minChunkX = bounds.xMin() >> 4;
+        int maxChunkX = bounds.xMax() >> 4;
+        int minChunkZ = bounds.zMin() >> 4;
+        int maxChunkZ = bounds.zMax() >> 4;
+        
+        // Iterate through all chunks in the area's bounds
+        for (int x = minChunkX; x <= maxChunkX; x++) {
+            for (int z = minChunkZ; z <= maxChunkZ; z++) {
+                keys.add(toLongKey(x, z));
+            }
+        }
+        
+        return keys;
+    }
+
+    /**
+     * Master check for whether any event/action should be processed.
+     * This should be called before any area or protection checks.
+     * Returns false if the event should be ignored (no players nearby).
+     *
+     * @param pos The position to check
+     * @param ignoreGlobal If true, even global areas require player proximity
+     * @return true if the event should be processed
+     */
+    public boolean shouldProcessEvent(Position pos, boolean ignoreGlobal) {
+        if (pos == null || pos.getLevel() == null) {
+            return false;
+        }
+
+        // Get chunk coordinates of the event location
+        int eventChunkX = pos.getChunkX();
+        int eventChunkZ = pos.getChunkZ();
+
+        // Always process if chunk is not loaded
+        if (!pos.getLevel().isChunkLoaded(eventChunkX, eventChunkZ)) {
+            return false;
+        }
+
+        // Check for global area first
+        Area globalArea = getGlobalAreaForWorld(pos.getLevel().getName());
+        if (globalArea != null && !ignoreGlobal) {
+            // For global areas, still require a player to be online in the world
+            return pos.getLevel().getPlayers().values().stream()
+                .anyMatch(p -> p.getLevel().getName().equals(pos.getLevel().getName()));
+        }
+
+        // For all other cases, require player proximity
+        return isNearAnyPlayer(pos.x, pos.z);
+    }
+
+    /**
+     * Master check that includes the specific area being checked
+     */
+    public boolean shouldProcessEvent(Position pos, Area area) {
+        // If it's a global area, use less strict checking
+        boolean ignoreGlobal = (area != null && isGlobalArea(area));
+        return shouldProcessEvent(pos, ignoreGlobal);
     }
 }

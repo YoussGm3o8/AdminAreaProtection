@@ -25,6 +25,7 @@ import java.util.stream.Collectors;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.group.Group;
+import adminarea.listeners.EnderPearlListener;
 import adminarea.listeners.EntityListener;
 import adminarea.listeners.EnvironmentListener;
 import adminarea.listeners.FormResponseListener;
@@ -32,6 +33,9 @@ import adminarea.listeners.ItemListener;
 import adminarea.listeners.ProtectionListener;
 import adminarea.listeners.VehicleListener;
 import adminarea.listeners.WandListener;
+import adminarea.listeners.PlayerEffectListener;
+import adminarea.listeners.ExperienceListener;
+import adminarea.listeners.FormCleanupListener;
 import adminarea.managers.AreaManager;
 import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
@@ -39,21 +43,15 @@ import adminarea.managers.LanguageManager;
 import adminarea.permissions.OverrideManager;  // Updated import path
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
-import adminarea.area.AreaSerializer;
 import adminarea.config.ConfigManager;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.event.AreaPermissionUpdateEvent;
-import adminarea.event.LuckPermsGroupChangeEvent;
-import adminarea.event.PermissionChangeEvent;
 import adminarea.util.PerformanceMonitor;
 import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
 import adminarea.exception.DatabaseException;
 import adminarea.form.FormRegistry;
 import adminarea.permissions.LuckPermsCache;
-import adminarea.permissions.PermissionToggle;
-
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
@@ -111,7 +109,23 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 if (debugMode) {
                     getLogger().info("Debug mode enabled from config");
                 }
-    
+
+                // Configure HikariCP logging levels
+                ch.qos.logback.classic.Logger hikariLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari");
+                hikariLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+                
+                ch.qos.logback.classic.Logger poolBaseLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.pool.PoolBase");
+                poolBaseLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+                
+                ch.qos.logback.classic.Logger hikariPoolLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.pool.HikariPool");
+                hikariPoolLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+                
+                ch.qos.logback.classic.Logger hikariDataSourceLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.HikariDataSource");
+                hikariDataSourceLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+                
+                ch.qos.logback.classic.Logger hikariConfigLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.HikariConfig");
+                hikariConfigLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+
                 // Ensure data folder exists and copy config.yml if missing
                 if (!getDataFolder().exists()) {
                     getDataFolder().mkdirs();
@@ -210,11 +224,17 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 ProtectionListener protectionListener = new ProtectionListener(this);
     
                 getServer().getPluginManager().registerEvents(protectionListener, this);
+                getServer().getPluginManager().registerEvents(new EnderPearlListener(this, protectionListener), this); // Add this line
                 getServer().getPluginManager().registerEvents(new EnvironmentListener(this, protectionListener), this);
                 getServer().getPluginManager().registerEvents(new EntityListener(this, protectionListener), this);
                 getServer().getPluginManager().registerEvents(new ItemListener(this, protectionListener), this);
                 getServer().getPluginManager().registerEvents(new VehicleListener(this, protectionListener), this);
+                getServer().getPluginManager().registerEvents(new PlayerEffectListener(this, protectionListener), this);
+                getServer().getPluginManager().registerEvents(new ExperienceListener(this, protectionListener), this);
     
+                // Register form cleanup listener
+                this.getServer().getPluginManager().registerEvents(new FormCleanupListener(this), this);
+
                 // Initialize AreaCommand
     
                 areaCommand = new AreaCommand(this);
@@ -487,13 +507,31 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             if (area == null) return;
             
             try {
-                // Save area to database instead of config
+                if (isDebugMode()) {
+                    debug("Saving area: " + area.getName());
+                    debug("Current areas in memory: " + areaManager.getAllAreas().size());
+                }
+
+                // Verify area doesn't already exist before saving
+                if (hasArea(area.getName())) {
+                    if (isDebugMode()) {
+                        debug("Area " + area.getName() + " already exists, updating instead of creating new");
+                    }
+                    updateArea(area);
+                    return;
+                }
+
+                // Save to database first
                 dbManager.saveArea(area);
-                // Add to area manager
+                
+                // Then add to area manager
                 areaManager.addArea(area);
+
                 if (isDebugMode()) {
                     debug("Area saved successfully: " + area.getName());
+                    debug("Total areas after save: " + areaManager.getAllAreas().size());
                 }
+
             } catch (DatabaseException e) {
                 getLogger().error("Failed to save area: " + area.getName(), e);
                 throw new RuntimeException("Could not save area", e);
@@ -501,9 +539,20 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         }
     
         public void updateArea(Area area) {
-            // Update the area in your storage system
-            getAreaManager().updateArea(area);
-            // Trigger any necessary updates or events
+            if (area == null) return;
+            
+            Timer.Sample sample = performanceMonitor.startTimer();
+            try {
+                // Update in area manager which handles cache invalidation
+                areaManager.updateArea(area);
+                
+                if (isDebugMode()) {
+                    debug("Area updated: " + area.getName());
+                }
+                
+            } finally {
+                performanceMonitor.stopTimer(sample, "area_update");
+            }
         }
 
         // Add getter for GUI manager

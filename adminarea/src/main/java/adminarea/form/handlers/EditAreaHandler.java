@@ -44,6 +44,7 @@ public class EditAreaHandler extends BaseFormHandler {
             form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.entitySettings")));
             form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.technicalSettings")));
             form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.specialSettings")));
+            form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.itemsDropsSettings")));
 
             if (plugin.isLuckPermsEnabled()) {
                 form.addButton(new ElementButton(plugin.getLanguageManager().get("gui.editArea.buttons.groupPermissions")));
@@ -132,12 +133,15 @@ public class EditAreaHandler extends BaseFormHandler {
                 formId = FormIds.SPECIAL_SETTINGS;
                 break;
             case 6:
+                formId = FormIds.ITEMS_DROPS_SETTINGS;
+                break;
+            case 7:
                 if (plugin.getLuckPermsApi() != null) {
                     formId = FormIds.LUCKPERMS_SETTINGS;
                     break;
                 }
                 return;
-            case 7:
+            case 8:
                 if (plugin.getLuckPermsApi() != null) {
                     formId = FormIds.PLAYER_SETTINGS;
                     break;

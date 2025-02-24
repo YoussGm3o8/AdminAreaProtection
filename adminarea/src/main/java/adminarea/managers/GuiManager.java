@@ -312,7 +312,7 @@ public class GuiManager {
         }
     }
 
-    public void visualizeArea(Player player, Area area) {
+    public void visualizeArea(Player player, Area area, int duration) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             stopVisualization(player);
@@ -331,7 +331,7 @@ public class GuiManager {
                     Vector3 point = iterator.next();
                     spawnParticle(player, point, new DustParticle(point, 255, 0, 0));
                 }
-            }, 5);
+            }, duration);
 
             visualizationTasks.put(player.getName(), task);
         } finally {

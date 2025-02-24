@@ -25,7 +25,13 @@ public class PermissionChecker {
      * @return true if the action is allowed, false if denied
      */
     public boolean isAllowed(Player player, Area area, String permission) {
-        if (area == null) {
+        // Get fresh area data for every check to ensure we have latest permissions
+        Area currentArea = plugin.getArea(area.getName());
+        if (currentArea == null) {
+            currentArea = area; // Fallback to provided area if not found
+        }
+        
+        if (currentArea == null) {
             if (plugin.isDebugMode()) {
                 plugin.debug("No area found, allowing action");
             }
@@ -37,10 +43,10 @@ public class PermissionChecker {
             plugin.debug(String.format("Checking permission '%s' for %s in area %s",
                 permission,
                 player != null ? player.getName() : "environment",
-                area.getName()));
-            plugin.debug(" Player toggle states: " + area.toDTO().playerPermissions().toString());
-            plugin.debug("  Area toggle states: " + area.toDTO().toggleStates().toString());
-            plugin.debug("  Area permissions: " + area.toDTO().permissions().toMap());
+                currentArea.getName()));
+            plugin.debug(" Player toggle states: " + currentArea.toDTO().playerPermissions().toString());
+            plugin.debug("  Area toggle states: " + currentArea.toDTO().toggleStates().toString());
+            plugin.debug("  Area permissions: " + currentArea.toDTO().permissions().toMap());
         }
 
         // Map common permission nodes to their toggle state equivalents
@@ -59,7 +65,7 @@ public class PermissionChecker {
 
         // Check player-specific permission if player exists
         if (player != null) {
-            Map<String, Map<String, Boolean>> allPlayerPerms = area.getPlayerPermissions();
+            Map<String, Map<String, Boolean>> allPlayerPerms = currentArea.getPlayerPermissions();
             Map<String, Boolean> playerPerms = allPlayerPerms.get(player.getName());
             
             if (plugin.isDebugMode()) {
@@ -81,7 +87,7 @@ public class PermissionChecker {
 
         // Check track permissions if LuckPerms is enabled
         if (player != null && plugin.isLuckPermsEnabled()) {
-            Map<String, Map<String, Boolean>> allTrackPerms = area.getTrackPermissions();
+            Map<String, Map<String, Boolean>> allTrackPerms = currentArea.getTrackPermissions();
             if (plugin.isDebugMode()) {
                 plugin.debug("  Checking track permissions");
                 plugin.debug("  All track permissions: " + allTrackPerms);
@@ -113,7 +119,7 @@ public class PermissionChecker {
         if (player != null && plugin.isLuckPermsEnabled()) {
             String group = plugin.getPrimaryGroup(player);
             if (group != null) {
-                Map<String, Map<String, Boolean>> allGroupPerms = area.getGroupPermissions();
+                Map<String, Map<String, Boolean>> allGroupPerms = currentArea.getGroupPermissions();
                 Map<String, Boolean> groupPerms = allGroupPerms.get(group);
                 
                 if (plugin.isDebugMode()) {
@@ -135,7 +141,7 @@ public class PermissionChecker {
         }
 
         // Fall back to area toggle state
-        boolean result = area.getToggleState(togglePermission);
+        boolean result = currentArea.getToggleState(togglePermission);
         if (plugin.isDebugMode()) {
             plugin.debug("  Using area toggle state: " + result);
             plugin.debug("  Toggle permission node: " + togglePermission);
@@ -144,34 +150,73 @@ public class PermissionChecker {
     }
 
     private String mapPermissionToToggle(String permission) {
-        return switch (permission) {
-            case "break" -> "allowBlockBreak";
-            case "build", "place" -> "allowBlockPlace";
-            case "interact" -> "allowInteract";
-            case "pvp" -> "allowPvP";
-            case "container" -> "allowContainer";
-            case "itemframe" -> "allowItemFrame";
-            case "armorstand" -> "allowArmorStand";
+        return switch (permission.toLowerCase()) {
+            // Block-related
+            case "break", "allowbreak" -> "allowBlockBreak";
+            case "build", "place", "allowbuild" -> "allowBlockPlace";
+            case "blockspread", "spread" -> "allowBlockSpread";
+            
+            // Interaction
+            case "interact", "allowinteract" -> "allowInteract";
+            case "container", "allowcontainer" -> "allowContainer";
+            case "itemframe", "frame" -> "allowItemFrame";
+            case "armorstand", "armor" -> "allowArmorStand";
+            
+            // Redstone & mechanics
             case "redstone" -> "allowRedstone";
-            case "pistons" -> "allowPistons";
+            case "pistons", "piston" -> "allowPistons";
             case "hopper" -> "allowHopper";
             case "dispenser" -> "allowDispenser";
-            case "fire" -> "allowFire";
-            case "liquid" -> "allowLiquid";
-            case "blockspread" -> "allowBlockSpread";
-            case "leafdecay" -> "allowLeafDecay";
-            case "iceform" -> "allowIceForm";
-            case "snowform" -> "allowSnowForm";
-            case "mobspawn" -> "allowMonsterSpawn";
-            case "animalspawn" -> "allowAnimalSpawn";
-            case "breeding" -> "allowBreeding";
-            case "leashing" -> "allowLeashing";
-            case "itemdrop" -> "allowItemDrop";
-            case "itempickup" -> "allowItemPickup";
-            case "vehicleplace" -> "allowVehiclePlace";
-            case "vehiclebreak" -> "allowVehicleDamage";
-            case "vehicleenter" -> "allowVehicleEnter";
-            default -> permission; // If no mapping exists, use the permission as is
+            
+            // Environment
+            case "fire", "allowfire" -> "allowFire";
+            case "liquid", "liquidflow", "flow" -> "allowLiquid";
+            case "leafdecay", "leaf" -> "allowLeafDecay";
+            case "iceform", "ice" -> "allowIceForm";
+            case "snowform", "snow" -> "allowSnowForm";
+            
+            // Entity spawning
+            case "mobspawn", "allowmobspawn", "monsterspawn" -> "allowMonsterSpawn";
+            case "animalspawn", "animals" -> "allowAnimalSpawn";
+            
+            // Entity interaction
+            case "breeding", "breed" -> "allowBreeding";
+            case "leashing", "leash" -> "allowLeashing";
+            case "taming", "tame" -> "allowTaming";
+            case "entitydamage", "allowentitydamage", "damageentities" -> "allowDamageEntities";
+            
+            // PvP and combat
+            case "pvp", "allowpvp" -> "allowPvP";
+            case "projectile", "shoot" -> "allowShootProjectile";
+            case "monstertarget", "target" -> "allowMonsterTarget";
+            
+            // Items
+            case "itemdrop", "drop" -> "allowItemDrop";
+            case "itempickup", "pickup" -> "allowItemPickup";
+            case "xpdrop" -> "allowXPDrop";
+            case "xppickup" -> "allowXPPickup";
+            
+            // Vehicles
+            case "vehicleplace", "placevehicle" -> "allowVehiclePlace";
+            case "vehiclebreak", "allowvehicledamage", "breakvehicle" -> "allowVehicleBreak";
+            case "vehicleenter", "entervehicle" -> "allowVehicleEnter";
+            
+            // Explosions
+            case "tnt", "allowtnt" -> "allowTNT";
+            case "creeper", "allowcreeper" -> "allowCreeper";
+            case "bedexplosion", "bed", "allowbedexplosion" -> "allowBedExplosion";
+            case "crystalexplosion", "crystal", "allowcrystalexplosion" -> "allowCrystalExplosion";
+            case "explosion", "explosions", "allowexplosion", "allowexplosions" -> "allowExplosions";
+            
+            // Player effects
+            case "falldamage", "fall" -> "allowFallDamage";
+            case "hunger" -> "allowHunger";
+            case "flight", "fly" -> "allowFlight";
+            case "enderpearl", "pearl" -> "allowEnderPearl";
+            case "chorusfruit", "chorus" -> "allowChorusFruit";
+            
+            // Use original if no mapping exists
+            default -> permission;
         };
     }
-} 
+}

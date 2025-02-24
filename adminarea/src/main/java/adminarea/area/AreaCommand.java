@@ -7,31 +7,27 @@ import cn.nukkit.command.data.CommandParamType;
 import cn.nukkit.Player;
 import cn.nukkit.level.Position;
 import cn.nukkit.item.Item;
-import cn.nukkit.level.particle.DustParticle;
-import cn.nukkit.math.Vector3;
 import java.util.List;
 import java.util.Map;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.ArrayList;
 import java.io.File;
 import java.io.FileWriter;
+import java.util.Stack;
+import java.util.HashMap;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.util.ValidationUtils;
 import org.json.JSONObject;
-import adminarea.constants.AdminAreaConstants;
 
 public class AreaCommand extends Command {
 
     private final AdminAreaProtectionPlugin plugin;
     private final Set<String> bypassPlayers = new HashSet<>();
     public static final String CREATE_AREA_FORM_ID = "create_area_form";
+    private final Map<String, Stack<Position[]>> selectionHistory = new HashMap<>();
+    private static final int MAX_HISTORY = 10;
 
     public AreaCommand(AdminAreaProtectionPlugin plugin) {
         super("area", "Manage protected areas", "/area <create|edit|delete|list|wand>");
@@ -44,7 +40,7 @@ public class AreaCommand extends Command {
             CommandParameter.newEnum("subCommand", new String[]{
                 "create", "edit", "delete", "list", "wand", "pos1", "pos2", "help",
                 "bypass", "merge", "visualize", "stats", "reload", "undo", "clear",
-                "here", "expand", "debug", "toggle"
+                "here", "expand", "debug", "toggle", "reset"
             })
         });
         this.commandParameters.put("edit", new CommandParameter[]{
@@ -167,6 +163,11 @@ public class AreaCommand extends Command {
                 
                 // Help command
                 case "help":
+                    sendHelp(player);
+                    return true;
+                case "reset":
+                    handleResetCommand(player);
+                    return true;
                 default:
                     sendHelp(player);
                     return true;
@@ -245,7 +246,7 @@ public class AreaCommand extends Command {
                 return true;
         }
 
-        player.sendMessage(plugin.getLanguageManager().get("messages.success.expandSuccess",
+        player.sendMessage(plugin.getLanguageManager().get("success.area.expand.bounds",
             Map.of("direction", direction, "amount", String.valueOf(amount))));
         return true;
     }
@@ -334,7 +335,7 @@ public class AreaCommand extends Command {
             plugin.getAreaManager().removeArea(area1);
             plugin.getAreaManager().removeArea(area2);
 
-            player.sendMessage(plugin.getLanguageManager().get("messages.success.mergeComplete",
+            player.sendMessage(plugin.getLanguageManager().get("success.area.merge.success",
                 Map.of("area", mergedArea.getName())));
 
             return true;
@@ -376,7 +377,7 @@ public class AreaCommand extends Command {
             int duration = plugin.getConfigManager().getVisualizationDuration();
             
             // Start visualization
-            plugin.getGuiManager().visualizeArea(player, area);
+            plugin.getGuiManager().visualizeArea(player, area, duration);
             
             // Send success message
             player.sendMessage(plugin.getLanguageManager().get("messages.area.visualize.success",
@@ -572,7 +573,7 @@ public class AreaCommand extends Command {
             bypassPlayers.remove(playerName);
         }
 
-        player.sendMessage(plugin.getLanguageManager().get("messages.bypassToggled",
+        player.sendMessage(plugin.getLanguageManager().get("messages.bypass.toggled",
             Map.of("status", newState ? "enabled" : "disabled")));
         return true;
     }
@@ -788,7 +789,7 @@ public class AreaCommand extends Command {
         );
 
         player.getInventory().addItem(wand);
-        player.sendMessage(plugin.getLanguageManager().get("messages.wandGiven"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.selection.wandGiven"));
         return true;
     }
 
@@ -797,9 +798,43 @@ public class AreaCommand extends Command {
             player.sendMessage(plugin.getLanguageManager().get("messages.permissions.undoSelection"));
             return true;
         }
-        // TODO: Implement undo logic
-        player.sendMessage(plugin.getLanguageManager().get("messages.wand.undoSuccess"));
+
+        Stack<Position[]> history = selectionHistory.get(player.getName());
+        if (history == null || history.isEmpty()) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.undoNoActions"));
+            return true;
+        }
+
+        // Get current positions before undo
+        Position[] currentPositions = plugin.getPlayerPositions().get(player.getName());
+        if (currentPositions != null) {
+            // Save current positions to history before undoing
+            if (history.size() >= MAX_HISTORY) {
+                history.remove(0); // Remove oldest entry if at max size
+            }
+            history.push(currentPositions.clone());
+        }
+
+        // Pop and restore previous positions
+        Position[] previousPositions = history.pop();
+        if (previousPositions != null) {
+            plugin.getPlayerPositions().put(player.getName(), previousPositions);
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.undoSuccess"));
+        } else {
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.noActionsToUndo"));
+        }
+
         return true;
+    }
+
+    private void addToSelectionHistory(Player player, Position[] positions) {
+        if (positions == null) return;
+
+        Stack<Position[]> history = selectionHistory.computeIfAbsent(player.getName(), k -> new Stack<>());
+        if (history.size() >= MAX_HISTORY) {
+            history.remove(0); // Remove oldest entry if at max size
+        }
+        history.push(positions.clone());
     }
 
     private boolean handleClearCommand(Player player) {
@@ -807,6 +842,13 @@ public class AreaCommand extends Command {
             player.sendMessage(plugin.getLanguageManager().get("messages.permissions.clearSelection"));
             return true;
         }
+
+        // Save current positions to history before clearing
+        Position[] currentPositions = plugin.getPlayerPositions().get(player.getName());
+        if (currentPositions != null) {
+            addToSelectionHistory(player, currentPositions.clone());
+        }
+
         plugin.getPlayerPositions().remove(player.getName());
         player.sendMessage(plugin.getLanguageManager().get("messages.selectionCleared"));
         return true;
@@ -829,31 +871,33 @@ public class AreaCommand extends Command {
     }
 
     private boolean handlePositionCommand(Player player, int index, String posLabel) {
-        Position pos = player.getPosition();
-        String playerName = player.getName();
-        Position[] positions = plugin.getPlayerPositions().computeIfAbsent(playerName, k -> new Position[2]);
-        positions[index] = pos;
-        
-        try {
-            ValidationUtils validationUtils = new ValidationUtils();
-            validationUtils.validateCoordinates(
-                (int)pos.getX(), (int)pos.getY(), (int)pos.getZ()
-            );
-            
-            player.sendMessage(String.format(plugin.getLanguageManager().get("messages.positionSet"), 
-                posLabel, pos.getFloorX(), pos.getFloorY(), pos.getFloorZ()));
-                
-            // Check if both positions are set
-            if (positions[0] != null && positions[1] != null) {
-                plugin.getValidationUtils().validatePositions(positions);
-                player.sendMessage(plugin.getLanguageManager().get("messages.bothPositionsSet"));
-            }
+        if (!player.hasPermission("adminarea.command.area.position")) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.permissions.modifySelection"));
             return true;
-        } catch (IllegalArgumentException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCoordinates"));
-            plugin.getPlayerPositions().remove(playerName);
-            return false;
         }
+
+        Position[] positions = plugin.getPlayerPositions().computeIfAbsent(player.getName(), k -> new Position[2]);
+        
+        // Save current state to history before modifying
+        addToSelectionHistory(player, positions.clone());
+
+        // Update position
+        positions[index] = player.getPosition().clone();
+        
+        // Send success message
+        Map<String, String> placeholders = new HashMap<>();
+        placeholders.put("position", posLabel);
+        placeholders.put("x", String.valueOf(positions[index].getFloorX()));
+        placeholders.put("y", String.valueOf(positions[index].getFloorY()));
+        placeholders.put("z", String.valueOf(positions[index].getFloorZ()));
+        player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionSet", placeholders));
+
+        // Check if both positions are set
+        if (positions[0] != null && positions[1] != null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.wand.selectionComplete"));
+        }
+
+        return true;
     }
 
     private boolean validateEditPermissions(Player player, String[] args) {
@@ -918,40 +962,59 @@ public class AreaCommand extends Command {
     }
 
     private void sendHelp(Player player) {
-        player.sendMessage(plugin.getLanguageManager().get("messages.helpHeader"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.header"));
         
         // Basic commands
-        player.sendMessage(plugin.getLanguageManager().get("commands.pos1"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.pos2"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.wand"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.create"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.edit"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.delete"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.list"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.pos1"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.pos2"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.wand"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.create"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.edit"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.delete"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.list"));
         
         // Area management
-        player.sendMessage(plugin.getLanguageManager().get("commands.merge"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.visualize"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.here"));
-        player.sendMessage(plugin.getLanguageManager().get("commands.expand"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.merge"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.visualize"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.here"));
+        player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.expand"));
 
         // Permission toggles
         if (player.hasPermission("adminarea.command.toggle")) {
-            player.sendMessage(plugin.getLanguageManager().get("commands.toggleHeader"));
-            player.sendMessage(plugin.getLanguageManager().get("commands.toggleArea"));
-            player.sendMessage(plugin.getLanguageManager().get("commands.toggleList"));
-            player.sendMessage(plugin.getLanguageManager().get("commands.toggleCategory"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleHeader"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleArea"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleList"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleCategory"));
         }
 
         // Advanced features
         if (player.hasPermission("adminarea.command.area.bypass")) {
-            player.sendMessage(plugin.getLanguageManager().get("commands.bypass")); 
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.bypass")); 
         }
         if (player.hasPermission("adminarea.stats.view")) {
-            player.sendMessage(plugin.getLanguageManager().get("commands.stats"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.stats"));
         }
         if (player.hasPermission("adminarea.debug")) {
-            player.sendMessage(plugin.getLanguageManager().get("commands.debug"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.debug"));
         }
+    }
+
+    private boolean handleResetCommand(Player player) {
+        if (!player.hasPermission("adminarea.command.area.reset")) {
+            player.sendMessage(plugin.getLanguageManager().get("validation.form.error.stateReset"));
+            return true;
+        }
+
+        // Clean up form tracking data
+        plugin.getFormIdMap().remove(player.getName());
+        plugin.getFormIdMap().remove(player.getName() + "_editing");
+        
+        player.sendMessage(plugin.getLanguageManager().get("validation.form.error.stateReset"));
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Form state reset for player: " + player.getName());
+        }
+        
+        return true;
     }
 }

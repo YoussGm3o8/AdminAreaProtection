@@ -18,16 +18,16 @@ import org.json.JSONObject;
 import java.util.List;
 import java.util.Map;
 
-public class EnvironmentSettingsHandler extends BaseFormHandler {
+public class ItemsDropsHandler extends BaseFormHandler {
 
-    public EnvironmentSettingsHandler(AdminAreaProtectionPlugin plugin) {
+    public ItemsDropsHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
         validateFormId();
     }
 
     @Override
     public String getFormId() {
-        return FormIds.ENVIRONMENT_SETTINGS;
+        return FormIds.ITEMS_DROPS_SETTINGS;
     }
 
     @Override
@@ -39,18 +39,18 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.environmentSettings.title", 
+        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.itemsDropsSettings.title", 
             Map.of("area", area.getName())));
         
         // Add header with clear instructions
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.environmentSettings.header")));
+        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.itemsDropsSettings.header")));
         
         // Get area settings
         AreaDTO dto = area.toDTO();
         JSONObject settings = dto.settings();
 
         // Add toggles for this category
-        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENVIRONMENT);
+        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ITEMS);
         if (toggles != null) {
             for (PermissionToggle toggle : toggles) {
                 String description = plugin.getLanguageManager().get(
@@ -72,71 +72,50 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
             Area area = getEditingArea(player);
             if (area == null) return;
 
-            // Get current DTO and settings
+            // Get current DTO
             AreaDTO currentDTO = area.toDTO();
-            JSONObject currentSettings = currentDTO.settings();
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Processing environment settings for area " + area.getName());
-                plugin.debug("Current settings: " + currentSettings.toString());
-            }
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
 
             // Get category toggles
-            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENVIRONMENT);
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ITEMS);
             if (toggles == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
                 plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
                 return;
             }
 
-            // Track number of changes
+            // Track changes
             int changedSettings = 0;
 
             // Skip header label element (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
-                    String permissionNode = toggles.get(i).getPermissionNode();
-                    // Get current value from settings
-                    boolean currentValue = currentSettings.optBoolean(
-                        permissionNode, 
+                    boolean currentValue = updatedSettings.optBoolean(
+                        toggles.get(i).getPermissionNode(), 
                         toggles.get(i).getDefaultValue()
                     );
                     
                     Boolean toggleResponse = response.getToggleResponse(i + 1);
-                    if (toggleResponse == null) {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Null toggle response for " + permissionNode + ", keeping current value: " + currentValue);
-                        }
-                        continue;
-                    }
+                    if (toggleResponse == null) continue;
                     
-                    // Only count as changed if value is different
                     if (currentValue != toggleResponse) {
                         changedSettings++;
-                        currentSettings.put(permissionNode, toggleResponse);
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Updated toggle " + permissionNode + " from " + currentValue + " to " + toggleResponse);
-                        }
+                        updatedSettings.put(toggles.get(i).getPermissionNode(), toggleResponse);
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode());
                 }
-            }
-
-            if (plugin.isDebugMode()) {
-                plugin.debug("Final settings after updates: " + currentSettings.toString());
             }
 
             // Create updated area
             Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .settings(currentSettings)
+                .settings(updatedSettings)
                 .build();
 
             // Save changes
-            plugin.updateArea(updatedArea); 
+            plugin.updateArea(updatedArea);
             
-            // Show success message with change count
             player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
                 Map.of(
                     "area", area.getName(),
@@ -147,7 +126,7 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling environment settings", e);
+            plugin.getLogger().error("Error handling items/drops settings", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }
@@ -155,7 +134,6 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        // Environment settings only use custom form responses
         plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
     }
 
@@ -167,4 +145,4 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
         }
         return plugin.getArea(areaData.getFormId());
     }
-} 
+}

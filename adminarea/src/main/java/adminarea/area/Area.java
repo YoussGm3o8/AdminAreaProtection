@@ -1,6 +1,8 @@
 package adminarea.area;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.exception.DatabaseException;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +31,7 @@ public final class Area {
     private final Map<String, Map<String, Boolean>> groupPermissions;
     private final Map<String, Map<String, Boolean>> trackPermissions;
     private final Map<String, Map<String, Boolean>> playerPermissions;
+    private Map<String, Map<String, Boolean>> cachedPlayerPermissions;
     
     Area(AreaDTO dto) {
         this.dto = dto;
@@ -109,7 +112,14 @@ public final class Area {
     }
 
     public AreaDTO toDTO() {
-        // Create a new DTO with current state
+        // Create a JSONObject from toggleStates map
+        JSONObject toggleStatesJson = new JSONObject(toggleStates);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug(String.format("Converting area %s to DTO", name));
+            plugin.debug("Toggle states: " + toggleStatesJson.toString());
+        }
+
         return new AreaDTO(
             name,
             world,
@@ -119,7 +129,7 @@ public final class Area {
             dto.settings(),
             new HashMap<>(groupPermissions),
             dto.inheritedPermissions(),
-            dto.toggleStates(),
+            toggleStatesJson,  // Use the actual toggle states
             dto.defaultToggleStates(),
             dto.inheritedToggleStates(),
             dto.permissions(),
@@ -211,12 +221,18 @@ public final class Area {
     }
 
     public Map<String, Map<String, Boolean>> getPlayerPermissions() {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Getting player permissions for area " + name);
-            plugin.debug("  Raw player permissions: " + playerPermissions);
-            plugin.debug("  DTO player permissions: " + dto.playerPermissions());
+        // Return cached permissions if available
+        if (cachedPlayerPermissions != null) {
+            return new HashMap<>(cachedPlayerPermissions);
         }
-        return new HashMap<>(playerPermissions);
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Getting player permissions for area " + name + " (not cached)");
+        }
+
+        // Cache permissions
+        cachedPlayerPermissions = new HashMap<>(playerPermissions);
+        return new HashMap<>(cachedPlayerPermissions);
     }
 
     public Map<String, Boolean> getPlayerPermissions(String playerName) {
@@ -231,7 +247,7 @@ public final class Area {
         return playerPermissions.getOrDefault(playerName, new HashMap<>());
     }
 
-    public void setPlayerPermissions(String playerName, Map<String, Boolean> permissions) {
+    public void setPlayerPermissions(String playerName, Map<String, Boolean> permissions) throws DatabaseException {
         if (plugin.isDebugMode()) {
             plugin.debug("Setting permissions for player " + playerName + " in area " + name);
             plugin.debug("  New permissions: " + permissions);
@@ -252,7 +268,7 @@ public final class Area {
         }
     }
 
-    public void setPlayerPermission(String playerName, String permission, boolean value) {
+    public void setPlayerPermission(String playerName, String permission, boolean value) throws DatabaseException {
         if (plugin.isDebugMode()) {
             plugin.debug("Setting permission " + permission + " to " + value + " for player " + playerName + " in area " + name);
             plugin.debug("  Old permissions in map: " + playerPermissions.get(playerName));
@@ -281,17 +297,33 @@ public final class Area {
         return groupPermissions;
     }
 
-    public void clearAllPermissions() {
-        // Clear all permission maps
-        groupPermissions.clear();
-        trackPermissions.clear();
-        playerPermissions.clear();
-
-        if (plugin.isDebugMode()) {
-            plugin.debug("Cleared all permissions for area " + name);
-            plugin.debug("  Group permissions cleared: " + groupPermissions);
-            plugin.debug("  Track permissions cleared: " + trackPermissions);
-            plugin.debug("  Player permissions cleared: " + playerPermissions);
+    public void clearAllPermissions() throws DatabaseException {
+        // Temporarily disable debug logging
+        boolean wasDebug = plugin.isDebugMode();
+        plugin.setDebugMode(false);
+        
+        try {
+            // Clear all permission maps
+            groupPermissions.clear();
+            trackPermissions.clear();
+            playerPermissions.clear();
+            
+            // Clear cache
+            cachedPlayerPermissions = null;
+            
+            // Save to database directly without triggering events
+            plugin.getDatabaseManager().saveArea(this);
+            
+        } finally {
+            // Restore debug mode
+            plugin.setDebugMode(wasDebug);
+            
+            if (wasDebug) {
+                plugin.debug("Cleared all permissions for area " + name);
+                plugin.debug("  Group permissions cleared: " + groupPermissions);
+                plugin.debug("  Track permissions cleared: " + trackPermissions);
+                plugin.debug("  Player permissions cleared: " + playerPermissions);
+            }
         }
     }
 }

@@ -28,17 +28,16 @@ public class ConfigManager {
         defaults.put("enableMessages", true);
         defaults.put("allowRegularAreaCreation", false);
         defaults.put("debug", false);
-        defaults.put("maxAreaPriority", 100);
         defaults.put("wandItemType", 280); // Stick by default
         
         // Particle visualization settings
         Map<String, Object> particleVisualization = new HashMap<>();
         particleVisualization.put("enabled", true);
-        particleVisualization.put("duration", 10); // seconds
+        particleVisualization.put("duration", 20); // Changed from 10 to 20 seconds
         defaults.put("particleVisualization", particleVisualization);
         
         // Add flat defaults for numeric validation
-        defaults.put("visualizationDuration", 10); // seconds
+        defaults.put("visualizationDuration", 20); // Changed from 10 to 20 seconds
         defaults.put("cacheExpiry", 5); // minutes
         defaults.put("undoHistorySize", 10);
         defaults.put("selectionCooldown", 250); // milliseconds
@@ -91,14 +90,6 @@ public class ConfigManager {
         defaults.put("areaSettings.description.mergeBehavior", 
             "When true, overlapping areas use AND logic (most restrictive). " +
             "When false, uses OR logic (least restrictive).");
-
-        // Area priority determines which area's settings take precedence when areas overlap
-        // Higher priority (0-100) overrides lower priority areas in the same space
-        defaults.put("maxAreaPriority", 100);
-        defaults.put("areaSettings.description.priority",
-            "Priority (0-100) determines which area's settings apply when areas overlap. " +
-            "Higher priority areas override lower priority areas in the same space. " +
-            "Example: A priority 50 area will override a priority 25 area's settings.");
 
         // Default permissions configuration
         Map<String, Object> defaultPerms = new HashMap<>();
@@ -203,11 +194,10 @@ public class ConfigManager {
         }
 
         // Validate numeric values
-        validateNumericRange("maxAreaPriority", 1, 1000);
         validateNumericRange("cacheExpiry", 1, 60);
         validateNumericRange("undoHistorySize", 1, 50);
         validateNumericRange("selectionCooldown", 50, 5000);
-        validateNumericRange("particleVisualization.duration", 1, 60);
+        validateNumericRange("particleVisualization.duration", 1, 120); // Allow up to 2 minutes
         
         // Validate title timings
         validateTitleTimings("title.enter");
@@ -355,12 +345,12 @@ public class ConfigManager {
     /**
      * Gets the maximum allowed priority value for areas.
      * Area priority determines which area's settings take precedence when areas overlap.
-     * Higher priority areas (up to this maximum) override lower priority areas in the same space.
+     * Higher priority areas (up to 100) override lower priority areas in the same space.
      *
-     * @return The maximum allowed priority value (default: 100)
+     * @return The maximum allowed priority value (100)
      */
     public int getMaxAreaPriority() {
-        return config.getInt("maxAreaPriority", 100);
+        return 100;
     }
 
     public int getWandItemType() {

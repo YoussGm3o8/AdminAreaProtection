@@ -17,6 +17,7 @@ import org.json.JSONObject;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 public class EntitySettingsHandler extends BaseFormHandler {
 
@@ -39,29 +40,52 @@ public class EntitySettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom("Entity Settings: " + area.getName());
-        
-        // Add header with clear instructions
-        form.addElement(new ElementLabel("§2Configure Entity Permissions\n§7Toggle settings below"));
-        
-        // Get area settings
-        AreaDTO dto = area.toDTO();
-        JSONObject settings = dto.settings();
+        try {
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.entitySettings.title", 
+                Map.of("area", area.getName())));
+            
+            // Add header with clear instructions
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.entitySettings.header")));
+            
+            // Get area settings
+            AreaDTO dto = area.toDTO();
+            JSONObject settings = dto.settings();
 
-        // Add toggles for this category
-        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENTITY);
-        if (toggles != null) {
-            for (PermissionToggle toggle : toggles) {
-                String description = plugin.getLanguageManager().get(
-                    "gui.permissions.toggles." + toggle.getPermissionNode());
-                form.addElement(new ElementToggle(
-                    toggle.getDisplayName() + "\n§7" + description,
-                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
-                ));
+            // Add toggles for this category
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENTITY);
+            if (toggles != null) {
+                for (PermissionToggle toggle : toggles) {
+                    try {
+                        String description = plugin.getLanguageManager().get(
+                            "gui.permissions.toggles." + toggle.getPermissionNode());
+                        
+                        // Add player placeholder for relevant toggles
+                        Map<String, String> placeholders = new HashMap<>();
+                        placeholders.put("name", toggle.getDisplayName());
+                        placeholders.put("description", description);
+                        if (description.contains("{player}")) {
+                            placeholders.put("player", "players");
+                        }
+                        
+                        form.addElement(new ElementToggle(
+                            plugin.getLanguageManager().get("gui.permissions.toggle.format", placeholders),
+                            settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                        ));
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Error adding toggle " + toggle.getPermissionNode(), e);
+                        player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.mobTypeError",
+                            Map.of("type", toggle.getPermissionNode(), "toggle", toggle.getDisplayName())));
+                    }
+                }
             }
+            
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating entity settings form", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError",
+                Map.of("error", e.getMessage())));
+            return null;
         }
-        
-        return form;
     }
 
     @Override
@@ -82,16 +106,39 @@ public class EntitySettingsHandler extends BaseFormHandler {
                 return;
             }
 
-            // Skip header label element (index 0)
+            // Track number of changes
+            int changedSettings = 0;
+
+            // Skip header label (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
-                Boolean value = response.getToggleResponse(i + 1);
-                if (value == null) {
-                    player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidForm"));
-                    plugin.getGuiManager().openFormById(player, getFormId(), area);
-                    return;
+                try {
+                    Boolean value = response.getToggleResponse(i + 1);
+                    if (value == null) {
+                        player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.toggleError",
+                            Map.of(
+                                "toggle", toggles.get(i).getDisplayName(),
+                                "error", "No value provided"
+                            )));
+                        continue;
+                    }
+                    
+                    // Only count as changed if value is different
+                    boolean currentValue = updatedSettings.optBoolean(toggles.get(i).getPermissionNode(), 
+                        toggles.get(i).getDefaultValue());
+                    if (currentValue != value) {
+                        changedSettings++;
+                    }
+                    
+                    updatedSettings.put(toggles.get(i).getPermissionNode(), value);
+                } catch (Exception e) {
+                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode(), e);
+                    player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.toggleError",
+                        Map.of(
+                            "toggle", toggles.get(i).getDisplayName(),
+                            "error", e.getMessage()
+                        )));
                 }
-                updatedSettings.put(toggles.get(i).getPermissionNode(), value);
             }
 
             // Create updated area
@@ -101,15 +148,24 @@ public class EntitySettingsHandler extends BaseFormHandler {
 
             // Save changes
             plugin.updateArea(updatedArea); 
+            
+            // Show success message with change count
             player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
-                Map.of("area", area.getName())));
+                Map.of(
+                    "area", area.getName(),
+                    "count", String.valueOf(changedSettings)
+                )));
 
             // Return to edit menu
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling entity settings", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.saveChanges"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.saveError",
+                Map.of(
+                    "area", getEditingArea(player).getName(),
+                    "error", e.getMessage()
+                )));
             plugin.getGuiManager().openMainMenu(player);
         }
     }

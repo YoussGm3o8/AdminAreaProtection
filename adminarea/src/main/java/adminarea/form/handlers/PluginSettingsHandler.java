@@ -18,6 +18,13 @@ import java.util.Map;
 
 public class PluginSettingsHandler extends BaseFormHandler {
 
+    private static final int MIN_CACHE_EXPIRY = 1;
+    private static final int MAX_CACHE_EXPIRY = 1440; // 24 hours
+    private static final int MIN_UNDO_HISTORY = 1;
+    private static final int MAX_UNDO_HISTORY = 100;
+    private static final int MIN_UPDATE_INTERVAL = 60; // 1 minute
+    private static final int MAX_UPDATE_INTERVAL = 3600; // 1 hour
+
     public PluginSettingsHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
         validateFormId();
@@ -56,11 +63,6 @@ public class PluginSettingsHandler extends BaseFormHandler {
 
             // Area Settings
             form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.pluginSettings.sections.area")));
-            form.addElement(new ElementInput(
-                plugin.getLanguageManager().get("gui.pluginSettings.labels.maxAreaPriority"),
-                plugin.getLanguageManager().get("gui.pluginSettings.labels.maxAreaPriorityPlaceholder"),
-                String.valueOf(plugin.getConfigManager().getMaxAreaPriority())
-            ));
             form.addElement(new ElementToggle(
                 plugin.getLanguageManager().get("gui.pluginSettings.labels.mostRestrictiveMerge"),
                 plugin.getConfigManager().getBoolean("areaSettings.useMostRestrictiveMerge", true)
@@ -120,7 +122,7 @@ public class PluginSettingsHandler extends BaseFormHandler {
             return form;
         } catch (Exception e) {
             plugin.getLogger().error("Error creating plugin settings form", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError", Map.of("error", e.getMessage())));
             return null;
         }
     }
@@ -133,6 +135,9 @@ public class PluginSettingsHandler extends BaseFormHandler {
         }
 
         try {
+            // Validate all numeric inputs first
+            validateNumericInputs(response);
+
             // General Settings
             plugin.setDebugMode(response.getToggleResponse(1));
             plugin.getConfigManager().set("debugStackTraces", response.getToggleResponse(2));
@@ -140,48 +145,78 @@ public class PluginSettingsHandler extends BaseFormHandler {
             plugin.getConfigManager().set("allowRegularAreaCreation", response.getToggleResponse(4));
 
             // Area Settings
-            int maxPriority = Integer.parseInt(response.getInputResponse(6));
-            if (maxPriority < 1 || maxPriority > 1000) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
-                return;
-            }
-            plugin.getConfigManager().set("maxAreaPriority", maxPriority);
-            plugin.getConfigManager().set("areaSettings.useMostRestrictiveMerge", response.getToggleResponse(7));
+            plugin.getConfigManager().set("areaSettings.useMostRestrictiveMerge", response.getToggleResponse(6));
 
             // Tool Settings
-            int wandItemType = Integer.parseInt(response.getInputResponse(9));
+            int wandItemType = Integer.parseInt(response.getInputResponse(8));
             plugin.getConfigManager().set("wandItemType", wandItemType);
             
             // Handle particle visualization settings
             Map<String, Object> particleSection = new HashMap<>();
-            particleSection.put("enabled", response.getToggleResponse(10));
-            particleSection.put("duration", Integer.parseInt(response.getInputResponse(11)));
+            particleSection.put("enabled", response.getToggleResponse(9));
+            particleSection.put("duration", Integer.parseInt(response.getInputResponse(10)));
             plugin.getConfigManager().set("particleVisualization", particleSection);
             
-            plugin.getConfigManager().set("selectionCooldown", Integer.parseInt(response.getInputResponse(12)));
+            plugin.getConfigManager().set("selectionCooldown", Integer.parseInt(response.getInputResponse(11)));
 
             // Cache Settings
-            plugin.getConfigManager().set("cacheExpiryMinutes", Integer.parseInt(response.getInputResponse(14)));
-            plugin.getConfigManager().set("undoHistorySize", Integer.parseInt(response.getInputResponse(15)));
+            int cacheExpiry = Integer.parseInt(response.getInputResponse(13));
+            validateRange("cacheExpiry", cacheExpiry, MIN_CACHE_EXPIRY, MAX_CACHE_EXPIRY);
+            plugin.getConfigManager().set("cacheExpiryMinutes", cacheExpiry);
+
+            int undoHistory = Integer.parseInt(response.getInputResponse(14));
+            validateRange("undoHistory", undoHistory, MIN_UNDO_HISTORY, MAX_UNDO_HISTORY);
+            plugin.getConfigManager().set("undoHistorySize", undoHistory);
 
             // Integrations
-            plugin.getConfigManager().set("luckperms.enabled", response.getToggleResponse(17));
-            plugin.getConfigManager().set("luckperms.inheritPermissions", response.getToggleResponse(18));
-            plugin.getConfigManager().set("luckperms.updateInterval", Integer.parseInt(response.getInputResponse(19)));
+            plugin.getConfigManager().set("luckperms.enabled", response.getToggleResponse(16));
+            plugin.getConfigManager().set("luckperms.inheritPermissions", response.getToggleResponse(17));
+            
+            int updateInterval = Integer.parseInt(response.getInputResponse(18));
+            validateRange("updateInterval", updateInterval, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL);
+            plugin.getConfigManager().set("luckperms.updateInterval", updateInterval);
 
+            // Save and notify
             plugin.getConfigManager().getConfig().save();
-            player.sendMessage(plugin.getLanguageManager().get("messages.config.reloaded"));
+            player.sendMessage(plugin.getLanguageManager().get("success.plugin.reload"));
 
-            // Just cleanup without opening any new menu
+            // Cleanup
             cleanup(player);
 
         } catch (NumberFormatException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+            player.sendMessage(plugin.getLanguageManager().get("validation.form.settings.invalid", 
+                Map.of("value", e.getMessage())));
+            plugin.getGuiManager().openFormById(player, FormIds.PLUGIN_SETTINGS, null);
+        } catch (IllegalArgumentException e) {
+            player.sendMessage(plugin.getLanguageManager().get("validation.form.settings.outOfRange", 
+                Map.of("error", e.getMessage())));
             plugin.getGuiManager().openFormById(player, FormIds.PLUGIN_SETTINGS, null);
         } catch (Exception e) {
             plugin.getLogger().error("Error handling plugin settings response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             handleCancel(player);
+        }
+    }
+
+    private void validateNumericInputs(FormResponseCustom response) throws NumberFormatException {
+        // Validate all numeric inputs
+        Integer.parseInt(response.getInputResponse(8));  // wandItemType
+        Integer.parseInt(response.getInputResponse(10)); // visualizationDuration
+        Integer.parseInt(response.getInputResponse(11)); // selectionCooldown
+        Integer.parseInt(response.getInputResponse(13)); // cacheExpiry
+        Integer.parseInt(response.getInputResponse(14)); // undoHistory
+        Integer.parseInt(response.getInputResponse(18)); // updateInterval
+    }
+
+    private void validateRange(String field, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(plugin.getLanguageManager().get("validation.form.settings.outOfRange",
+                Map.of(
+                    "field", field,
+                    "min", String.valueOf(min),
+                    "max", String.valueOf(max),
+                    "value", String.valueOf(value)
+                )));
         }
     }
 

@@ -180,7 +180,9 @@ public class FormValidator {
             ValidationResult priorityResult = validatePriority(priority);
             if (!priorityResult.isValid()) return priorityResult;
 
-            boolean showTitle = response.getToggleResponse(4);
+            // Fix index for showTitle toggle (3 instead of 4)
+            boolean showTitle = response.getToggleResponse(3);
+            // Skip element 4 which is the Display Settings label
             String enterMsg = response.getInputResponse(5);
             String leaveMsg = response.getInputResponse(6);
 

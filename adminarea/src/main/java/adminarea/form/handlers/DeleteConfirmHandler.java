@@ -75,7 +75,7 @@ public class DeleteConfirmHandler extends BaseFormHandler {
                 plugin.getAreaManager().removeArea(area);
                 Map<String, String> placeholders = new HashMap<>();
                 placeholders.put("area", area.getName());
-                player.sendMessage(plugin.getLanguageManager().get("messages.area.delete.success", placeholders));
+                player.sendMessage(plugin.getLanguageManager().get("success.area.delete.single", placeholders));
             }
 
             // Set form tracking data for main menu before opening it

@@ -52,8 +52,11 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             // Show player selection form with dropdown and manual input
             FormWindowCustom form = new FormWindowCustom("Player Permissions - " + area.getName());
             
+            int elementIndex = 0;
+            
             // Add header with instructions
             form.addElement(new ElementLabel("§2Configure Player Permissions\n§7Select a player or enter a name manually"));
+            elementIndex++;
             
             // Add dropdown with online players
             List<String> onlinePlayers = new ArrayList<>(plugin.getServer().getOnlinePlayers().values()
@@ -62,9 +65,30 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                 .collect(Collectors.toList()));
             onlinePlayers.add(0, "-- Select Player --"); // Add default option
             form.addElement(new ElementDropdown("Online Players", onlinePlayers));
+            elementIndex++;
             
             // Add manual input option
             form.addElement(new ElementInput("Or enter player name manually:", "Player name", ""));
+            elementIndex++;
+
+            // Add list of players with existing permissions
+            Map<String, Map<String, Boolean>> existingPerms = area.getPlayerPermissions();
+            if (!existingPerms.isEmpty()) {
+                form.addElement(new ElementLabel("\n§6Players with Custom Permissions:"));
+                elementIndex++;
+                StringBuilder playerList = new StringBuilder("§7");
+                for (String playerName : existingPerms.keySet()) {
+                    playerList.append("\n- ").append(playerName);
+                }
+                form.addElement(new ElementLabel(playerList.toString()));
+                elementIndex++;
+            }
+
+            // Add reset all permissions button
+            form.addElement(new ElementToggle("\n§cReset All Player Permissions\n§7This will clear all player-specific permissions", false));
+            // Store the reset toggle index for later use
+            plugin.getFormIdMap().put(player.getName() + "_resetIndex", 
+                new FormTrackingData(String.valueOf(elementIndex), System.currentTimeMillis()));
             
             return form;
         } else {
@@ -129,6 +153,38 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             }
 
             if (playerData == null) {
+                // Get the stored reset toggle index
+                FormTrackingData resetIndexData = plugin.getFormIdMap().get(player.getName() + "_resetIndex");
+                if (resetIndexData != null) {
+                    try {
+                        int resetIndex = Integer.parseInt(resetIndexData.getFormId());
+                        boolean resetAll = response.getToggleResponse(resetIndex);
+                        if (resetAll) {
+                            // Create new area with cleared player permissions
+                            Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
+                                .playerPermissions(new HashMap<>())
+                                .build();
+
+                            // Update area in plugin
+                            plugin.updateArea(updatedArea);
+                            
+                            player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsReset",
+                                Map.of("area", area.getName())));
+
+                            // Clean up form data
+                            plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
+                            
+                            // Return to edit menu
+                            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+                            return;
+                        }
+                    } catch (NumberFormatException e) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Error parsing reset index: " + e.getMessage());
+                        }
+                    }
+                }
+
                 // Handle player selection
                 String selectedPlayer = null;
                 
@@ -149,7 +205,7 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                 
                 // Validate player selection
                 if (selectedPlayer == null || selectedPlayer.trim().isEmpty()) {
-                    player.sendMessage(plugin.getLanguageManager().get("messages.form.error.invalidInput"));
+                    player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
                     return;
                 }
 
@@ -157,6 +213,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                     player.getName() + PLAYER_DATA_KEY,
                     new FormTrackingData(selectedPlayer.trim(), System.currentTimeMillis())
                 );
+                
+                // Clean up form data
+                plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
                 
                 plugin.getGuiManager().openFormById(player, FormIds.PLAYER_SETTINGS, area);
                 return;
@@ -211,7 +270,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
 
     @Override
     public void handleCancel(Player player) {
+        // Clean up all form data
         plugin.getFormIdMap().remove(player.getName() + PLAYER_DATA_KEY);
+        plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
         plugin.getGuiManager().openMainMenu(player);
     }
 } 
