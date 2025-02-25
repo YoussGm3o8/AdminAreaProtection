@@ -13,9 +13,17 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class ValidationUtils {
-    private static final Pattern AREA_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_-]{3,32}$");
+    private static final Pattern AREA_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9][a-zA-Z0-9_-]{2,31}$");
     private static final int MIN_PRIORITY = 0;
     private static final int MAX_PRIORITY = 100;
+    private static final int MIN_NAME_LENGTH = 3;
+    private static final int MAX_NAME_LENGTH = 32;
+    
+    // Reserved area names that cannot be used
+    private static final Set<String> RESERVED_NAMES = Set.of(
+        "global", "world", "spawn", "admin", "default", "server",
+        "pvp", "safe", "wild", "wilderness", "shop", "mall"
+    );
     
     // Cache common patterns to avoid recompilation
     private static final Map<String, Pattern> PATTERN_CACHE = new ConcurrentHashMap<>(8);
@@ -57,8 +65,34 @@ public class ValidationUtils {
     }
 
     public static void validateAreaName(String name) {
-        if (name == null || !AREA_NAME_PATTERN.matcher(name).matches()) {
-            throw new IllegalArgumentException("Invalid area name. Use only letters, numbers, hyphens, and underscores (3-32 characters).");
+        if (name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("Area name cannot be null or empty");
+        }
+        
+        if (name.length() < MIN_NAME_LENGTH) {
+            throw new IllegalArgumentException("Area name must be at least " + MIN_NAME_LENGTH + " characters long");
+        }
+        
+        if (name.length() > MAX_NAME_LENGTH) {
+            throw new IllegalArgumentException("Area name cannot be longer than " + MAX_NAME_LENGTH + " characters");
+        }
+        
+        if (!AREA_NAME_PATTERN.matcher(name).matches()) {
+            throw new IllegalArgumentException("Area name must start with a letter or number and contain only letters, numbers, hyphens, and underscores");
+        }
+        
+        if (RESERVED_NAMES.contains(name.toLowerCase())) {
+            throw new IllegalArgumentException("'" + name + "' is a reserved name and cannot be used");
+        }
+        
+        // Check for common prefix/suffix patterns that should be disallowed
+        if (name.startsWith("_") || name.startsWith("-") || name.endsWith("_") || name.endsWith("-")) {
+            throw new IllegalArgumentException("Area name cannot start or end with underscores or hyphens");
+        }
+        
+        // Check for consecutive special characters
+        if (name.contains("__") || name.contains("--") || name.contains("_-") || name.contains("-_")) {
+            throw new IllegalArgumentException("Area name cannot contain consecutive special characters");
         }
     }
 

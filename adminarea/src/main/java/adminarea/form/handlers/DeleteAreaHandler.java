@@ -125,6 +125,13 @@ public class DeleteAreaHandler extends BaseFormHandler {
     private void processAreaDeletion(Player player, Area area) {
         try {
             String areaName = area.getName();
+            String worldName = area.getWorld();
+            
+            // Check deletion permission
+            if (!player.hasPermission("adminarea.area.delete")) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.permissions.noPermission"));
+                return;
+            }
             
             // Delete area from manager
             plugin.getAreaManager().removeArea(area);
@@ -133,8 +140,18 @@ public class DeleteAreaHandler extends BaseFormHandler {
             plugin.getConfigManager().remove("areaTitles." + areaName);
             plugin.getConfigManager().save();
             
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.deleted", 
-                Map.of("area", areaName)));
+            // Invalidate permission cache for this area
+            plugin.getOverrideManager().getPermissionChecker().invalidateCache(areaName);
+            
+            // Clean up form tracking data for this area
+            plugin.getFormIdMap().remove(player.getName() + "_editing");
+            
+            // Show success message
+            Map<String, String> placeholders = Map.of(
+                "area", areaName,
+                "world", worldName
+            );
+            player.sendMessage(plugin.getLanguageManager().get("success.area.delete.single", placeholders));
             
             // Return to main menu
             plugin.getFormIdMap().put(player.getName(),
@@ -146,7 +163,7 @@ public class DeleteAreaHandler extends BaseFormHandler {
             }
         } catch (Exception e) {
             plugin.getLogger().error("Error deleting area", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.deleteFailed"));
+            player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
         }
     }
 }

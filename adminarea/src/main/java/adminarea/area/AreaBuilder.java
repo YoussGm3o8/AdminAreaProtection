@@ -200,7 +200,12 @@ public class AreaBuilder {
         if (settings != null) {
             for (String key : settings.keySet()) {
                 if (key.startsWith("allow")) {
-                    toggleStates.put(key, settings.getBoolean(key));
+                    // Normalize key to have the prefix
+                    String normalizedKey = key;
+                    if (!key.startsWith("gui.permissions.toggles.")) {
+                        normalizedKey = "gui.permissions.toggles." + key;
+                    }
+                    toggleStates.put(normalizedKey, settings.getBoolean(key));
                 }
             }
         }

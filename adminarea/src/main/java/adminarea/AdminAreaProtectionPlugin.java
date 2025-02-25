@@ -41,6 +41,7 @@ import adminarea.managers.ConfigManager;
 import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
 import adminarea.managers.LanguageManager;
+import adminarea.managers.ListenerManager;
 import adminarea.permissions.OverrideManager;  // Updated import path
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
@@ -70,6 +71,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     private AreaManager areaManager;
     private PerformanceMonitor performanceMonitor; // Add performance monitor
     private GuiManager guiManager;
+    private ListenerManager listenerManager; // Add listener manager
 
     private WandListener wandListener; // Add WandListener
 
@@ -186,6 +188,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     for (Area area : loadedAreas) {
                         areaManager.addArea(area);
                     }
+                    
+                    // Normalize toggle states for all areas to ensure consistent format
+                    if (configManager.getBoolean("normalize_toggle_states", true)) {
+                        getLogger().info("Normalizing toggle states for all areas...");
+                        areaManager.normalizeAllAreaToggleStates();
+                        getLogger().info("Toggle states normalized successfully.");
+                    }
+                    
                     performanceMonitor.stopTimer(areaInitTimer, "area_manager_init");
                     getLogger().info("Loaded " + loadedAreas.size() + " areas from database");
                 } catch (DatabaseException e) {
@@ -215,28 +225,28 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 validationUtils = new ValidationUtils();
     
                 // Register events and commands
-    
                 getServer().getPluginManager().registerEvents(this, this);
                 getServer().getPluginManager().registerEvents(new FormResponseListener(this), this);
                 getServer().getPluginManager().registerEvents(wandListener, this); // Register WandListener
-                getLogger().info("FormResponseListener registered."); // Added log
-    
-                ProtectionListener protectionListener = new ProtectionListener(this);
-    
-                getServer().getPluginManager().registerEvents(protectionListener, this);
-                getServer().getPluginManager().registerEvents(new EnderPearlListener(this, protectionListener), this); // Add this line
-                getServer().getPluginManager().registerEvents(new EnvironmentListener(this, protectionListener), this);
-                getServer().getPluginManager().registerEvents(new EntityListener(this, protectionListener), this);
-                getServer().getPluginManager().registerEvents(new ItemListener(this, protectionListener), this);
-                getServer().getPluginManager().registerEvents(new VehicleListener(this, protectionListener), this);
-                getServer().getPluginManager().registerEvents(new PlayerEffectListener(this, protectionListener), this);
-                getServer().getPluginManager().registerEvents(new ExperienceListener(this, protectionListener), this);
-    
-                // Register form cleanup listener
-                this.getServer().getPluginManager().registerEvents(new FormCleanupListener(this), this);
+                getLogger().info("FormResponseListener registered.");
+                
+                // Initialize and register protection-related listeners
+                Timer.Sample listenerInitTimer = performanceMonitor.startTimer();
+                try {
+                    // Initialize listener manager which handles all protection listeners
+                    listenerManager = new ListenerManager(this);
+                    
+                    // Register form cleanup listener separately (not protection-related)
+                    getServer().getPluginManager().registerEvents(new FormCleanupListener(this), this);
+                    
+                    performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init");
+                    getLogger().info("Listener manager initialized and all listeners registered successfully");
+                } catch (Exception e) {
+                    performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init_failed");
+                    getLogger().error("Failed to initialize listener manager", e);
+                }
 
                 // Initialize AreaCommand
-    
                 areaCommand = new AreaCommand(this);
     
                 // Register the command
@@ -336,54 +346,105 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     
         @Override
         public void onDisable() {
-            // Add override manager cleanup before database cleanup
-            if (overrideManager != null) {
-                Timer.Sample overrideCloseTimer = performanceMonitor.startTimer();
-                try {
-                    overrideManager.close();
-                    performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close");
-                } catch (Exception e) {
-                    performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close_failed");
-                    getLogger().error("Error closing override manager", e);
-                }
-            }
-    
-            // Cleanup managers in reverse order of initialization
-            if (guiManager != null) {
-                // Cancel any pending GUI tasks
+            getLogger().info("Disabling AdminAreaProtectionPlugin...");
+            Timer.Sample shutdownTimer = performanceMonitor.startTimer();
+            
+            try {
+                // Cancel all scheduled tasks first to prevent conflicts
                 getServer().getScheduler().cancelTask(this);
-            }
-    
-            if (areaManager != null) {
-                // Save any pending area changes
-                Timer.Sample saveTimer = performanceMonitor.startTimer();
-                try {
-                    for (Area area : areaManager.getAllAreas()) {
-                        dbManager.saveArea(area);
+                
+                // Clean up cache data
+                if (isDebugMode()) {
+                    getLogger().info("Cleaning up plugin caches...");
+                }
+                
+                // Close GUI related resources
+                if (guiManager != null) {
+                    // Call cleanup if you've implemented this method, otherwise simply clear references
+                    // guiManager.cleanup();
+                }
+                
+                // Clean up protection listeners through the manager
+                if (listenerManager != null) {
+                    listenerManager.cleanup();
+                    getLogger().info("Listener manager cleanup completed");
+                }
+                
+                // Clear player data caches
+                playerPositions.clear();
+                bypassingPlayers.clear();
+                formIdMap.clear();
+                
+                // Clean up LuckPerms integration
+                if (luckPermsCache != null) {
+                    // If cleanup method exists, call it, otherwise simply null out the reference
+                    // luckPermsCache.cleanup();
+                }
+                
+                // Clean up override manager
+                if (overrideManager != null) {
+                    Timer.Sample overrideCloseTimer = performanceMonitor.startTimer();
+                    try {
+                        overrideManager.close();
+                        performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close");
+                    } catch (Exception e) {
+                        performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close_failed");
+                        getLogger().error("Error closing override manager", e);
                     }
-                    performanceMonitor.stopTimer(saveTimer, "final_area_save");
-                } catch (Exception e) {
-                    performanceMonitor.stopTimer(saveTimer, "final_area_save_failed");
-                    getLogger().error("Error saving areas during shutdown", e);
                 }
-            }
-    
-            if (dbManager != null) {
-                Timer.Sample dbCloseTimer = performanceMonitor.startTimer();
-                try {
-                    dbManager.close();
-                    performanceMonitor.stopTimer(dbCloseTimer, "database_close");
-                } catch (Exception e) {
-                    performanceMonitor.stopTimer(dbCloseTimer, "database_close_failed");
-                    getLogger().error("Error closing database", e);
+            
+                // Save areas before shutting down DB
+                if (areaManager != null) {
+                    Timer.Sample saveTimer = performanceMonitor.startTimer();
+                    try {
+                        // Get areas and save them with batching for better performance
+                        List<Area> allAreas = areaManager.getAllAreas();
+                        getLogger().info("Saving " + allAreas.size() + " areas before shutdown...");
+                        
+                        // Save in batches to avoid memory pressure
+                        int batchSize = 20;
+                        for (int i = 0; i < allAreas.size(); i += batchSize) {
+                            int end = Math.min(i + batchSize, allAreas.size());
+                            for (int j = i; j < end; j++) {
+                                try {
+                                    dbManager.saveArea(allAreas.get(j));
+                                } catch (Exception e) {
+                                    getLogger().error("Failed to save area: " + allAreas.get(j).getName(), e);
+                                }
+                            }
+                        }
+                        performanceMonitor.stopTimer(saveTimer, "final_area_save");
+                        getLogger().info("Area data saved successfully");
+                    } catch (Exception e) {
+                        performanceMonitor.stopTimer(saveTimer, "final_area_save_failed");
+                        getLogger().error("Error saving areas during shutdown", e);
+                    }
                 }
+                
+                // Close database connection last
+                if (dbManager != null) {
+                    Timer.Sample dbCloseTimer = performanceMonitor.startTimer();
+                    try {
+                        dbManager.close();
+                        performanceMonitor.stopTimer(dbCloseTimer, "database_close");
+                        getLogger().info("Database connection closed");
+                    } catch (Exception e) {
+                        performanceMonitor.stopTimer(dbCloseTimer, "database_close_failed");
+                        getLogger().error("Error closing database", e);
+                    }
+                }
+                
+                performanceMonitor.stopTimer(shutdownTimer, "plugin_shutdown");
+            } catch (Exception e) {
+                getLogger().error("Error during plugin shutdown", e);
+            } finally {
+                // Final cleanup of the performance monitor
+                if (performanceMonitor != null) {
+                    performanceMonitor.close();
+                }
+                
+                getLogger().info("AdminAreaProtectionPlugin disabled.");
             }
-    
-            if (performanceMonitor != null) {
-                performanceMonitor.close();
-            }
-    
-            getLogger().info("AdminAreaProtectionPlugin disabled.");
         }
     
         // Remove duplicate area management methods and delegate to areaManager
@@ -675,6 +736,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getLogger().error("Error getting primary group", e);
                 return null;
             }
+        }
+
+        /**
+         * Gets the listener manager instance
+         * @return The ListenerManager instance
+         */
+        public ListenerManager getListenerManager() {
+            return listenerManager;
         }
 
 }

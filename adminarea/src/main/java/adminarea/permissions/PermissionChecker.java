@@ -16,10 +16,14 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 public class PermissionChecker {
     private final AdminAreaProtectionPlugin plugin;
     private final Cache<String, Boolean> permissionCache;
-    private static final int CACHE_SIZE = 1000;
-    private static final long CACHE_EXPIRY = TimeUnit.MINUTES.toMillis(5);
+    private static final int CACHE_SIZE = 2000; // Increased from 1000 for better hit rate
+    private static final long CACHE_EXPIRY = TimeUnit.MINUTES.toMillis(10); // Increased from 5 minutes
     private final Map<String, Long> lastPermissionCheck = new ConcurrentHashMap<>();
     private static final long CHECK_INTERVAL = 100; // ms between checks for the same permission
+    
+    // Common permission prefix to avoid string concatenation in hot paths
+    private static final String GUI_PERMISSIONS_PREFIX = "gui.permissions.toggles.";
+    private static final String BYPASS_PREFIX = "adminarea.bypass.";
     
     public PermissionChecker(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
@@ -27,6 +31,31 @@ public class PermissionChecker {
             .maximumSize(CACHE_SIZE)
             .expireAfterWrite(CACHE_EXPIRY, TimeUnit.MILLISECONDS)
             .build();
+    }
+    
+    /**
+     * Normalizes permission names to ensure consistent format with prefix
+     * 
+     * @param permission Permission to normalize
+     * @return Normalized permission with proper prefix
+     */
+    private String normalizePermission(String permission) {
+        if (permission == null || permission.isEmpty()) {
+            return GUI_PERMISSIONS_PREFIX + "default";
+        }
+        
+        // Most efficient check first - if already has prefix, return as is
+        if (permission.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            return permission;
+        }
+        
+        // Skip special permission types that shouldn't be prefixed
+        if (permission.contains("adminarea.") || permission.contains("group.")) {
+            return permission;
+        }
+        
+        // Add prefix for simple permission names
+        return GUI_PERMISSIONS_PREFIX + permission;
     }
     
     /**
@@ -50,16 +79,11 @@ public class PermissionChecker {
                 return true;
             }
 
-            // Fix missing gui.permissions.toggles prefix
-            if (!permission.contains(".")) {
-                permission = "gui.permissions.toggles." + permission;
-            }
+            // Normalize permission name once
+            String normalizedPermission = normalizePermission(permission);
             
-            // Build cache key
-            String cacheKey = area.getName() + ":" + permission;
-            if (player != null) {
-                cacheKey += ":" + player.getName();
-            }
+            // Build cache key (minimal string operations)
+            String cacheKey = area.getName() + ":" + normalizedPermission + (player != null ? ":" + player.getName() : "");
 
             // Check cache first
             Boolean cached = permissionCache.getIfPresent(cacheKey);
@@ -71,53 +95,54 @@ public class PermissionChecker {
             long now = System.currentTimeMillis();
             Long lastCheck = lastPermissionCheck.get(cacheKey);
             if (lastCheck != null && now - lastCheck < CHECK_INTERVAL) {
-                // Return last cached result or default to true
-                return permissionCache.getIfPresent(cacheKey) != null ? 
-                    permissionCache.getIfPresent(cacheKey) : true;
+                // Return default if no cached result (shouldn't happen often)
+                return true;
             }
             lastPermissionCheck.put(cacheKey, now);
 
-            // Check if player has bypass permission for this specific area
-            if (player != null && player.hasPermission("adminarea.bypass." + area.getName())) {
-                permissionCache.put(cacheKey, true);
-                return true;
-            }
-            
-            // Check if player has bypass permission for this specific action
-            String bypassPerm = "adminarea.bypass." + permission.replace("gui.permissions.toggles.", "");
-            if (player != null && player.hasPermission(bypassPerm)) {
-                permissionCache.put(cacheKey, true);
-                return true;
+            // Player bypass checks
+            if (player != null) {
+                // Check area bypass
+                if (player.hasPermission(BYPASS_PREFIX + area.getName())) {
+                    permissionCache.put(cacheKey, true);
+                    return true;
+                }
+                
+                // Check action bypass
+                String permWithoutPrefix = normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX) ?
+                    normalizedPermission.substring(GUI_PERMISSIONS_PREFIX.length()) : normalizedPermission;
+                if (player.hasPermission(BYPASS_PREFIX + permWithoutPrefix)) {
+                    permissionCache.put(cacheKey, true);
+                    return true;
+                }
             }
 
             // Get the toggle state
-            boolean allowed = area.getToggleState(permission);
+            boolean allowed = area.getToggleState(normalizedPermission);
             
-            // If allowed by toggle, check if player has permission
+            // Check player and group permissions if allowed by toggle
             if (allowed && player != null) {
-                // Check if player has applicable permissions in the area
+                // Check player-specific permissions first (most specific)
                 Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
-                if (playerPermissions.containsKey(player.getName())) {
-                    Map<String, Boolean> playerPerms = playerPermissions.get(player.getName());
-                    if (playerPerms.containsKey(permission)) {
-                        allowed = playerPerms.get(permission);
-                    }
-                }
-                
-                // Check if player's group has applicable permissions
-                Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
-                for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
-                    String group = entry.getKey();
-                    if (player.hasPermission("group." + group)) {
-                        Map<String, Boolean> groupPerms = entry.getValue();
-                        if (groupPerms.containsKey(permission)) {
-                            // Group permissions override player permissions if more restrictive
-                            allowed = allowed && groupPerms.get(permission);
+                Map<String, Boolean> playerPerms = playerPermissions.get(player.getName());
+                if (playerPerms != null && playerPerms.containsKey(normalizedPermission)) {
+                    allowed = playerPerms.get(normalizedPermission);
+                } else {
+                    // Check group permissions (can override)
+                    Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                        if (player.hasPermission("group." + entry.getKey())) {
+                            Map<String, Boolean> groupPerms = entry.getValue();
+                            if (groupPerms.containsKey(normalizedPermission)) {
+                                // Group permissions override player permissions if more restrictive
+                                allowed = allowed && groupPerms.get(normalizedPermission);
+                            }
                         }
                     }
                 }
             }
 
+            // Cache the result
             permissionCache.put(cacheKey, allowed);
             return allowed;
             
@@ -135,6 +160,7 @@ public class PermissionChecker {
      * @return true if allowed, false if denied
      */
     public boolean isAllowed(Position pos, Player player, String permission) {
+        // Fail fast for null position
         if (pos == null || pos.getLevel() == null) {
             return true;
         }
@@ -158,17 +184,43 @@ public class PermissionChecker {
     
     /**
      * Invalidates the permission cache for a specific area
-     * 
+     *
      * @param areaName The name of the area
      */
     public void invalidateCache(String areaName) {
-        permissionCache.invalidateAll();
+        if (areaName == null || areaName.isEmpty()) {
+            invalidateCache();
+            return;
+        }
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Invalidating permission cache for area: " + areaName);
+        }
+
+        // Batch removals for better performance
+        String prefix = areaName.toLowerCase() + ":";
+        lastPermissionCheck.keySet().removeIf(key -> key.startsWith(prefix));
+        permissionCache.asMap().keySet().removeIf(key -> key.startsWith(prefix));
     }
     
     /**
      * Invalidates the entire permission cache
      */
     public void invalidateCache() {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Invalidating entire permission cache");
+        }
+        lastPermissionCheck.clear();
         permissionCache.invalidateAll();
+    }
+    
+    /**
+     * Performs maintenance on the cache by removing expired entries
+     * Call this periodically (e.g., once per minute) to avoid memory leaks
+     */
+    public void cleanupCache() {
+        // Remove old entries from lastPermissionCheck to prevent memory leaks
+        long now = System.currentTimeMillis();
+        lastPermissionCheck.entrySet().removeIf(entry -> now - entry.getValue() > CHECK_INTERVAL * 100);
     }
 }

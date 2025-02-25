@@ -47,6 +47,10 @@ messages:
     pistons: "{prefix}§cPistons are not allowed in {area}"
     hangingBreak: "{prefix}§cYou cannot break hanging items in {area}"
     blockSpread: "{prefix}§cBlock spreading is not allowed in {area}"
+    breeding: "{prefix}§cBreeding animals is not allowed in {area}"
+    taming: "{prefix}§cTaming animals is not allowed in {area}"
+    projectile: "{prefix}§cShooting projectiles is not allowed in {area}"
+    monsterTarget: "{prefix}§cMonsters in this area cannot target players"
 
   # Command related messages
   commands:

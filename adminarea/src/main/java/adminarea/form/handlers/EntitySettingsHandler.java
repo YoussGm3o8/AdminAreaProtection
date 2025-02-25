@@ -114,23 +114,24 @@ public class EntitySettingsHandler extends BaseFormHandler {
             for (int i = 0; i < toggles.size(); i++) {
                 try {
                     Boolean value = response.getToggleResponse(i + 1);
-                    if (value == null) {
+                    // Process toggle value
+                    if (value != null) {
+                        // Only count as changed if value is different
+                        boolean currentValue = updatedSettings.optBoolean(toggles.get(i).getPermissionNode(), 
+                            toggles.get(i).getDefaultValue());
+                        if (currentValue != value) {
+                            changedSettings++;
+                        }
+                        
+                        updatedSettings.put(toggles.get(i).getPermissionNode(), value);
+                    } else {
+                        // Handle null value
                         player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.toggleError",
                             Map.of(
                                 "toggle", toggles.get(i).getDisplayName(),
                                 "error", "No value provided"
                             )));
-                        continue;
                     }
-                    
-                    // Only count as changed if value is different
-                    boolean currentValue = updatedSettings.optBoolean(toggles.get(i).getPermissionNode(), 
-                        toggles.get(i).getDefaultValue());
-                    if (currentValue != value) {
-                        changedSettings++;
-                    }
-                    
-                    updatedSettings.put(toggles.get(i).getPermissionNode(), value);
                 } catch (Exception e) {
                     plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode(), e);
                     player.sendMessage(plugin.getLanguageManager().get("messages.form.entity.toggleError",

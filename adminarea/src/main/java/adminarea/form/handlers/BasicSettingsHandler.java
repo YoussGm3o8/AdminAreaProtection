@@ -102,10 +102,61 @@ public class BasicSettingsHandler extends BaseFormHandler {
 
             // Get new values
             String newName = response.getInputResponse(NAME_INDEX);
-            int newPriority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+            String priorityInput = response.getInputResponse(PRIORITY_INDEX);
             boolean newShowTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
             String newEnterMessage = response.getInputResponse(ENTER_MESSAGE_INDEX);
             String newLeaveMessage = response.getInputResponse(LEAVE_MESSAGE_INDEX);
+            
+            // Validate name
+            if (!oldName.equals(newName)) {
+                // Check if name is already taken by another area
+                if (plugin.hasArea(newName) && !newName.equals(oldName)) {
+                    player.sendMessage(plugin.getLanguageManager().get("validation.area.name.exists",
+                        Map.of("name", newName)));
+                    plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                    return;
+                }
+                
+                // Check name format using plugin's validation utils
+                try {
+                    plugin.getValidationUtils().validateAreaName(newName);
+                } catch (IllegalArgumentException e) {
+                    player.sendMessage(plugin.getLanguageManager().get("validation.area.name.format"));
+                    plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                    return;
+                }
+            }
+            
+            // Validate priority
+            int newPriority;
+            try {
+                newPriority = Integer.parseInt(priorityInput);
+                if (newPriority < 0 || newPriority > 100) {
+                    player.sendMessage(plugin.getLanguageManager().get("validation.area.priority.outOfRange",
+                        Map.of("min", "0", "max", "100")));
+                    plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.area.priority.notNumber"));
+                plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                return;
+            }
+            
+            // Validate messages
+            if (newEnterMessage != null && newEnterMessage.length() > 100) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.messages.tooLong",
+                    Map.of("max", "100")));
+                plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                return;
+            }
+            
+            if (newLeaveMessage != null && newLeaveMessage.length() > 100) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.messages.tooLong",
+                    Map.of("max", "100")));
+                plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                return;
+            }
 
             // Build updated area
             Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
@@ -129,31 +180,69 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 }
             }
 
-            // Update area in plugin
-            plugin.updateArea(updatedArea);
-            
-            // Show success message
-            int changedFields = 0;
-            if (!oldName.equals(newName)) changedFields++;
-            if (oldPriority != newPriority) changedFields++;
-            if (oldShowTitle != newShowTitle) changedFields++;
-            if (!oldEnterMessage.equals(newEnterMessage)) changedFields++;
-            if (!oldLeaveMessage.equals(newLeaveMessage)) changedFields++;
-            
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.updated", 
-                Map.of(
-                    "area", newName,
-                    "count", String.valueOf(changedFields)
-                )));
+            try {
+                // Start a transaction-like block
+                plugin.getLogger().debug("Starting area update for " + oldName);
 
-            // If name changed, update editing reference
-            if (!oldName.equals(newName)) {
-                plugin.getFormIdMap().put(player.getName() + "_editing", 
-                    plugin.getFormIdMap().get(player.getName() + "_editing").withFormId(newName));
+                // Update area in plugin
+                plugin.updateArea(updatedArea);
+
+                // Invalidate permission caches
+                plugin.getOverrideManager().getPermissionChecker().invalidateCache(oldName);
+                if (!oldName.equals(newName)) {
+                    plugin.getOverrideManager().getPermissionChecker().invalidateCache(newName);
+                }
+
+                // Count changed fields for the message
+                int changedFields = 0;
+                if (!oldName.equals(newName)) changedFields++;
+                if (oldPriority != newPriority) changedFields++;
+                if (oldShowTitle != newShowTitle) changedFields++;
+                if (!oldEnterMessage.equals(newEnterMessage)) changedFields++;
+                if (!oldLeaveMessage.equals(newLeaveMessage)) changedFields++;
+
+                // Create message placeholders
+                Map<String, String> placeholders = new HashMap<>();
+                placeholders.put("area", newName);
+                placeholders.put("count", String.valueOf(changedFields));
+                if (!oldName.equals(newName)) {
+                    placeholders.put("oldName", oldName);
+                }
+
+                // Send success message
+                player.sendMessage(plugin.getLanguageManager().get("success.area.update.settings", placeholders));
+
+                // If name changed, update form tracking and fire event
+                if (!oldName.equals(newName)) {
+                    plugin.getFormIdMap().put(player.getName() + "_editing",
+                        plugin.getFormIdMap().get(player.getName() + "_editing").withFormId(newName));
+
+                    // Fire area modified event with old and new area states
+                    plugin.getServer().getPluginManager().callEvent(
+                        new adminarea.events.AreaModifiedEvent(plugin, area, updatedArea)
+                    );
+
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Area renamed from " + oldName + " to " + newName);
+                        plugin.debug("Permission caches invalidated for both names");
+                    }
+                }
+
+                // Return to edit area form
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+
+            } catch (Exception e) {
+                plugin.getLogger().error("Error updating area settings", e);
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Error updating area: " + e.getMessage());
+                    e.printStackTrace();
+                }
+                
+                // Reopen the form with current values
+                plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
             }
-
-            // Return to edit area form
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
         } catch (NumberFormatException e) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidPriority"));

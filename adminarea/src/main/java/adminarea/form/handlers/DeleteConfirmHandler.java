@@ -71,15 +71,47 @@ public class DeleteConfirmHandler extends BaseFormHandler {
             }
 
             int buttonId = response.getClickedButtonId();
-            if (buttonId == 0) { // Confirm
+            if (buttonId == 0) { // Confirm button
+                // Check deletion permission
+                if (!player.hasPermission("adminarea.area.delete")) {
+                    player.sendMessage(plugin.getLanguageManager().get("messages.permissions.noPermission"));
+                    handleCancel(player);
+                    return;
+                }
+                
+                // No need to redefine areaName as it's already defined above
+                String worldName = area.getWorld();
+                
+                // Delete area from manager
                 plugin.getAreaManager().removeArea(area);
-                Map<String, String> placeholders = new HashMap<>();
-                placeholders.put("area", area.getName());
+                
+                // Remove area title configuration from config
+                plugin.getConfigManager().remove("areaTitles." + areaName);
+                plugin.getConfigManager().save();
+                
+                // Invalidate permission cache for this area
+                plugin.getOverrideManager().getPermissionChecker().invalidateCache(areaName);
+                
+                // Show success message with area name and world
+                Map<String, String> placeholders = Map.of(
+                    "area", areaName,
+                    "world", worldName
+                );
                 player.sendMessage(plugin.getLanguageManager().get("success.area.delete.single", placeholders));
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Deleted area: " + areaName + " from world: " + worldName);
+                }
+            } else {
+                // Cancel button was clicked
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area deletion cancelled by user for: " + area.getName());
+                }
             }
 
-            // Set form tracking data for main menu before opening it
-            plugin.getFormIdMap().put(player.getName(), 
+            // Clean up resources and return to main menu
+            plugin.getFormIdMap().remove(player.getName() + "_editing");
+            plugin.getFormIdMap().put(player.getName(),
                 new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
             cleanup(player);
             plugin.getGuiManager().openMainMenu(player);

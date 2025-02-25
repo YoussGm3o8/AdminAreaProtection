@@ -363,7 +363,27 @@ public class PermissionToggle implements AutoCloseable {
         return permissionNode;
     }
 
-    public boolean getDefaultValue() {
+    public boolean getDefaultValue(String permission) {
+        // Normalize permission name
+        String normalizedPermission = permission;
+        if (!permission.startsWith("gui.permissions.toggles.") && permission.contains(".")) {
+            normalizedPermission = "gui.permissions.toggles." + permission;
+        }
+        
+        // Check for the normalized permission in default toggles
+        if (defaultToggles.containsKey(normalizedPermission)) {
+            return defaultToggles.get(normalizedPermission);
+        }
+        
+        // If not found and has prefix, try without prefix
+        if (normalizedPermission.startsWith("gui.permissions.toggles.")) {
+            String permWithoutPrefix = normalizedPermission.replace("gui.permissions.toggles.", "");
+            if (defaultToggles.containsKey(permWithoutPrefix)) {
+                return defaultToggles.get(permWithoutPrefix);
+            }
+        }
+        
+        // Use the default value field for form toggles or false for permission management
         return defaultValue;
     }
 
@@ -394,6 +414,7 @@ public class PermissionToggle implements AutoCloseable {
     toggles.add(new PermissionToggle("Allow Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT));
     toggles.add(new PermissionToggle("Allow Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT));
     toggles.add(new PermissionToggle("Allow Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT));
+    toggles.add(new PermissionToggle("Allow Block Gravity", "allowBlockGravity", true, Category.ENVIRONMENT));
     toggles.add(new PermissionToggle("Allow Ice Form/Melt", "allowIceForm", true, Category.ENVIRONMENT));
     toggles.add(new PermissionToggle("Allow Snow Form/Melt", "allowSnowForm", true, Category.ENVIRONMENT));
     
@@ -403,6 +424,7 @@ public class PermissionToggle implements AutoCloseable {
     toggles.add(new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY));
+    toggles.add(new PermissionToggle("Allow Animal Taming", "allowTaming", true, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY));
     toggles.add(new PermissionToggle("Allow Entity Leashing", "allowLeashing", true, Category.ENTITY));
     
@@ -469,14 +491,14 @@ public class PermissionToggle implements AutoCloseable {
     }
 
     public enum Category {
+        ALL("All Permissions"),
         BUILDING("Building"),
         ENVIRONMENT("Environment"), 
         ENTITY("Entity Controls"),
         ITEMS("Items & Drops"),
         TECHNICAL("Redstone & Mechanics"),
-        SPECIAL("Special Permissions"),
-        ALL("All Permissions");
-
+        SPECIAL("Special Permissions");
+        
         private final String displayName;
 
         Category(String displayName) {
@@ -507,6 +529,7 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT),
             new PermissionToggle("Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT),
             new PermissionToggle("Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT),
+            new PermissionToggle("Block Gravity", "allowBlockGravity", true, Category.ENVIRONMENT),
             new PermissionToggle("Ice Formation", "allowIceForm", true, Category.ENVIRONMENT),
             new PermissionToggle("Snow Formation", "allowSnowForm", true, Category.ENVIRONMENT)
         ));
@@ -518,6 +541,7 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Animal Spawn", "allowAnimalSpawn", true, Category.ENTITY),
             new PermissionToggle("Entity Damage", "allowDamageEntities", false, Category.ENTITY),
             new PermissionToggle("Breeding", "allowBreeding", true, Category.ENTITY),
+            new PermissionToggle("Animal Taming", "allowTaming", true, Category.ENTITY),
             new PermissionToggle("Monster Targeting", "allowMonsterTarget", false, Category.ENTITY),
             new PermissionToggle("Leashing", "allowLeashing", true, Category.ENTITY),
             new PermissionToggle("Shoot Projectiles", "allowShootProjectile", false, Category.ENTITY)
@@ -648,6 +672,7 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Liquids", "allowLiquid", true, Category.ENVIRONMENT),
             new PermissionToggle("Allow Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT),
             new PermissionToggle("Allow Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT),
+            new PermissionToggle("Allow Block Gravity", "allowBlockGravity", true, Category.ENVIRONMENT),
             new PermissionToggle("Allow Ice Form", "allowIceForm", true, Category.ENVIRONMENT),
             new PermissionToggle("Allow Snow Form", "allowSnowForm", true, Category.ENVIRONMENT)
         ));
@@ -659,9 +684,9 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY),
             new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY),
             new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY),
+            new PermissionToggle("Allow Animal Taming", "allowTaming", true, Category.ENTITY),
             new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY),
             new PermissionToggle("Allow Leashing", "allowLeashing", true, Category.ENTITY),
-            new PermissionToggle("Allow Taming", "allowTaming", true, Category.ENTITY),
             new PermissionToggle("Allow Shoot Projectile", "allowShootProjectile", false, Category.ENTITY)
         ));
         
@@ -722,5 +747,9 @@ public class PermissionToggle implements AutoCloseable {
             }
         }
         return null;
+    }
+
+    public Boolean getDefaultValue() {
+        return defaultValue;
     }
 }

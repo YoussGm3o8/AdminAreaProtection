@@ -68,15 +68,41 @@ public class AreaManager implements IAreaManager {
         return (x >> 4) & 0xFFFFF | ((z >> 4) & 0xFFFFF) << 20;
     }
     
+    /**
+     * Builds a more efficient spatial index for the area
+     * This significantly improves performance for area lookups
+     */
     private void addToSpatialIndex(Area area) {
+        // Skip null areas
+        if (area == null) return;
+        
         AreaDTO.Bounds bounds = area.toDTO().bounds();
         String world = area.getWorld();
         
-        // Get chunk coordinates
+        // Skip out-of-bounds areas
+        if (world == null || bounds == null) return;
+        
+        // Global areas are handled differently - don't add to spatial index
+        if (isGlobalArea(area)) return;
+        
+        // Optimize chunk calculation with bit shifts
         int minChunkX = bounds.xMin() >> 4;
         int maxChunkX = bounds.xMax() >> 4;
         int minChunkZ = bounds.zMin() >> 4;
         int maxChunkZ = bounds.zMax() >> 4;
+        
+        // Limit chunk range to reasonable values to prevent excessive memory usage
+        int chunkSpanX = maxChunkX - minChunkX + 1;
+        int chunkSpanZ = maxChunkZ - minChunkZ + 1;
+        
+        // Skip very large areas - they'll be handled differently
+        if (chunkSpanX > 100 || chunkSpanZ > 100) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area " + area.getName() + " is too large for spatial indexing: " + 
+                             chunkSpanX + "x" + chunkSpanZ + " chunks");
+            }
+            return;
+        }
         
         // Add area to all overlapping chunks
         Map<Integer, List<Area>> worldIndex = spatialIndex.computeIfAbsent(world, k -> new ConcurrentHashMap<>());
@@ -346,38 +372,61 @@ public class AreaManager implements IAreaManager {
      * @return List of areas at location, sorted by priority (highest first)
      */
     public List<Area> getAreasAtLocation(String world, double x, double y, double z) {
-        String cacheKey = String.format("%s:%d:%d:%d", world, (int)x, (int)y, (int)z);
+        // Validate inputs to prevent crashes
+        if (world == null) return Collections.emptyList();
+        
+        // Round coordinates to integers for better cache utilization
+        // This is a practical optimization for most use cases
+        int blockX = (int)Math.floor(x);
+        int blockY = (int)Math.floor(y);
+        int blockZ = (int)Math.floor(z);
+        
+        // Build cache key with integer coordinates
+        String cacheKey = world + ":" + blockX + ":" + blockY + ":" + blockZ;
+        
+        // Use cached result if available, otherwise calculate
         return locationCache.get(cacheKey, k -> calculateAreasAtLocation(world, x, y, z));
     }
 
+    /**
+     * Internal method that does the actual calculation of areas at a location.
+     * This is optimized for performance with early exits and efficient data structures.
+     */
     private List<Area> calculateAreasAtLocation(String world, double x, double y, double z) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Skip if called recursively for the same location
-            String recursionKey = String.format("%s:%d:%d:%d", world, (int)x, (int)y, (int)z);
+            // Skip if called recursively for the same location (prevents stack overflow)
+            String recursionKey = world + ":" + (int)x + ":" + (int)y + ":" + (int)z;
             if (Thread.currentThread().getStackTrace().length > 50 || 
                 !recursionChecks.add(recursionKey)) {
                 plugin.getLogger().warning("Prevented infinite recursion in area lookup at " + recursionKey);
-                return new ArrayList<>();
+                return Collections.emptyList();
             }
             
             try {
-                List<Area> result = new ArrayList<>();
+                // Pre-allocate result list with estimated capacity
+                List<Area> result = new ArrayList<>(4); // Most locations have few overlapping areas
                 
-                // First check global area - most efficient
+                // First check global area - this is the most efficient path
                 Area globalArea = globalAreasByWorld.get(world);
                 if (globalArea != null) {
                     result.add(globalArea);
                     return result; // Global area overrides all others
                 }
                 
-                // Only check local areas if we're near a player and not called recursively
+                // Only check local areas if we're near a player to save resources
                 if (isNearAnyPlayer(x, z)) {
-                    int chunkKey = getChunkKey((int)x >> 4, (int)z >> 4);
+                    // Get chunk coordinates for spatial index lookup
+                    int chunkX = (int)x >> 4;
+                    int chunkZ = (int)z >> 4;
+                    int chunkKey = getChunkKey(chunkX, chunkZ);
+                    
+                    // Look up areas in this chunk using spatial index
                     Map<Integer, List<Area>> worldIndex = spatialIndex.get(world);
                     if (worldIndex != null) {
                         List<Area> chunkAreas = worldIndex.get(chunkKey);
-                        if (chunkAreas != null) {
+                        if (chunkAreas != null && !chunkAreas.isEmpty()) {
+                            // Filter areas by exact position check
                             for (Area area : chunkAreas) {
                                 if (area.isInside(world, x, y, z)) {
                                     result.add(area);
@@ -385,13 +434,28 @@ public class AreaManager implements IAreaManager {
                             }
                         }
                     }
+                    
+                    // Also check chunk area map for any areas we might have missed
+                    Set<Area> mapAreas = chunkAreaMap.get(toLongKey(chunkX, chunkZ));
+                    if (mapAreas != null && !mapAreas.isEmpty()) {
+                        for (Area area : mapAreas) {
+                            // Skip areas we've already added
+                            if (!result.contains(area) && area.isInside(world, x, y, z)) {
+                                result.add(area);
+                            }
+                        }
+                    }
                 }
                 
-                // Sort by priority (highest first)
-                result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()));
+                // If we have more than one area, sort by priority (highest first)
+                if (result.size() > 1) {
+                    result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()));
+                }
+                
                 return result;
                 
             } finally {
+                // Clean up to prevent memory leaks
                 recursionChecks.remove(recursionKey);
             }
             
@@ -968,5 +1032,31 @@ public class AreaManager implements IAreaManager {
         // If it's a global area, use less strict checking
         boolean ignoreGlobal = (area != null && isGlobalArea(area));
         return shouldProcessEvent(pos, ignoreGlobal);
+    }
+
+    /**
+     * Normalizes toggle states for all areas to ensure consistent prefixing
+     * Call this method during plugin startup to fix inconsistencies
+     */
+    public void normalizeAllAreaToggleStates() {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Normalizing toggle states for all areas");
+        }
+        
+        // Process each area
+        for (Area area : getAllAreas()) {
+            area.normalizeToggleStates();
+            
+            // Save each area individually
+            try {
+                plugin.getDatabaseManager().saveArea(area);
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to save area " + area.getName() + " after normalizing toggle states", e);
+            }
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("All area toggle states normalized and saved");
+        }
     }
 }

@@ -102,7 +102,7 @@ public class WandListener implements Listener {
                     if (positions != null && positions[0] != null && positions[1] != null) {
                         plugin.getGuiManager().openCreateForm(player);
                     } else {
-                        player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionsNeeded"));
+                        player.sendMessage(plugin.getLanguageManager().get("wand.positionsNeeded"));
                     }
                     event.setCancelled(true);
                     updateLastActionTime(player);

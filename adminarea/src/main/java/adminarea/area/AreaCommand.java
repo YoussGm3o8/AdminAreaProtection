@@ -353,7 +353,7 @@ public class AreaCommand extends Command {
         }
 
         if (args.length != 2) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.usage.visualize"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.usage.visualize"));
             return true;
         }
 

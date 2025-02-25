@@ -59,11 +59,10 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                     form.addElement(new ElementToggle(
                         plugin.getLanguageManager().get("gui.permissions.toggle.format", 
                             Map.of("name", toggle.getDisplayName(), "description", description)),
-                        settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                        settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue(toggle.getPermissionNode()))
                     ));
                 }
             }
-            
             return form;
         } catch (Exception e) {
             plugin.getLogger().error("Error creating special settings form", e);
@@ -110,7 +109,7 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                     // Get current value from settings
                     boolean currentValue = updatedSettings.optBoolean(
                         toggles.get(i).getPermissionNode(), 
-                        toggles.get(i).getDefaultValue()
+                        toggles.get(i).getDefaultValue(toggles.get(i).getPermissionNode())
                     );
                     
                     // Get raw response first

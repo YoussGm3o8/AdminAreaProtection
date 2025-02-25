@@ -25,18 +25,26 @@ public final class Area {
     private final Map<String, Boolean> toggleStates;
     private final SimpleAxisAlignedBB boundingBox;
     private final Cache<String, Boolean> containsCache;
-    private static final int CONTAINS_CACHE_SIZE = 500;
+    // Increased cache size for better hit rate
+    private static final int CONTAINS_CACHE_SIZE = 1000;
     private final AdminAreaProtectionPlugin plugin;
+    
+    // Common string constants to avoid repeated construction
+    private static final String GUI_PERMISSIONS_PREFIX = "gui.permissions.toggles.";
     
     private final Map<String, Map<String, Boolean>> groupPermissions;
     private final Map<String, Map<String, Boolean>> trackPermissions;
     private final Map<String, Map<String, Boolean>> playerPermissions;
     private Map<String, Map<String, Boolean>> cachedPlayerPermissions;
     
+    // Cache for toggle state lookups
+    private final Cache<String, Boolean> toggleStateCache;
+    private static final int TOGGLE_CACHE_SIZE = 200;
+    
     Area(AreaDTO dto) {
         this.dto = dto;
         this.plugin = AdminAreaProtectionPlugin.getInstance();
-        this.effectivePermissionCache = new ConcurrentHashMap<>(16, 0.75f, 2);
+        this.effectivePermissionCache = new ConcurrentHashMap<>(32, 0.75f, 2);
         this.permissionHandler = new AreaPermissionHandler(dto.groupPermissions(), dto.inheritedPermissions());
         this.name = dto.name();
         this.world = dto.world();
@@ -48,10 +56,12 @@ public final class Area {
         this.priority = dto.priority();
         
         // Convert toggle states
-        this.toggleStates = new ConcurrentHashMap<>(8, 0.75f, 1);
+        this.toggleStates = new ConcurrentHashMap<>(32, 0.75f, 1);
         JSONObject toggles = dto.toggleStates();
         for (String key : toggles.keySet()) {
-            this.toggleStates.put(key, toggles.getBoolean(key));
+            // Normalize key during initialization
+            String normalizedKey = normalizeToggleKey(key);
+            this.toggleStates.put(normalizedKey, toggles.getBoolean(key));
         }
         
         // Create bounding box for faster contains checks
@@ -60,9 +70,15 @@ public final class Area {
             bounds.xMax() + 1, bounds.yMax() + 1, bounds.zMax() + 1
         );
         
-        // Initialize contains cache
+        // Initialize contains cache with longer expiry for stable positions
         this.containsCache = Caffeine.newBuilder()
             .maximumSize(CONTAINS_CACHE_SIZE)
+            .expireAfterWrite(5, TimeUnit.MINUTES)
+            .build();
+            
+        // Initialize toggle state cache
+        this.toggleStateCache = Caffeine.newBuilder()
+            .maximumSize(TOGGLE_CACHE_SIZE)
             .expireAfterWrite(1, TimeUnit.MINUTES)
             .build();
 
@@ -84,31 +100,131 @@ public final class Area {
         return new AreaBuilder();
     }
 
+    /**
+     * Fast check to see if coordinates are inside this area
+     * Uses simplified bounds check for better performance
+     */
     public boolean isInside(String world, double x, double y, double z) {
-        if (!dto.world().equals(world)) return false;
-        var bounds = dto.bounds();
-        return x >= bounds.xMin() && x <= bounds.xMax() &&
-               y >= bounds.yMin() && y <= bounds.yMax() &&
-               z >= bounds.zMin() && z <= bounds.zMax();
+        // Fast world name check first
+        if (!this.world.equals(world)) return false;
+        
+        // Check if values are outside bounds for early rejection
+        AreaDTO.Bounds bounds = dto.bounds();
+        return !(x < bounds.xMin() || x > bounds.xMax() ||
+                 y < bounds.yMin() || y > bounds.yMax() ||
+                 z < bounds.zMin() || z > bounds.zMax());
     }
 
+    /**
+     * Get effective permission for a group
+     * Uses caching for better performance
+     */
     public boolean getEffectivePermission(String group, String permission) {
+        if (group == null || permission == null) return false;
+        
         String cacheKey = group + ":" + permission;
         return effectivePermissionCache.computeIfAbsent(cacheKey,
             k -> permissionHandler.calculateEffectivePermission(group, permission));
     }
 
-    public void setToggleState(String permission, boolean state) {
-        toggleStates.put(permission, state);
+    /**
+     * Normalizes a toggle key to ensure consistent format
+     */
+    private String normalizeToggleKey(String key) {
+        if (key == null || key.isEmpty()) return GUI_PERMISSIONS_PREFIX + "default";
+        
+        // Already has prefix
+        if (key.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            return key;
+        }
+        
+        // Simple permission without dots
+        if (!key.contains(".")) {
+            return GUI_PERMISSIONS_PREFIX + key;
+        }
+        
+        // Return as is for special permission types
+        return key;
     }
 
-    public boolean getToggleState(String permission) {
+    /**
+     * Sets a toggle state with proper key normalization
+     */
+    public void setToggleState(String permission, boolean state) {
+        String normalizedPermission = normalizeToggleKey(permission);
+        
+        // Update cache and storage
+        toggleStates.put(normalizedPermission, state);
+        toggleStateCache.invalidate(normalizedPermission);
+        
         if (plugin.isDebugMode()) {
-            plugin.debug("Getting toggle state for " + permission + " in area " + name);
-            plugin.debug("  Toggle states: " + toggleStates);
-            plugin.debug("  Value: " + toggleStates.getOrDefault(permission, false));
+            plugin.debug("Setting toggle state for " + normalizedPermission + " to " + state + " in area " + name);
         }
-        return toggleStates.getOrDefault(permission, false);
+    }
+
+    /**
+     * Gets a toggle state with proper key normalization and caching
+     */
+    public boolean getToggleState(String permission) {
+        // Normalize the permission name
+        String normalizedPermission = normalizeToggleKey(permission);
+        
+        // Check cache first
+        Boolean cachedValue = toggleStateCache.getIfPresent(normalizedPermission);
+        if (cachedValue != null) {
+            return cachedValue;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Getting toggle state for " + normalizedPermission + " in area " + name);
+            plugin.debug("  Toggle states: " + toggleStates);
+        }
+        
+        // Try with the normalized permission
+        if (toggleStates.containsKey(normalizedPermission)) {
+            boolean value = toggleStates.get(normalizedPermission);
+            toggleStateCache.put(normalizedPermission, value);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Value: " + value);
+            }
+            return value;
+        }
+        
+        // If the permission wasn't normalized correctly, try other formats
+        // This is just a fallback for backward compatibility
+        if (normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            String permWithoutPrefix = normalizedPermission.substring(GUI_PERMISSIONS_PREFIX.length());
+            if (toggleStates.containsKey(permWithoutPrefix)) {
+                boolean value = toggleStates.get(permWithoutPrefix);
+                toggleStateCache.put(normalizedPermission, value);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Value (without prefix): " + value);
+                }
+                return value;
+            }
+        } else if (!normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            String permWithPrefix = GUI_PERMISSIONS_PREFIX + normalizedPermission;
+            if (toggleStates.containsKey(permWithPrefix)) {
+                boolean value = toggleStates.get(permWithPrefix);
+                toggleStateCache.put(normalizedPermission, value);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Value (with prefix): " + value);
+                }
+                return value;
+            }
+        }
+        
+        // Default value if not found
+        boolean defaultValue = false;
+        toggleStateCache.put(normalizedPermission, defaultValue);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("  Value: false (default)");
+        }
+        return defaultValue;
     }
 
     public AreaDTO toDTO() {
@@ -341,6 +457,40 @@ public final class Area {
                 plugin.debug("  Track permissions cleared: " + trackPermissions);
                 plugin.debug("  Player permissions cleared: " + playerPermissions);
             }
+        }
+    }
+
+    /**
+     * Ensures all toggle states are stored with consistent prefix
+     * Call this method during plugin startup or area loading to fix inconsistencies
+     */
+    public void normalizeToggleStates() {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Normalizing toggle states for area " + name);
+            plugin.debug("  Before: " + toggleStates);
+        }
+        
+        Map<String, Boolean> normalizedToggles = new ConcurrentHashMap<>(8, 0.75f, 1);
+        
+        // Process each toggle and normalize its key
+        for (Map.Entry<String, Boolean> entry : toggleStates.entrySet()) {
+            String key = entry.getKey();
+            boolean value = entry.getValue();
+            
+            // Normalize the key
+            if (!key.startsWith("gui.permissions.toggles.") && key.startsWith("allow")) {
+                key = "gui.permissions.toggles." + key;
+            }
+            
+            normalizedToggles.put(key, value);
+        }
+        
+        // Replace the toggle states with normalized ones
+        toggleStates.clear();
+        toggleStates.putAll(normalizedToggles);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("  After: " + toggleStates);
         }
     }
 }
