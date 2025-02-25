@@ -169,6 +169,8 @@ public class DatabaseManager {
             // Convert maps to JSON strings
             stmt.setString(11, new JSONObject(dto.groupPermissions()).toString());
             stmt.setString(12, new JSONObject(dto.inheritedPermissions()).toString());
+            
+            // Store enter/leave messages
             stmt.setString(13, dto.enterMessage());
             stmt.setString(14, dto.leaveMessage());
             
@@ -184,6 +186,10 @@ public class DatabaseManager {
             if (plugin.isDebugMode()) {
                 plugin.debug(String.format("Saved area to database: %s", dto.name()));
                 plugin.debug(String.format("Toggle states: %s", dto.toggleStates().toString()));
+                plugin.debug(String.format("Enter/leave messages: %s / %s", dto.enterMessage(), dto.leaveMessage()));
+                
+                // Also ensure title info is in config file
+                ensureAreaTitlesConfig(dto);
             }
 
         } catch (SQLException e) {
@@ -191,8 +197,51 @@ public class DatabaseManager {
         }
     }
 
+    /**
+     * Ensures that the area has a title configuration in config.yml
+     * This helps recover config entries if the file is reset
+     */
+    private void ensureAreaTitlesConfig(AreaDTO dto) {
+        if (!dto.showTitle()) {
+            return;
+        }
+        
+        // Check if area title config exists
+        String basePath = "areaTitles." + dto.name();
+        if (!plugin.getConfigManager().exists(basePath)) {
+            // No config entry exists, create from saved data
+            plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + dto.name());
+            plugin.getConfigManager().set(basePath + ".enter.subtitle", dto.enterMessage());
+            plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
+            plugin.getConfigManager().set(basePath + ".enter.stay", 40);
+            plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
+            
+            plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + dto.name());
+            plugin.getConfigManager().set(basePath + ".leave.subtitle", dto.leaveMessage());
+            plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
+            plugin.getConfigManager().set(basePath + ".leave.stay", 40);
+            plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
+            
+            plugin.getConfigManager().save();
+            plugin.debug("Recreated missing title config for area " + dto.name());
+        }
+    }
+
     public void updateArea(Area area) throws DatabaseException {
-        saveArea(area); // Since we're using INSERT OR REPLACE
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updating area in database: " + area.getName());
+            plugin.debug("Toggle states being saved: " + area.toDTO().toggleStates());
+        }
+        
+        // Force area to clear its caches before saving
+        area.clearCaches();
+        
+        // Save to database
+        saveArea(area);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Area updated in database successfully");
+        }
     }
 
     public void deleteArea(String name) throws DatabaseException {

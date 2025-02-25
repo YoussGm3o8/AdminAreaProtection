@@ -1,4 +1,4 @@
-package adminarea.config;
+package adminarea.managers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import cn.nukkit.utils.Config;
@@ -179,6 +179,10 @@ public class ConfigManager {
     public void reload() {
         load();
         plugin.reloadConfigValues();
+    }
+
+    public void save() {
+        config.save();
     }
 
     private void validate() {
@@ -566,5 +570,55 @@ public class ConfigManager {
             return defaultValue;
         }
         return config.getInt(path);
+    }
+
+    /**
+     * Removes a config path
+     * @param path The path to remove
+     */
+    public void remove(String path) {
+        if (path == null || path.isEmpty()) return;
+        
+        try {
+            // For nested paths, we need to create a mutable config
+            String[] parts = path.split("\\.");
+            if (parts.length <= 1) {
+                config.remove(path);
+                return;
+            }
+            
+            // For nested paths, traverse parent sections
+            String[] parentParts = new String[parts.length - 1];
+            System.arraycopy(parts, 0, parentParts, 0, parentParts.length);
+            String parent = String.join(".", parentParts);
+            String key = parts[parts.length - 1];
+            
+            // Get parent section and remove child entry
+            if (config.exists(parent)) {
+                ConfigSection section = config.getSection(parent);
+                if (section != null) {
+                    section.remove(key);
+                    
+                    // Check if section is now empty and remove it if so
+                    if (section.isEmpty()) {
+                        // Try to remove parent section recursively
+                        remove(parent);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error removing config path " + path + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Check if a path exists in the configuration
+     * @param path The path to check
+     * @return True if the path exists
+     */
+    public boolean exists(String path) {
+        return config.exists(path);
     }
 }

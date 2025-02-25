@@ -158,6 +158,8 @@ messages:
     selectionComplete: "§aSelection complete! Use /area create to create an area"
     undoSuccess: "§aUndid last selection change"
     noActionsToUndo: "§cNo actions to undo"
+    positionsNeeded: "§cYou need to set both positions first"
+
   undoNoActions: "§cNo actions to undo"
   selectionCleared: "§aSelection cleared"
   positionsSetToCurrent: "§aPositions set to current location"

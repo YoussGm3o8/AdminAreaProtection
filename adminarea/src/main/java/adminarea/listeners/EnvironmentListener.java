@@ -1,6 +1,12 @@
 package adminarea.listeners;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
@@ -18,10 +24,20 @@ public class EnvironmentListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
     private final ProtectionListener protectionListener;
     private static final int CHUNK_CHECK_RADIUS = 4;
+    
+    // Add local cache for environment checks to reduce database lookups
+    private final Cache<String, Boolean> protectionCache;
+    private static final int CACHE_SIZE = 1000;
+    private static final long CACHE_EXPIRY = TimeUnit.SECONDS.toMillis(30); // Short TTL for environment events
 
     public EnvironmentListener(AdminAreaProtectionPlugin plugin, ProtectionListener protectionListener) {
         this.plugin = plugin;
         this.protectionListener = protectionListener;
+        
+        this.protectionCache = Caffeine.newBuilder()
+            .maximumSize(CACHE_SIZE)
+            .expireAfterWrite(CACHE_EXPIRY, TimeUnit.MILLISECONDS)
+            .build();
     }
 
     private boolean shouldCheckProtection(Block block, String permission) {
@@ -34,19 +50,34 @@ public class EnvironmentListener implements Listener {
             try {
                 Position pos = new Position(block.x, block.y, block.z, block.level);
                 
+                // Generate cache key
+                String cacheKey = block.getLevel().getName() + ":" + 
+                                 block.getChunkX() + ":" + 
+                                 block.getChunkZ() + ":" +
+                                 permission;
+                
+                // Check cache first
+                Boolean cached = protectionCache.getIfPresent(cacheKey);
+                if (cached != null) {
+                    return cached;
+                }
+                
                 // Skip unloaded chunks entirely
                 if (!block.getLevel().isChunkLoaded(block.getChunkX(), block.getChunkZ())) {
+                    protectionCache.put(cacheKey, false);
                     return false;
                 }
 
                 // Skip if world is being unloaded
                 if (!plugin.getServer().isLevelLoaded(block.getLevel().getName())) {
+                    protectionCache.put(cacheKey, false);
                     return false;
                 }
 
                 // Master check with try-catch
                 try {
                     if (!plugin.getAreaManager().shouldProcessEvent(pos, false)) {
+                        protectionCache.put(cacheKey, false);
                         return false;
                     }
                 } catch (Exception e) {
@@ -57,7 +88,9 @@ public class EnvironmentListener implements Listener {
                 // Get the global area first - more efficient
                 Area globalArea = plugin.getAreaManager().getGlobalAreaForWorld(block.getLevel().getName());
                 if (globalArea != null) {
-                    return !globalArea.getToggleState(permission);
+                    boolean result = !globalArea.getToggleState(permission);
+                    protectionCache.put(cacheKey, result);
+                    return result;
                 }
 
                 // Only check local areas if we're near a player
@@ -70,11 +103,14 @@ public class EnvironmentListener implements Listener {
 
                 // No protection if no areas
                 if (areas.isEmpty()) {
+                    protectionCache.put(cacheKey, false);
                     return false;
                 }
 
                 // Check highest priority area first
-                return !areas.get(0).getToggleState(permission);
+                boolean result = !areas.get(0).getToggleState(permission);
+                protectionCache.put(cacheKey, result);
+                return result;
 
             } finally {
                 plugin.getPerformanceMonitor().stopTimer(sample, "environment_protection_check");
@@ -85,30 +121,30 @@ public class EnvironmentListener implements Listener {
         }
     }
 
-    /**
-     * Checks if a block is within CHUNK_CHECK_RADIUS chunks of any player
-     */
+    // Optimized isNearAnyPlayer with bbox check
     private boolean isNearAnyPlayer(Block block) {
         int blockChunkX = block.getChunkX();
         int blockChunkZ = block.getChunkZ();
+        String worldName = block.getLevel().getName();
+        
+        // Calculate chunk bounds for more efficient player checks
+        int minChunkX = blockChunkX - CHUNK_CHECK_RADIUS;
+        int maxChunkX = blockChunkX + CHUNK_CHECK_RADIUS;
+        int minChunkZ = blockChunkZ - CHUNK_CHECK_RADIUS;
+        int maxChunkZ = blockChunkZ + CHUNK_CHECK_RADIUS;
 
         for (Player player : plugin.getServer().getOnlinePlayers().values()) {
             // Skip players in different worlds
-            if (!player.getLevel().getName().equals(block.getLevel().getName())) {
+            if (!player.getLevel().getName().equals(worldName)) {
                 continue;
             }
 
             int playerChunkX = player.getChunkX();
             int playerChunkZ = player.getChunkZ();
 
-            // Calculate chunk distance
-            int chunkDistance = Math.max(
-                Math.abs(playerChunkX - blockChunkX),
-                Math.abs(playerChunkZ - blockChunkZ)
-            );
-
-            // If within check radius of any player, return true
-            if (chunkDistance <= CHUNK_CHECK_RADIUS) {
+            // Check if player is within chunk radius using bbox check (more efficient)
+            if (playerChunkX >= minChunkX && playerChunkX <= maxChunkX &&
+                playerChunkZ >= minChunkZ && playerChunkZ <= maxChunkZ) {
                 return true;
             }
         }
@@ -116,6 +152,8 @@ public class EnvironmentListener implements Listener {
         return false;
     }
 
+    // Event handlers with optimized protection checks
+    
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBurn(BlockBurnEvent event) {
         if (shouldCheckProtection(event.getBlock(), "allowFireSpread")) {
@@ -190,5 +228,10 @@ public class EnvironmentListener implements Listener {
         if (shouldCheckProtection(event.getBlock(), permission)) {
             event.setCancelled(true);
         }
+    }
+
+    // Add method to invalidate the cache - call this when areas or permissions change
+    public void invalidateCache() {
+        protectionCache.invalidateAll();
     }
 }

@@ -351,45 +351,133 @@ public class ProtectionListener implements Listener {
     }
 
     private void handleAreaEnter(Player player, String areaName) {
-        Area area = plugin.getArea(areaName);
-        if (area == null || !area.toDTO().showTitle()) return;
+        try {
+            Area area = plugin.getArea(areaName);
+            if (area == null || (area.toDTO() != null && !area.toDTO().showTitle())) return;
 
-        Map<String, Object> titleConfig = plugin.getConfigManager().getTitleConfig("enter");
-        String title = (String) titleConfig.get("main");
-        String subtitle = (String) titleConfig.get("subtitle");
+            // Default title values in case configuration is missing
+            String title = "§aEntering " + areaName;
+            String subtitle = "§7Welcome!";
+            int fadeIn = 20;
+            int stay = 40;
+            int fadeOut = 20;
 
-        // Replace placeholders
-        title = title.replace("{area}", areaName);
-        subtitle = subtitle.replace("{area}", areaName);
+            try {
+                // Try to get area-specific title config first
+                Map<String, Object> titleConfig = null;
+                if (plugin.getConfigManager().getSection("areaTitles." + areaName + ".enter") != null) {
+                    titleConfig = plugin.getConfigManager().getSection("areaTitles." + areaName + ".enter").getAllMap();
+                } else {
+                    // Fall back to default title config
+                    titleConfig = plugin.getConfigManager().getTitleConfig("enter");
+                }
 
-        player.sendTitle(
-            title,
-            subtitle,
-            plugin.getConfigManager().getInt("title.enter.fadeIn", 20),
-            plugin.getConfigManager().getInt("title.enter.stay", 40),
-            plugin.getConfigManager().getInt("title.enter.fadeOut", 20)
-        );
+                // Extract values with null checks
+                if (titleConfig != null) {
+                    // Get main title with fallback
+                    Object mainTitle = titleConfig.get("main");
+                    if (mainTitle != null) {
+                        title = mainTitle.toString().replace("{area}", areaName);
+                    }
+                    
+                    // Get subtitle with fallback
+                    Object subTitle = titleConfig.get("subtitle");
+                    if (subTitle != null) {
+                        subtitle = subTitle.toString().replace("{area}", areaName);
+                    }
+                    
+                    // Get timing values with fallbacks
+                    fadeIn = titleConfig.containsKey("fadeIn") ? Integer.parseInt(titleConfig.get("fadeIn").toString()) : fadeIn;
+                    stay = titleConfig.containsKey("stay") ? Integer.parseInt(titleConfig.get("stay").toString()) : stay;
+                    fadeOut = titleConfig.containsKey("fadeOut") ? Integer.parseInt(titleConfig.get("fadeOut").toString()) : fadeOut;
+                }
+            } catch (Exception e) {
+                // Log the error, but continue with default values
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Error loading title config for area " + areaName + ": " + e.getMessage());
+                }
+            }
+
+            // Send the title with either configured or default values
+            player.sendTitle(
+                title,
+                subtitle,
+                fadeIn,
+                stay,
+                fadeOut
+            );
+        } catch (Exception e) {
+            // Catch any remaining exceptions to prevent crashes
+            if (plugin.isDebugMode()) {
+                plugin.debug("Failed to show enter title for area " + areaName + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
     }
 
     private void handleAreaLeave(Player player, String areaName) {
-        Area area = plugin.getArea(areaName);
-        if (area == null || !area.toDTO().showTitle()) return;
+        try {
+            Area area = plugin.getArea(areaName);
+            if (area == null || (area.toDTO() != null && !area.toDTO().showTitle())) return;
 
-        Map<String, Object> titleConfig = plugin.getConfigManager().getTitleConfig("leave");
-        String title = (String) titleConfig.get("main");
-        String subtitle = (String) titleConfig.get("subtitle");
+            // Default title values in case configuration is missing
+            String title = "§eLeaving " + areaName;
+            String subtitle = "§7Goodbye!";
+            int fadeIn = 20;
+            int stay = 40;
+            int fadeOut = 20;
 
-        // Replace placeholders
-        title = title.replace("{area}", areaName);
-        subtitle = subtitle.replace("{area}", areaName);
+            try {
+                // Try to get area-specific title config first
+                Map<String, Object> titleConfig = null;
+                if (plugin.getConfigManager().getSection("areaTitles." + areaName + ".leave") != null) {
+                    titleConfig = plugin.getConfigManager().getSection("areaTitles." + areaName + ".leave").getAllMap();
+                } else {
+                    // Fall back to default title config
+                    titleConfig = plugin.getConfigManager().getTitleConfig("leave");
+                }
 
-        player.sendTitle(
-            title,
-            subtitle,
-            plugin.getConfigManager().getInt("title.leave.fadeIn", 20),
-            plugin.getConfigManager().getInt("title.leave.stay", 40),
-            plugin.getConfigManager().getInt("title.leave.fadeOut", 20)
-        );
+                // Extract values with null checks
+                if (titleConfig != null) {
+                    // Get main title with fallback
+                    Object mainTitle = titleConfig.get("main");
+                    if (mainTitle != null) {
+                        title = mainTitle.toString().replace("{area}", areaName);
+                    }
+                    
+                    // Get subtitle with fallback
+                    Object subTitle = titleConfig.get("subtitle");
+                    if (subTitle != null) {
+                        subtitle = subTitle.toString().replace("{area}", areaName);
+                    }
+                    
+                    // Get timing values with fallbacks
+                    fadeIn = titleConfig.containsKey("fadeIn") ? Integer.parseInt(titleConfig.get("fadeIn").toString()) : fadeIn;
+                    stay = titleConfig.containsKey("stay") ? Integer.parseInt(titleConfig.get("stay").toString()) : stay;
+                    fadeOut = titleConfig.containsKey("fadeOut") ? Integer.parseInt(titleConfig.get("fadeOut").toString()) : fadeOut;
+                }
+            } catch (Exception e) {
+                // Log the error, but continue with default values
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Error loading title config for area " + areaName + ": " + e.getMessage());
+                }
+            }
+
+            // Send the title with either configured or default values
+            player.sendTitle(
+                title,
+                subtitle,
+                fadeIn,
+                stay,
+                fadeOut
+            );
+        } catch (Exception e) {
+            // Catch any remaining exceptions to prevent crashes
+            if (plugin.isDebugMode()) {
+                plugin.debug("Failed to show leave title for area " + areaName + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)

@@ -156,11 +156,11 @@ public class WandListener implements Listener {
         placeholders.put("x", String.valueOf(block.getFloorX()));
         placeholders.put("y", String.valueOf(block.getFloorY()));
         placeholders.put("z", String.valueOf(block.getFloorZ()));
-        if (positionIndex == 0) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionSet", placeholders));
-        } else {
-            player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionSet", placeholders));
-        }
+        
+        // Add position index to placeholders
+        placeholders.put("position", positionIndex == 0 ? "pos1" : "pos2");
+        
+        player.sendMessage(plugin.getLanguageManager().get("messages.wand.positionSet", placeholders));
 
         // Notify if both positions are set
         if (positions[0] != null && positions[1] != null) {

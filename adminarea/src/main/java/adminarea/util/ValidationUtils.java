@@ -8,6 +8,7 @@ import cn.nukkit.level.Position;
 import org.json.JSONObject;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -16,25 +17,43 @@ public class ValidationUtils {
     private static final int MIN_PRIORITY = 0;
     private static final int MAX_PRIORITY = 100;
     
+    // Cache common patterns to avoid recompilation
+    private static final Map<String, Pattern> PATTERN_CACHE = new ConcurrentHashMap<>(8);
+    
     // Toggle dependency map
     private static final Map<String, List<String>> TOGGLE_DEPENDENCIES;
     static {
-        TOGGLE_DEPENDENCIES = new HashMap<>();
-        TOGGLE_DEPENDENCIES.put("container", Arrays.asList("interact")); 
-        TOGGLE_DEPENDENCIES.put("itemFrame", Arrays.asList("interact"));
-        TOGGLE_DEPENDENCIES.put("armorStand", Arrays.asList("interact"));
-        TOGGLE_DEPENDENCIES.put("hopper", Arrays.asList("redstone"));
-        TOGGLE_DEPENDENCIES.put("dispenser", Arrays.asList("redstone"));
-        TOGGLE_DEPENDENCIES.put("piston", Arrays.asList("redstone")); 
-        TOGGLE_DEPENDENCIES.put("breeding", Arrays.asList("interact"));
+        Map<String, List<String>> deps = new HashMap<>();
+        deps.put("container", Collections.singletonList("interact")); 
+        deps.put("itemFrame", Collections.singletonList("interact"));
+        deps.put("armorStand", Collections.singletonList("interact"));
+        deps.put("hopper", Collections.singletonList("redstone"));
+        deps.put("dispenser", Collections.singletonList("redstone"));
+        deps.put("piston", Collections.singletonList("redstone")); 
+        deps.put("breeding", Collections.singletonList("interact"));
+        TOGGLE_DEPENDENCIES = Collections.unmodifiableMap(deps);
     }
-    // Toggle conflict map
+    // Toggle conflict map (made unmodifiable for safety)
     private static final Map<String, List<String>> TOGGLE_CONFLICTS;
     static {
-        TOGGLE_CONFLICTS = new HashMap<>();
-        TOGGLE_CONFLICTS.put("pvp", Arrays.asList("damageEntities"));
-        TOGGLE_CONFLICTS.put("monsterSpawn", Arrays.asList("peaceful"));
-        TOGGLE_CONFLICTS.put("fire", Arrays.asList("fireProtection"));
+        Map<String, List<String>> conflicts = new HashMap<>();
+        conflicts.put("pvp", Collections.singletonList("damageEntities"));
+        conflicts.put("monsterSpawn", Collections.singletonList("peaceful"));
+        conflicts.put("fire", Collections.singletonList("fireProtection"));
+        TOGGLE_CONFLICTS = Collections.unmodifiableMap(conflicts);
+    }
+
+    // Cache of valid toggle names for faster lookups
+    private static Set<String> validToggles;
+    static {
+        initValidToggles();
+    }
+    
+    private static void initValidToggles() {
+        validToggles = PermissionToggle.getTogglesByCategory().values().stream()
+            .flatMap(List::stream)
+            .map(PermissionToggle::getPermissionNode)
+            .collect(Collectors.toSet());
     }
 
     public static void validateAreaName(String name) {
@@ -62,13 +81,17 @@ public class ValidationUtils {
         }
     }
 
+    // Optimized validation by avoiding redundant string checks
     public static void validateAreaSettings(JSONObject settings) {
         if (settings == null) {
             throw new IllegalArgumentException("Settings cannot be null");
         }
 
+        // Cache keys to avoid calling settings.keySet() multiple times
+        Set<String> keys = settings.keySet();
+
         // Validate each toggle setting
-        for (String key : settings.keySet()) {
+        for (String key : keys) {
             if (!isValidToggle(key)) {
                 throw new IllegalArgumentException("Invalid toggle setting: " + key);
             }
@@ -79,18 +102,43 @@ public class ValidationUtils {
             }
         }
 
-        // Validate toggle dependencies
-        validateToggleDependencies(settings);
-        
-        // Validate toggle conflicts
-        validateToggleConflicts(settings);
+        // Validate toggle dependencies and conflicts in a single pass through settings
+        validateToggleRelations(settings);
     }
 
     public static boolean isValidToggle(String toggleName) {
-        // Check if toggle exists in PermissionToggle registry
-        return PermissionToggle.getTogglesByCategory().values().stream()
-            .flatMap(List::stream)
-            .anyMatch(toggle -> toggle.getPermissionNode().equals(toggleName));
+        // Use cached set of valid toggle names
+        return validToggles.contains(toggleName);
+    }
+
+    // Combined method to validate both dependencies and conflicts in one pass
+    private static void validateToggleRelations(JSONObject settings) {
+        // Check all enabled toggles for dependencies and conflicts
+        for (String toggle : settings.keySet()) {
+            if (settings.optBoolean(toggle, false)) {
+                // Check dependencies
+                List<String> dependencies = TOGGLE_DEPENDENCIES.get(toggle);
+                if (dependencies != null) {
+                    for (String dependency : dependencies) {
+                        if (!settings.optBoolean(dependency, false)) {
+                            throw new IllegalArgumentException(
+                                "Toggle '" + toggle + "' requires '" + dependency + "' to be enabled");
+                        }
+                    }
+                }
+                
+                // Check conflicts
+                List<String> conflicts = TOGGLE_CONFLICTS.get(toggle);
+                if (conflicts != null) {
+                    for (String conflict : conflicts) {
+                        if (settings.optBoolean(conflict, false)) {
+                            throw new IllegalArgumentException(
+                                "Toggle '" + toggle + "' conflicts with '" + conflict + "'");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     public static void validateToggleDependencies(JSONObject settings) {

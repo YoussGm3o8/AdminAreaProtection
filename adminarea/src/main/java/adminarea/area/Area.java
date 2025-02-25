@@ -197,6 +197,23 @@ public final class Area {
         }
     }
 
+    public void clearCaches() {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Clearing caches for area " + name);
+        }
+        
+        containsCache.invalidateAll();
+        effectivePermissionCache.clear();
+        cachedPlayerPermissions = null;
+        
+        // Also clear the toggle states to force reload from DTO
+        toggleStates.clear();
+        JSONObject toggles = dto.toggleStates();
+        for (String key : toggles.keySet()) {
+            toggleStates.put(key, toggles.getBoolean(key));
+        }
+    }
+
     // Getters
     public Vector3 getPos1() { return pos1; }
     public Vector3 getPos2() { return pos2; }

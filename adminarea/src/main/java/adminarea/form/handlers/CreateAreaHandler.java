@@ -101,6 +101,9 @@ public class CreateAreaHandler extends BaseFormHandler {
                 leaveMsg = response.getInputResponse(13);
                 if (enterMsg == null) enterMsg = "";
                 if (leaveMsg == null) leaveMsg = "";
+                
+                // Save title configuration to config.yml
+                saveAreaTitles(name, enterMsg, leaveMsg);
             }
 
             // Initialize settings from DTO
@@ -201,6 +204,38 @@ public class CreateAreaHandler extends BaseFormHandler {
             plugin.getLogger().error("Error handling form response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.errorProcessingInput"));
             cleanup(player);
+        }
+    }
+
+    /**
+     * Saves area title information to config.yml
+     * 
+     * @param areaName The area name
+     * @param enterMessage The enter message
+     * @param leaveMessage The leave message
+     */
+    private void saveAreaTitles(String areaName, String enterMessage, String leaveMessage) {
+        // Create base path for area titles
+        String basePath = "areaTitles." + areaName;
+        
+        // Set default title values
+        plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + areaName);
+        plugin.getConfigManager().set(basePath + ".enter.subtitle", enterMessage.isEmpty() ? "§eEnjoy your stay!" : enterMessage);
+        plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
+        plugin.getConfigManager().set(basePath + ".enter.stay", 40);
+        plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
+        
+        plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + areaName);
+        plugin.getConfigManager().set(basePath + ".leave.subtitle", leaveMessage.isEmpty() ? "§eThank you for visiting!" : leaveMessage);
+        plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
+        plugin.getConfigManager().set(basePath + ".leave.stay", 40);
+        plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
+        
+        // Save the config
+        plugin.getConfigManager().save();
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Saved title config for area " + areaName);
         }
     }
 

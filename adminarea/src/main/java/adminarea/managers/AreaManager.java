@@ -235,24 +235,34 @@ public class AreaManager implements IAreaManager {
         if (area == null) return;
         
         try {
-            // Invalidate spatial index
+            // Remove from spatial index first
             removeFromSpatialIndex(area);
             
-            // Save updated area to database first
+            // Save updated area to database
             plugin.getDatabaseManager().updateArea(area);
             
+            // Invalidate caches for this area
+            locationCache.invalidateAll();
+            nameCache.invalidate(area.getName());
+            
+            // Reload area from database to ensure fresh state
+            List<Area> freshAreas = plugin.getDatabaseManager().loadAreas();
+            Area freshArea = freshAreas.stream()
+                .filter(a -> a.getName().equals(area.getName()))
+                .findFirst()
+                .orElse(area);
+            
             // Update in-memory area
-            areasByName.put(area.getName(), area);
+            areasByName.put(area.getName(), freshArea);
             
             // Re-index the updated area
-            addToSpatialIndex(area);
-            
-            // Force reload permissions and caches
-            invalidateAreaCaches(area);
+            addToSpatialIndex(freshArea);
             
             if (plugin.isDebugMode()) {
-                plugin.debug("Updated area " + area.getName() + " and invalidated caches");
+                plugin.debug("Updated and reloaded area " + area.getName() + " from database");
+                plugin.debug("New toggle states: " + freshArea.toDTO().toggleStates());
             }
+            
         } catch (Exception e) {
             plugin.getLogger().error("Failed to update area: " + area.getName(), e);
         }

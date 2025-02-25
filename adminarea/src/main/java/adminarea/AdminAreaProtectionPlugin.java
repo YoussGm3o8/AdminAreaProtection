@@ -37,13 +37,13 @@ import adminarea.listeners.PlayerEffectListener;
 import adminarea.listeners.ExperienceListener;
 import adminarea.listeners.FormCleanupListener;
 import adminarea.managers.AreaManager;
+import adminarea.managers.ConfigManager;
 import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
 import adminarea.managers.LanguageManager;
 import adminarea.permissions.OverrideManager;  // Updated import path
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
-import adminarea.config.ConfigManager;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.util.PerformanceMonitor;

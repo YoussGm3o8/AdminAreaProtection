@@ -22,10 +22,14 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class BasicSettingsHandler extends BaseFormHandler {
+    private static final int NAME_INDEX = 1;
+    private static final int PRIORITY_INDEX = 2;
+    private static final int SHOW_TITLE_INDEX = 3;
+    private static final int ENTER_MESSAGE_INDEX = 5;
+    private static final int LEAVE_MESSAGE_INDEX = 6;
 
     public BasicSettingsHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
-        validateFormId();
     }
 
     @Override
@@ -34,183 +38,178 @@ public class BasicSettingsHandler extends BaseFormHandler {
     }
 
     @Override
+    public FormWindow createForm(Player player) {
+        return createForm(player, getEditingArea(player));
+    }
+
+    @Override
     public FormWindow createForm(Player player, Area area) {
-        try {
-            Map<String, String> placeholders = new HashMap<>();
-            placeholders.put("area", area.getName());
-            placeholders.put("player", player.getName());
-
-            FormWindowCustom form = new FormWindowCustom(
-                plugin.getLanguageManager().get("gui.basicSettings.title", placeholders)
-            );
-
-            // General Settings Section
-            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.general")));
-            
-            // Area Name
-            form.addElement(new ElementInput(
-                plugin.getLanguageManager().get("gui.basicSettings.labels.name"),
-                plugin.getLanguageManager().get("gui.basicSettings.labels.namePlaceholder"),
-                area.getName()
-            ));
-
-            // Priority
-            form.addElement(new ElementInput(
-                plugin.getLanguageManager().get("gui.basicSettings.labels.priority"),
-                plugin.getLanguageManager().get("gui.basicSettings.labels.priorityPlaceholder"),
-                String.valueOf(area.getPriority())
-            ));
-
-            // Show Title Toggle
-            form.addElement(new ElementToggle(
-                plugin.getLanguageManager().get("gui.basicSettings.labels.showTitle"),
-                area.toDTO().showTitle()
-            ));
-
-            // Display Settings Section
-            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.display")));
-
-            // Enter Message
-            form.addElement(new ElementInput(
-                plugin.getLanguageManager().get("gui.basicSettings.labels.enterMessage"),
-                plugin.getLanguageManager().get("gui.basicSettings.labels.enterPlaceholder"),
-                area.toDTO().enterMessage()
-            ));
-
-            // Leave Message
-            form.addElement(new ElementInput(
-                plugin.getLanguageManager().get("gui.basicSettings.labels.leaveMessage"),
-                plugin.getLanguageManager().get("gui.basicSettings.labels.leavePlaceholder"),
-                area.toDTO().leaveMessage()
-            ));
-
-            return form;
-
-        } catch (Exception e) {
-            plugin.getLogger().error("Error creating basic settings form", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+        if (area == null) {
             return null;
         }
+
+        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.basicSettings.title", 
+            Map.of("area", area.getName())));
+        
+        // Add general settings section
+        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.general")));
+        form.addElement(new ElementInput(
+            plugin.getLanguageManager().get("gui.basicSettings.labels.name"),
+            plugin.getLanguageManager().get("gui.basicSettings.labels.namePlaceholder"),
+            area.getName()
+        ));
+        form.addElement(new ElementInput(
+            plugin.getLanguageManager().get("gui.basicSettings.labels.priority"),
+            plugin.getLanguageManager().get("gui.basicSettings.labels.priorityPlaceholder"),
+            String.valueOf(area.getPriority())
+        ));
+        form.addElement(new ElementToggle(
+            plugin.getLanguageManager().get("gui.basicSettings.labels.showTitle"),
+            area.toDTO().showTitle()
+        ));
+        
+        // Add display settings section
+        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.display")));
+        form.addElement(new ElementInput(
+            plugin.getLanguageManager().get("gui.basicSettings.labels.enterMessage"),
+            plugin.getLanguageManager().get("gui.basicSettings.labels.enterPlaceholder"),
+            area.toDTO().enterMessage()
+        ));
+        form.addElement(new ElementInput(
+            plugin.getLanguageManager().get("gui.basicSettings.labels.leaveMessage"),
+            plugin.getLanguageManager().get("gui.basicSettings.labels.leavePlaceholder"),
+            area.toDTO().leaveMessage()
+        ));
+        
+        return form;
     }
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
         try {
-            // Get area being edited with proper null checks
-            var trackingData = plugin.getFormIdMap().get(player.getName() + "_editing");
-            if (trackingData == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.noAreaSelected"));
-                plugin.getGuiManager().openMainMenu(player);
-                return;
-            }
-
-            Area area = plugin.getArea(trackingData.getFormId());
+            Area area = getEditingArea(player);
             if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.area.notFound", 
-                    Map.of("area", trackingData.getFormId())));
-                plugin.getGuiManager().openMainMenu(player);
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
                 return;
             }
 
-            // Get form responses with null checks
-            // Skip index 0 (General Settings Label)
-            String newName = response.getInputResponse(1);        // Area Name Input
-            String priorityStr = response.getInputResponse(2);    // Priority Input
-            
-            // Handle show title toggle safely
-            boolean showTitle = area.toDTO().showTitle();  // Default to current value
-            try {
-                Object toggleResponse = response.getResponse(3);  // Get raw response for toggle
-                if (toggleResponse instanceof Boolean) {
-                    showTitle = (Boolean) toggleResponse;
-                } else {
-                    plugin.getLogger().debug("Toggle response was not boolean type: " + (toggleResponse != null ? toggleResponse.getClass().getName() : "null"));
-                }
-            } catch (Exception e) {
-                plugin.getLogger().debug("Error reading toggle response, using current value: " + e.getMessage());
-            }
-            
-            // Skip index 4 (Display Settings Label)
-            String enterMessage = response.getInputResponse(5);   // Enter Message Input
-            String leaveMessage = response.getInputResponse(6);   // Leave Message Input
+            // Get current values
+            String oldName = area.getName();
+            int oldPriority = area.getPriority();
+            boolean oldShowTitle = area.toDTO().showTitle();
+            String oldEnterMessage = area.toDTO().enterMessage();
+            String oldLeaveMessage = area.toDTO().leaveMessage();
 
-            // Validate inputs
-            if (newName == null || priorityStr == null) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
-                plugin.getGuiManager().openFormById(player, getFormId(), area);
-                return;
-            }
-
-            // Validate name is not empty
-            if (newName.trim().isEmpty()) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.name.empty"));
-                plugin.getGuiManager().openFormById(player, getFormId(), area);
-                return;
-            }
-
-            int priority;
-            try {
-                priority = Integer.parseInt(priorityStr);
-            } catch (NumberFormatException e) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.priority.notNumber"));
-                plugin.getGuiManager().openFormById(player, getFormId(), area);
-                return;
-            }
+            // Get new values
+            String newName = response.getInputResponse(NAME_INDEX);
+            int newPriority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+            boolean newShowTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
+            String newEnterMessage = response.getInputResponse(ENTER_MESSAGE_INDEX);
+            String newLeaveMessage = response.getInputResponse(LEAVE_MESSAGE_INDEX);
 
             // Build updated area
-            AreaDTO currentDTO = area.toDTO();
-            
-            // Ensure we have valid settings
-            JSONObject settings = currentDTO.settings();
-            if (settings == null) {
-                settings = new JSONObject();
-            }
-            
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+            Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
                 .name(newName)
-                .priority(priority)
-                .showTitle(showTitle)
-                .enterMessage(enterMessage != null ? enterMessage : "")
-                .leaveMessage(leaveMessage != null ? leaveMessage : "")
-                .settings(settings)
+                .priority(newPriority)
+                .showTitle(newShowTitle)
+                .enterMessage(newEnterMessage)
+                .leaveMessage(newLeaveMessage)
                 .build();
 
-            // Save changes
+            // Check if title config needs updating
+            if (!oldName.equals(newName) || !oldEnterMessage.equals(newEnterMessage) || 
+                !oldLeaveMessage.equals(newLeaveMessage) || oldShowTitle != newShowTitle) {
+                // If area name changed, remove old title entry and create new one
+                if (!oldName.equals(newName)) {
+                    plugin.getConfigManager().remove("areaTitles." + oldName);
+                }
+                
+                if (newShowTitle) {
+                    updateAreaTitles(newName, newEnterMessage, newLeaveMessage);
+                }
+            }
+
+            // Update area in plugin
             plugin.updateArea(updatedArea);
             
-            // Send success message
-            player.sendMessage(plugin.getLanguageManager().get("success.settings.save.basic", 
-                Map.of("area", updatedArea.getName())));
+            // Show success message
+            int changedFields = 0;
+            if (!oldName.equals(newName)) changedFields++;
+            if (oldPriority != newPriority) changedFields++;
+            if (oldShowTitle != newShowTitle) changedFields++;
+            if (!oldEnterMessage.equals(newEnterMessage)) changedFields++;
+            if (!oldLeaveMessage.equals(newLeaveMessage)) changedFields++;
+            
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.updated", 
+                Map.of(
+                    "area", newName,
+                    "count", String.valueOf(changedFields)
+                )));
 
-            // Return to edit menu
+            // If name changed, update editing reference
+            if (!oldName.equals(newName)) {
+                plugin.getFormIdMap().put(player.getName() + "_editing", 
+                    plugin.getFormIdMap().get(player.getName() + "_editing").withFormId(newName));
+            }
+
+            // Return to edit area form
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
+        } catch (NumberFormatException e) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidPriority"));
+            plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, getEditingArea(player));
         } catch (Exception e) {
             plugin.getLogger().error("Error handling basic settings form", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            plugin.getGuiManager().openMainMenu(player);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Updates area title information in config.yml
+     * 
+     * @param areaName The area name
+     * @param enterMessage The enter message
+     * @param leaveMessage The leave message
+     */
+    private void updateAreaTitles(String areaName, String enterMessage, String leaveMessage) {
+        // Create base path for area titles
+        String basePath = "areaTitles." + areaName;
+        
+        // Set title values
+        plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + areaName);
+        plugin.getConfigManager().set(basePath + ".enter.subtitle", enterMessage);
+        plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
+        plugin.getConfigManager().set(basePath + ".enter.stay", 40);
+        plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
+        
+        plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + areaName);
+        plugin.getConfigManager().set(basePath + ".leave.subtitle", leaveMessage);
+        plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
+        plugin.getConfigManager().set(basePath + ".leave.stay", 40);
+        plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
+        
+        // Save the config
+        plugin.getConfigManager().save();
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updated title config for area " + areaName);
         }
     }
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        handleCancel(player);
+        // Not used for custom form
+        plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
     }
 
-    @Override
-    public FormWindow createForm(Player player) {
-        FormTrackingData data = plugin.getFormIdMap().get(player.getName() + "_editing");
-        if (data == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.noAreaSelected"));
+    private Area getEditingArea(Player player) {
+        var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
+        if (areaData == null) {
             return null;
         }
-
-        Area area = plugin.getArea(data.getFormId());
-        if (area == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.noAreaSelected"));
-            return null;
-        }
-
-        return createForm(player, area);
+        return plugin.getArea(areaData.getFormId());
     }
 }

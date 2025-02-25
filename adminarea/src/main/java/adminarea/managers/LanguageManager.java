@@ -193,8 +193,14 @@ public class LanguageManager {
             String placeholder = matcher.group(1);
             String replacement = placeholders.getOrDefault(placeholder, matcher.group(0));
 
+            // Handle special cases
             if ("player".equals(placeholder) && !placeholders.containsKey("player")) {
                 replacement = "players";
+            }
+            
+            // Handle position placeholder specifically
+            if ("position".equals(placeholder) && !placeholders.containsKey("position")) {
+                replacement = "position"; // Default fallback
             }
 
             if (replacement.matches("-?\\d+")) {

@@ -13,6 +13,10 @@ public class FormTrackingData {
         return formId;
     }
 
+    public FormTrackingData withFormId(String formId) {
+        return new FormTrackingData(formId, creationTime);
+    }
+
     public long getCreationTime() {
         return creationTime;
     }

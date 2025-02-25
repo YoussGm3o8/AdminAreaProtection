@@ -14,6 +14,7 @@ import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowSimple;
 
 import java.util.List;
+import java.util.Map;
 
 public class DeleteAreaHandler extends BaseFormHandler {
     public DeleteAreaHandler(AdminAreaProtectionPlugin plugin) {
@@ -122,21 +123,30 @@ public class DeleteAreaHandler extends BaseFormHandler {
     }
 
     private void processAreaDeletion(Player player, Area area) {
-        if (area == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
-            plugin.getGuiManager().openMainMenu(player);
-            return;
-        }
-
         try {
-            plugin.removeArea(area);
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.deleted")
-                .replace("%area%", area.getName()));
+            String areaName = area.getName();
+            
+            // Delete area from manager
+            plugin.getAreaManager().removeArea(area);
+            
+            // Remove area title configuration from config
+            plugin.getConfigManager().remove("areaTitles." + areaName);
+            plugin.getConfigManager().save();
+            
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.deleted", 
+                Map.of("area", areaName)));
+            
+            // Return to main menu
+            plugin.getFormIdMap().put(player.getName(),
+                new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
             plugin.getGuiManager().openMainMenu(player);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Deleted area: " + areaName + " and removed title configuration");
+            }
         } catch (Exception e) {
-            plugin.getLogger().error("Error deleting area: " + area.getName(), e);
+            plugin.getLogger().error("Error deleting area", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.deleteFailed"));
-            plugin.getGuiManager().openMainMenu(player);
         }
     }
 }
