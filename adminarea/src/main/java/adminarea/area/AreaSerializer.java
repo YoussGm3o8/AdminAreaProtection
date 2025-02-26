@@ -31,6 +31,9 @@ public class AreaSerializer {
         data.put("permissions", dto.permissions().toMap());
         data.put("enterMessage", dto.enterMessage());
         data.put("leaveMessage", dto.leaveMessage());
+        data.put("trackPermissions", dto.trackPermissions());
+        data.put("playerPermissions", dto.playerPermissions());
+        data.put("potionEffects", dto.potionEffects().toMap());
         
         return data;
     }
@@ -76,6 +79,9 @@ public class AreaSerializer {
         Map<String, Boolean> permMap = (Map<String, Boolean>) data.getOrDefault("permissions", new HashMap<>());
         AreaDTO.Permissions permissions = AreaDTO.Permissions.fromMap(permMap);
 
+        // Extract potion effects
+        JSONObject potionEffects = new JSONObject(data.getOrDefault("potionEffects", new HashMap<>()));
+
         // Create DTO
         AreaDTO dto = new AreaDTO(
             (String) data.get("name"),
@@ -93,7 +99,8 @@ public class AreaSerializer {
             (String) data.getOrDefault("enterMessage", ""),
             (String) data.getOrDefault("leaveMessage", ""),
             (Map<String, Map<String, Boolean>>) data.getOrDefault("trackPermissions", new HashMap<>()),
-            (Map<String, Map<String, Boolean>>) data.getOrDefault("playerPermissions", new HashMap<>())
+            (Map<String, Map<String, Boolean>>) data.getOrDefault("playerPermissions", new HashMap<>()),
+            potionEffects
         );
 
         // Create Area instance using private constructor via reflection

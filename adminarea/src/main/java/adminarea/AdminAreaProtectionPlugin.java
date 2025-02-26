@@ -306,7 +306,29 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getLogger().info("Debug mode reloaded: enabled");
             }
             enableMessages = configManager.isEnabled("enableMessages");
-            // ...existing code...
+            
+            // Refresh all protection caches
+            if (listenerManager != null) {
+                listenerManager.reload();
+                getLogger().info("Protection listener caches cleared");
+                
+                // Specifically reload potion effects
+                if (listenerManager.getPlayerEffectListener() != null) {
+                    listenerManager.getPlayerEffectListener().reloadEffects();
+                    getLogger().info("Potion effects reloaded for all players");
+                }
+            }
+            
+            // Reload language manager
+            if (languageManager != null) {
+                try {
+                    languageManager.reload();
+                } catch (Exception e) {
+                    getLogger().error("Error reloading language manager", e);
+                }
+            }
+            
+            getLogger().info("All caches have been cleared and listeners reloaded");
         }
     
         public ConfigManager getConfigManager() {
@@ -321,8 +343,22 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         sender.sendMessage("§cYou don't have permission to reload the configuration.");
                         return true;
                     }
+                    
+                    // Reload configs first
                     configManager.reload();
-                    sender.sendMessage("§aConfiguration reloaded successfully.");
+                    
+                    // Update config values and clear caches
+                    reloadConfigValues();
+                    
+                    // Force invalidate all protection caches
+                    if (listenerManager != null && listenerManager.getProtectionListener() != null) {
+                        listenerManager.getProtectionListener().cleanup();
+                    }
+                    
+                    // Clear form tracking data
+                    formIdMap.clear();
+                    
+                    sender.sendMessage(languageManager.get("success.plugin.reload"));
                     return true;
                 }
                 if (!(sender instanceof Player)) {

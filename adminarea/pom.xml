@@ -235,23 +235,23 @@
                                   <pattern>io.micrometer</pattern>
                                   <shadedPattern>adminarea.shaded.micrometer</shadedPattern>
                               </relocation>
+                              <relocation>
+                                  <pattern>org.HdrHistogram</pattern>
+                                  <shadedPattern>adminarea.shaded.hdrhistogram</shadedPattern>
+                              </relocation>
+                              <relocation>
+                                  <pattern>org.LatencyUtils</pattern>
+                                  <shadedPattern>adminarea.shaded.latencyutils</shadedPattern>
+                              </relocation>
                           </relocations>
                           <filters>
                               <filter>
-                                  <excludeDefaults>false</excludeDefaults>
                                   <artifact>*:*</artifact>
-                                  <includes>
-                                      <include>org/glassfish/json/JsonProviderImpl</include>
-                                      <include>com/sun/xml/bind/v2/model/nav/ReflectionNavigator</include>
-                                      <include>org/sqlite/**</include>
-                                      <include>lang/**/*.yml</include>
-                                      <include>*.yml</include>
-                                  </includes>
                                   <excludes>
                                       <exclude>META-INF/*.SF</exclude>
                                       <exclude>META-INF/*.DSA</exclude>
                                       <exclude>META-INF/*.RSA</exclude>
-                                      <exclude>META-INF/*.MF</exclude>
+                                      <exclude>META-INF/MANIFEST.MF</exclude>
                                       <exclude>META-INF/LICENSE</exclude>
                                       <exclude>META-INF/LICENSE.txt</exclude>
                                       <exclude>META-INF/NOTICE</exclude>

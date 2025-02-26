@@ -97,7 +97,6 @@ public class ConfigManager {
         defaultPerms.put("allowBreak", false);
         defaultPerms.put("allowInteract", false);
         defaultPerms.put("allowContainer", false);
-        defaultPerms.put("allowItemFrame", false);
         defaultPerms.put("allowPvP", false);
         defaultPerms.put("allowMobSpawn", true);
         defaultPerms.put("allowRedstone", true);
@@ -343,7 +342,29 @@ public class ConfigManager {
     }
 
     public Map<String, Object> getTitleConfig(String type) {
-        return config.getSection("title." + type).getAllMap();
+        Map<String, Object> titleConfig = new HashMap<>();
+        ConfigSection section = config.getSection("title." + type);
+        
+        if (section != null) {
+            titleConfig = section.getAllMap();
+        } else {
+            // Fallback to defaults if section not found
+            if ("enter".equals(type)) {
+                titleConfig.put("main", "titles.enter.default.main");
+                titleConfig.put("subtitle", "titles.enter.default.subtitle");
+                titleConfig.put("fadeIn", 20);
+                titleConfig.put("stay", 40);
+                titleConfig.put("fadeOut", 20);
+            } else if ("leave".equals(type)) {
+                titleConfig.put("main", "titles.leave.default.main");
+                titleConfig.put("subtitle", "titles.leave.default.subtitle");
+                titleConfig.put("fadeIn", 20);
+                titleConfig.put("stay", 40);
+                titleConfig.put("fadeOut", 20);
+            }
+        }
+        
+        return titleConfig;
     }
 
     /**

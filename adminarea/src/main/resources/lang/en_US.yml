@@ -35,14 +35,18 @@ messages:
     blockBreak: "{prefix}§cYou cannot break blocks in {area}!"
     blockPlace: "{prefix}§cYou cannot place blocks in {area}"
     interact: "{prefix}§cYou cannot interact with that in {area}"
-    pvp: "{prefix}§cPvP is disabled in {area}"
     container: "{prefix}§cYou cannot access containers in {area}"
-    denied: "{prefix}§cThis area is protected"
-    fire: "{prefix}§cFire is not allowed in {area}"
-    liquid: "{prefix}§cLiquid flow is not allowed in {area}"
+    pvp: "{prefix}§cPvP is disabled in {area}"
     entityDamage: "{prefix}§cYou cannot damage entities in {area}"
+    itemDrop: "{prefix}§cYou cannot drop items in {area}"
+    itemPickup: "{prefix}§cYou cannot pick up items in {area}"
+    vehicleBreak: "{prefix}§cYou cannot destroy vehicles in {area}"
+    vehiclePlace: "{prefix}§cYou cannot place vehicles in {area}"
+    vehicleEnter: "{prefix}§cYou cannot enter vehicles in {area}"
     vehicleDamage: "{prefix}§cYou cannot damage vehicles in {area}"
     redstone: "{prefix}§cRedstone is not allowed in {area}"
+    fire: "{prefix}§cFire is not allowed in {area}"
+    liquid: "{prefix}§cLiquid flow is not allowed in {area}"
     explosion: "{prefix}§cExplosions are not allowed in {area}"
     pistons: "{prefix}§cPistons are not allowed in {area}"
     hangingBreak: "{prefix}§cYou cannot break hanging items in {area}"
@@ -50,7 +54,10 @@ messages:
     breeding: "{prefix}§cBreeding animals is not allowed in {area}"
     taming: "{prefix}§cTaming animals is not allowed in {area}"
     projectile: "{prefix}§cShooting projectiles is not allowed in {area}"
+    itemRotation: "{prefix}§cYou cannot rotate items in frames in {area}"
+    potionEffect: "{prefix}§c{effect} potion effect is not allowed in {area}"
     monsterTarget: "{prefix}§cMonsters in this area cannot target players"
+    denied: "{prefix}§cThis area is protected"
 
   # Command related messages
   commands:
@@ -370,7 +377,8 @@ gui:
       allowBlockPlace: "Controls whether {player} can place blocks in this area"
       allowInteract: "Controls whether {player} can interact with blocks and items"
       allowContainer: "Controls whether {player} can access containers"
-      allowItemFrame: "Controls whether {player} can interact with item frames"
+      allowItemRotation: "Controls whether {player} can interact with item frames"
+      allowHangingBreak: "Controls where {player} can take items out of itemframes"
       allowArmorStand: "Controls whether {player} can interact with armor stands"
       allowRedstone: "Controls whether redstone mechanisms can function"
       allowPistons: "Controls whether pistons can push/pull blocks"
@@ -380,6 +388,7 @@ gui:
       allowLiquid: "Controls whether liquids can flow"
       allowBlockSpread: "Controls grass, mycelium, and vine spreading"
       allowLeafDecay: "Controls whether leaves decay when logs are removed"
+      allowBlockGravity: "Controls whether gravity blocks like sand and gravel can fall"
       allowIceForm: "Controls ice formation and melting"
       allowSnowForm: "Controls snow formation and melting"
       allowPvP: "Controls whether {player} can engage in PvP combat"
@@ -408,6 +417,33 @@ gui:
       allowFlight: "Controls whether {player} can fly"
       allowEnderPearl: "Controls whether {player} can use ender pearls"
       allowChorusFruit: "Controls whether {player} can use chorus fruit"
+      allowHangingBreak: "Controls whether {player} can break hanging items like item frames"
+      
+      # Potion effect toggles
+      allowPotionSpeed: "Applies Speed effect to players in this area with configurable strength"
+      allowPotionSlowness: "Applies Slowness effect to players in this area with configurable strength"
+      allowPotionHaste: "Applies Haste effect to players in this area with configurable strength"
+      allowPotionMiningFatigue: "Applies Mining Fatigue effect to players in this area with configurable strength"
+      allowPotionStrength: "Applies Strength effect to players in this area with configurable strength"
+      allowPotionInstantHealth: "Applies Instant Health effect to players in this area with configurable strength"
+      allowPotionInstantDamage: "Applies Instant Damage effect to players in this area with configurable strength"
+      allowPotionJumpBoost: "Applies Jump Boost effect to players in this area with configurable strength"
+      allowPotionNausea: "Applies Nausea effect to players in this area with configurable strength"
+      allowPotionRegeneration: "Applies Regeneration effect to players in this area with configurable strength"
+      allowPotionResistance: "Applies Resistance effect to players in this area with configurable strength"
+      allowPotionFireResistance: "Applies Fire Resistance effect to players in this area with configurable strength"
+      allowPotionWaterBreathing: "Applies Water Breathing effect to players in this area with configurable strength"
+      allowPotionInvisibility: "Applies Invisibility effect to players in this area with configurable strength"
+      allowPotionBlindness: "Applies Blindness effect to players in this area with configurable strength"
+      allowPotionNightVision: "Applies Night Vision effect to players in this area with configurable strength"
+      allowPotionHunger: "Applies Hunger effect to players in this area with configurable strength"
+      allowPotionWeakness: "Applies Weakness effect to players in this area with configurable strength"
+      allowPotionPoison: "Applies Poison effect to players in this area with configurable strength"
+      allowPotionWither: "Applies Wither effect to players in this area with configurable strength"
+      allowPotionHealthBoost: "Applies Health Boost effect to players in this area with configurable strength"
+      allowPotionAbsorption: "Applies Absorption effect to players in this area with configurable strength"
+      allowPotionSaturation: "Applies Saturation effect to players in this area with configurable strength"
+      allowPotionLevitation: "Applies Levitation effect to players in this area with configurable strength"
 
   # Form-specific content
   createArea:
@@ -442,13 +478,14 @@ gui:
     content: "Select what to edit:"
     buttons:
       basicSettings: "§9Basic Settings\n§8Name, priority, messages"
-      protectionSettings: "§9Protection Settings\n§8Core protection flags"
       buildingSettings: "§9Building Settings\n§8Building and blocks"
       environmentSettings: "§9Environment Settings\n§8Natural events"
       entitySettings: "§9Entity Settings\n§8Mobs and entities"
       technicalSettings: "§9Technical Settings\n§8Redstone & mechanics"
       specialSettings: "§9Special Settings\n§8Other permissions"
+      
       itemsDropsSettings: "§9Items & Drops\n§8Item Pickup and XP settings"
+      potionEffectsSettings: "§9Potion Effects\n§8Apply area beacon effects"
       groupPermissions: "§9Group Permissions\n§8LuckPerms groups"
       playerPermissions: "§9Player Permissions\n§8Player permissions"
 
@@ -516,6 +553,16 @@ gui:
     title: "Items & Drops: {area}"
     header: "§2Configure Item and XP Permissions\n§8Toggle settings below"
 
+  potionEffectsSettings:
+    title: "Potion Effects: {area}"
+    header: "§2Configure Area Beacon Effects\n§8Set which potion effects and their strength (0-255) to apply to players in this area"
+    sections:
+      effects: "§2Beacon Effects"
+    labels:
+      strength: "Effect Strength"
+      strengthPlaceholder: "Enter 0-255 (0 = disabled)"
+      effectDescription: "§7Amplifier: {strength}"
+
   entitySettings:
     title: "Entity Settings: {area}"
     header: "§2Configure Entity Permissions\n§8Toggle settings below"
@@ -525,14 +572,23 @@ titles:
   enter:
     default:
       main: "§aEntering {area}"
-      subtitle: "Welcome to {area}!"
+      subtitle: "Welcome to {area}, {player}!"
   leave:
     default:
       main: "§eLeaving {area}"
-      subtitle: "Goodbye from {area}!"
+      subtitle: "Goodbye {player}, come back soon to {area}!"
 
 # Area list format
 protectedAreaEntry: "§8- %s\n  §8World: %s\n  §8Priority: %d"
 
 # Toggle list messages
 toggleList: "§2Available Toggles:"
+
+# Potion effect messages
+potionEffect:
+  applied: "{prefix}§a{effect} effect (level {strength}) applied from area {area}"
+  removed: "{prefix}§e{effect} effect from area {area} has worn off"
+  strength:
+    set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
+    outOfRange: "{prefix}§cStrength value must be between 0 and 255"
+    invalid: "{prefix}§cInvalid strength value, must be a number"

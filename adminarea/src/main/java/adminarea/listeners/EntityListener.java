@@ -6,16 +6,21 @@ import adminarea.entity.MonsterHandler;
 import adminarea.event.MonsterTargetEvent;
 import cn.nukkit.Player;
 import cn.nukkit.entity.Entity;
+import cn.nukkit.entity.EntityHuman;
+import cn.nukkit.entity.EntityLiving;
+import cn.nukkit.entity.item.EntityItem;
+import cn.nukkit.entity.mob.EntityMob;
+import cn.nukkit.entity.passive.EntityAnimal;
+import cn.nukkit.entity.passive.EntityWaterAnimal;
+import cn.nukkit.entity.projectile.EntityProjectile;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.EventPriority;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.entity.*;
 import cn.nukkit.event.player.PlayerInteractEntityEvent;
-import io.micrometer.core.instrument.Timer;
+import cn.nukkit.item.Item;
 import cn.nukkit.level.Position;
-import cn.nukkit.entity.projectile.EntityProjectile;
-import cn.nukkit.entity.passive.EntityAnimal;
-import cn.nukkit.entity.passive.EntityWaterAnimal;
+import io.micrometer.core.instrument.Timer;
 import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
 
 import java.util.List;
@@ -175,12 +180,29 @@ public class EntityListener implements Listener {
                 return;
             }
 
-            // Check the specific explosion type permission first
-            // Use string interpolation for specificPermission instead of temporary strings
-            String entityType = event.getEntity().getClass().getSimpleName();
+            // Get the entity type
+            Entity entity = event.getEntity();
+            String entityType = entity.getClass().getSimpleName();
+            
+            // For TNT entities, we should have already handled them at spawn time
+            // This is just a backup in case some TNT entities were missed
+            if (entityType.equals("EntityPrimedTNT")) {
+                Position pos = event.getPosition();
+                if (protectionListener.shouldCancel(pos, null, "allowTNT")) {
+                    // Cancel the explosion completely
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Cancelled TNT explosion at " + 
+                            pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
+                    }
+                    return;
+                }
+            }
+
+            // Check the specific explosion type permission
             final String specificPermission = switch (entityType) {
                 case "EntityCreeper" -> "allowCreeper";
-                case "EntityPrimedTNT" -> "allowTNT";
                 case "EntityEndCrystal" -> "allowCrystalExplosion";
                 default -> "allowExplosions";
             };
@@ -226,6 +248,21 @@ public class EntityListener implements Listener {
                 } catch (Exception e) {
                     plugin.getLogger().error("Error in shouldProcessEvent", e);
                     return;
+                }
+
+                // Check for TNT entities and remove them immediately in protected areas
+                String entityType = entity.getClass().getSimpleName();
+                if (entityType.equals("EntityPrimedTNT")) {
+                    if (protectionListener.shouldCancel(pos, null, "allowTNT")) {
+                        // Remove the TNT entity immediately
+                        entity.close();
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Removed primed TNT entity at " + 
+                                pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
+                        }
+                        return;
+                    }
                 }
 
                 // Optimized entity type checking with caching
@@ -306,6 +343,42 @@ public class EntityListener implements Listener {
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "projectile_launch_check");
+        }
+    }
+    
+    /**
+     * Handle bow shooting events specifically to prevent NullPointerException
+     * This is needed because cancelling this event requires special handling
+     */
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onBowShoot(EntityShootBowEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Only check if shooter is a player
+            if (event.getEntity() instanceof Player player) {
+                // Get the player's position for the protection check
+                Position position = player.getPosition();
+                
+                // Check if shooting projectiles is allowed in this area
+                if (protectionListener.handleProtection(position, player, "allowShootProjectile")) {
+                    // Cancel the event properly to prevent NullPointerException
+                    event.setCancelled(true);
+                    
+                    // Set projectile to null to prevent further processing
+                    event.setProjectile(null);
+                    
+                    // Force-set force value to 0 to prevent any damage calculation
+                    event.setForce(0);
+                    
+                    // Send protection message to the player
+                    protectionListener.sendProtectionMessage(player, "messages.protection.projectile");
+
+                    // Reset bow animation for the player to prevent visual glitches
+                    player.getInventory().setItemInHand(player.getInventory().getItemInHand());
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "bow_shoot_check");
         }
     }
 }

@@ -29,14 +29,14 @@ language: en_US
 # Title configuration
 title:
   enter:
-    main: "§aEntering {area}"
-    subtitle: "Welcome to {area}!"
+    main: "titles.enter.default.main"
+    subtitle: "titles.enter.default.subtitle"
     fadeIn: 20
     stay: 40
     fadeOut: 20
   leave:
-    main: "§eLeaving {area}"
-    subtitle: "Goodbye from {area}!"
+    main: "titles.leave.default.main"
+    subtitle: "titles.leave.default.subtitle"
     fadeIn: 20
     stay: 40
     fadeOut: 20
@@ -45,11 +45,11 @@ title:
 areaTitles:
   example_area:
     enter:
-      main: "§6Welcome to Example Area"
-      subtitle: "§eEnjoy your stay!"
+      main: "§6Welcome to Example Area, {player}"
+      subtitle: "§eEnjoy your stay in {area}!"
     leave:
-      main: "§6Come back soon!"
-      subtitle: "§eThank you for visiting!"
+      main: "§6Come back soon, {player}!"
+      subtitle: "§eThank you for visiting {area}!"
 
 # LuckPerms integration
 luckperms:

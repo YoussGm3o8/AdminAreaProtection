@@ -21,7 +21,8 @@ public record AreaDTO(
     String enterMessage,
     String leaveMessage,
     Map<String, Map<String, Boolean>> trackPermissions,
-    Map<String, Map<String, Boolean>> playerPermissions
+    Map<String, Map<String, Boolean>> playerPermissions,
+    JSONObject potionEffects
 ) {
     private static final Bounds GLOBAL_BOUNDS = new Bounds(
         -29000000, 29000000,
@@ -247,6 +248,7 @@ public record AreaDTO(
         leaveMessage = leaveMessage != null ? leaveMessage : "";
         trackPermissions = trackPermissions != null ? trackPermissions : new HashMap<>();
         playerPermissions = playerPermissions != null ? playerPermissions : new HashMap<>();
+        potionEffects = potionEffects != null ? potionEffects : new JSONObject();
     }
 
     // Override accessors to return mutable copies

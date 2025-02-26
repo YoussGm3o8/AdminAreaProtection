@@ -55,7 +55,7 @@ public class ListenerManager {
             vehicleListener = new VehicleListener(plugin, protectionListener);
             listeners.add(vehicleListener);
             
-            playerEffectListener = new PlayerEffectListener(plugin, protectionListener);
+            playerEffectListener = new PlayerEffectListener(plugin);
             listeners.add(playerEffectListener);
             
             enderPearlListener = new EnderPearlListener(plugin, protectionListener);
@@ -104,6 +104,11 @@ public class ListenerManager {
         
         if (protectionListener != null) {
             protectionListener.cleanup();
+        }
+        
+        // Reload player effects
+        if (playerEffectListener != null) {
+            playerEffectListener.reloadEffects();
         }
         
         if (plugin.isDebugMode()) {
@@ -163,5 +168,14 @@ public class ListenerManager {
      */
     public EntityListener getEntityListener() {
         return entityListener;
+    }
+    
+    /**
+     * Gets the player effect listener
+     * 
+     * @return The player effect listener
+     */
+    public PlayerEffectListener getPlayerEffectListener() {
+        return playerEffectListener;
     }
 }

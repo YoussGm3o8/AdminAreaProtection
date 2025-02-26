@@ -39,31 +39,38 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.environmentSettings.title", 
-            Map.of("area", area.getName())));
-        
-        // Add header with clear instructions
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.environmentSettings.header")));
-        
-        // Get area settings
-        AreaDTO dto = area.toDTO();
-        JSONObject settings = dto.settings();
+        try {
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.environmentSettings.title", 
+                Map.of("area", area.getName())));
+            
+            // Add header with clear instructions
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.environmentSettings.header")));
+            
+            // Get area settings
+            AreaDTO dto = area.toDTO();
+            JSONObject settings = dto.settings();
 
-        // Add toggles for this category
-        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENVIRONMENT);
-        if (toggles != null) {
-            for (PermissionToggle toggle : toggles) {
-                String description = plugin.getLanguageManager().get(
-                    "gui.permissions.toggles." + toggle.getPermissionNode());
-                form.addElement(new ElementToggle(
-                    plugin.getLanguageManager().get("gui.permissions.toggle.format", 
-                        Map.of("name", toggle.getDisplayName(), "description", description)),
-                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
-                ));
+            // Add toggles for this category
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENVIRONMENT);
+            if (toggles != null) {
+                for (PermissionToggle toggle : toggles) {
+                    String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
+                    String description = plugin.getLanguageManager().get(
+                        "gui.permissions.toggles." + toggle.getPermissionNode());
+                    form.addElement(new ElementToggle(
+                        plugin.getLanguageManager().get("gui.permissions.toggle.format", 
+                            Map.of("name", toggle.getDisplayName(), "description", description)),
+                        settings.optBoolean(permissionNode, toggle.getDefaultValue())
+                    ));
+                }
             }
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating environment settings form", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError",
+                Map.of("error", e.getMessage())));
+            return null;
         }
-        
-        return form;
     }
 
     @Override
@@ -72,14 +79,9 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
             Area area = getEditingArea(player);
             if (area == null) return;
 
-            // Get current DTO and settings
+            // Get current DTO
             AreaDTO currentDTO = area.toDTO();
-            JSONObject currentSettings = currentDTO.settings();
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Processing environment settings for area " + area.getName());
-                plugin.debug("Current settings: " + currentSettings.toString());
-            }
+            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
 
             // Get category toggles
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENVIRONMENT);
@@ -92,45 +94,73 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
             // Track number of changes
             int changedSettings = 0;
 
-            // Skip header label element (index 0)
+            // Debug log the response data
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing environment settings form response:");
+                plugin.debug("Number of responses: " + response.getResponses().size());
+                for (int i = 0; i < response.getResponses().size(); i++) {
+                    plugin.debug("Response " + i + ": " + response.getResponse(i));
+                }
+            }
+
+            // Skip header label (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
-                    String permissionNode = toggles.get(i).getPermissionNode();
+                    String permissionNode = normalizePermissionNode(toggles.get(i).getPermissionNode());
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Processing toggle: " + toggles.get(i).getDisplayName() + 
+                                    " with permission node: " + permissionNode);
+                    }
+                    
                     // Get current value from settings
-                    boolean currentValue = currentSettings.optBoolean(
+                    boolean currentValue = updatedSettings.optBoolean(
                         permissionNode, 
                         toggles.get(i).getDefaultValue()
                     );
                     
-                    Boolean toggleResponse = response.getToggleResponse(i + 1);
-                    if (toggleResponse == null) {
+                    // Get raw response first
+                    Object rawResponse = response.getResponse(i + 1);
+                    if (rawResponse == null) {
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Null toggle response for " + permissionNode + ", keeping current value: " + currentValue);
+                            plugin.debug("Null raw response for toggle " + permissionNode + " at index " + (i + 1));
+                        }
+                        continue;
+                    }
+
+                    // Convert response to boolean
+                    boolean toggleValue;
+                    if (rawResponse instanceof Boolean) {
+                        toggleValue = (Boolean) rawResponse;
+                    } else {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Invalid response type for toggle " + permissionNode + 
+                                ": " + rawResponse.getClass().getName());
                         }
                         continue;
                     }
                     
                     // Only count as changed if value is different
-                    if (currentValue != toggleResponse) {
+                    if (currentValue != toggleValue) {
                         changedSettings++;
-                        currentSettings.put(permissionNode, toggleResponse);
+                        updatedSettings.put(permissionNode, toggleValue);
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Updated toggle " + permissionNode + " from " + currentValue + " to " + toggleResponse);
+                            plugin.debug("Updated toggle " + permissionNode + " from " + 
+                                currentValue + " to " + toggleValue);
                         }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    if (plugin.isDebugMode()) {
+                        e.printStackTrace();
+                    }
                 }
-            }
-
-            if (plugin.isDebugMode()) {
-                plugin.debug("Final settings after updates: " + currentSettings.toString());
             }
 
             // Create updated area
             Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .settings(currentSettings)
+                .settings(updatedSettings)
                 .build();
 
             // Save changes
@@ -148,6 +178,9 @@ public class EnvironmentSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling environment settings", e);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }

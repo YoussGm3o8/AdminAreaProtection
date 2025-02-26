@@ -180,6 +180,11 @@ public class LanguageManager {
                 placeholders.put("priority", "0");
             }
         }
+        
+        // Make sure player placeholder is handled
+        if (!placeholders.containsKey("player")) {
+            placeholders.put("player", "players");
+        }
     }
 
     private String formatMessage(String message, Map<String, String> placeholders) {
@@ -196,6 +201,12 @@ public class LanguageManager {
             // Handle special cases
             if ("player".equals(placeholder) && !placeholders.containsKey("player")) {
                 replacement = "players";
+            } else if ("player".equals(placeholder) && placeholders.containsKey("player")) {
+                // Make sure player name is properly handled when provided
+                String playerName = placeholders.get("player");
+                if (playerName != null && !playerName.isEmpty()) {
+                    replacement = playerName;
+                }
             }
             
             // Handle position placeholder specifically

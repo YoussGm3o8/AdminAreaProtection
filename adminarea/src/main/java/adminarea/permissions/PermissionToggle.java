@@ -364,6 +364,11 @@ public class PermissionToggle implements AutoCloseable {
     }
 
     public boolean getDefaultValue(String permission) {
+        // For form toggles, return the default value directly if defaultToggles is null
+        if (defaultToggles == null) {
+            return defaultValue;
+        }
+        
         // Normalize permission name
         String normalizedPermission = permission;
         if (!permission.startsWith("gui.permissions.toggles.") && permission.contains(".")) {
@@ -400,8 +405,9 @@ public class PermissionToggle implements AutoCloseable {
     toggles.add(new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING));
     toggles.add(new PermissionToggle("Allow General Interaction", PERM_INTERACT, false, Category.BUILDING));
     toggles.add(new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Item Frame Access", "allowItemFrame", false, Category.BUILDING));
+    toggles.add(new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING));
     toggles.add(new PermissionToggle("Allow Armor Stand Access", "allowArmorStand", false, Category.BUILDING));
+    toggles.add(new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING));
     
     // Redstone & Mechanics
     toggles.add(new PermissionToggle("Allow Redstone", "allowRedstone", true, Category.TECHNICAL));
@@ -464,7 +470,8 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Block Placement", "allowBlockPlace", false, Category.BUILDING),
             new PermissionToggle("Interact", "allowInteract", false, Category.BUILDING),
             new PermissionToggle("Container Access", "allowContainer", false, Category.BUILDING),
-            new PermissionToggle("Item Frames", "allowItemFrame", false, Category.BUILDING),
+            new PermissionToggle("Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
+            new PermissionToggle("Hanging Break", "allowHangingBreak", true, Category.BUILDING),
             new PermissionToggle("Armor Stands", "allowArmorStand", false, Category.BUILDING),
 
             // Entity toggles
@@ -515,12 +522,13 @@ public class PermissionToggle implements AutoCloseable {
 
         // Building toggles
         toggles.put(Category.BUILDING, Arrays.asList(
-            new PermissionToggle("Block Breaking", "allowBlockBreak", false, Category.BUILDING),
-            new PermissionToggle("Block Placement", "allowBlockPlace", false, Category.BUILDING),
-            new PermissionToggle("Interact", "allowInteract", false, Category.BUILDING),
-            new PermissionToggle("Container Access", "allowContainer", false, Category.BUILDING),
-            new PermissionToggle("Item Frames", "allowItemFrame", false, Category.BUILDING),
-            new PermissionToggle("Armor Stands", "allowArmorStand", false, Category.BUILDING)
+            new PermissionToggle("Allow Building", PERM_BUILD, false, Category.BUILDING),
+            new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING),
+            new PermissionToggle("Allow Interaction", PERM_INTERACT, false, Category.BUILDING),
+            new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
+            new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
+            new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING),
+            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING)
         ));
 
         // Environment toggles
@@ -662,8 +670,9 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING),
             new PermissionToggle("Allow Interaction", PERM_INTERACT, false, Category.BUILDING),
             new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
-            new PermissionToggle("Allow Item Frame Usage", "allowItemFrame", false, Category.BUILDING),
-            new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING)
+            new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
+            new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING),
+            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING)
         ));
         
         // Environment toggles

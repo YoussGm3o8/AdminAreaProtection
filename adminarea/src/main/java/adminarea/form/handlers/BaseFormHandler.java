@@ -7,6 +7,7 @@ import adminarea.form.IFormHandler;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponse;
 import cn.nukkit.form.response.FormResponseCustom;
+import cn.nukkit.form.response.FormResponseModal;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 
@@ -55,6 +56,8 @@ public abstract class BaseFormHandler implements IFormHandler {
                 handleCustomResponse(player, (FormResponseCustom) response);
             } else if (response instanceof FormResponseSimple) {
                 handleSimpleResponse(player, (FormResponseSimple) response);
+            } else if (response instanceof FormResponseModal) {
+                handleModalResponse(player, (FormResponseModal) response);
             }
 
             // Check if we're transitioning to a new form
@@ -105,4 +108,26 @@ public abstract class BaseFormHandler implements IFormHandler {
 
     protected abstract void handleCustomResponse(Player player, FormResponseCustom response);
     protected abstract void handleSimpleResponse(Player player, FormResponseSimple response);
+    protected void handleModalResponse(Player player, FormResponseModal response) {
+        // Default implementation does nothing
+    }
+
+    /**
+     * Normalizes a permission node to ensure it has the correct prefix
+     * @param permissionNode The permission node to normalize
+     * @return The normalized permission node
+     */
+    protected String normalizePermissionNode(String permissionNode) {
+        if (permissionNode == null || permissionNode.isEmpty()) {
+            return "gui.permissions.toggles.default";
+        }
+        
+        // If already has the prefix, return as is
+        if (permissionNode.startsWith("gui.permissions.toggles.")) {
+            return permissionNode;
+        }
+        
+        // Add the prefix
+        return "gui.permissions.toggles." + permissionNode;
+    }
 }

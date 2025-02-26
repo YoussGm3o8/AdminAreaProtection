@@ -24,6 +24,7 @@ public class AreaBuilder {
     private Map<String, Boolean> permissions;
     private Map<String, Map<String, Boolean>> trackPermissions;
     private Map<String, Map<String, Boolean>> playerPermissions;
+    private JSONObject potionEffects;
     private boolean isGlobal = false;
 
     public AreaBuilder() {
@@ -36,6 +37,7 @@ public class AreaBuilder {
         this.permissions = new HashMap<>(8, 1.0f);
         this.priority = 0;
         this.showTitle = true;
+        this.potionEffects = new JSONObject();
         initializeDefaultPermissions();
         this.trackPermissions = new HashMap<>(4, 1.0f);
         this.playerPermissions = new HashMap<>(8, 1.0f);
@@ -95,6 +97,34 @@ public class AreaBuilder {
     // Settings and states
     public AreaBuilder settings(JSONObject settings) {
         this.settings = settings;
+        
+        // Sync toggle states with settings for "allow*" permissions
+        if (settings != null) {
+            for (String key : settings.keySet()) {
+                if (key.startsWith("allow") || key.startsWith("gui.permissions.toggles.allow")) {
+                    // Normalize key to have the prefix
+                    String normalizedKey = key;
+                    if (!key.startsWith("gui.permissions.toggles.")) {
+                        normalizedKey = "gui.permissions.toggles." + key;
+                    }
+                    
+                    // Update toggle states to match settings
+                    if (toggleStates == null) {
+                        toggleStates = new JSONObject();
+                    }
+                    
+                    // Handle strength settings (which are integers) differently from toggle settings (which are booleans)
+                    if (key.endsWith("Strength") || normalizedKey.endsWith("Strength")) {
+                        // This is a strength setting, store it as an integer
+                        toggleStates.put(normalizedKey, settings.optInt(key, 0));
+                    } else {
+                        // This is a regular toggle setting, store it as a boolean
+                        toggleStates.put(normalizedKey, settings.optBoolean(key, false));
+                    }
+                }
+            }
+        }
+        
         return this;
     }
 
@@ -170,6 +200,11 @@ public class AreaBuilder {
         return this;
     }
 
+    public AreaBuilder potionEffects(JSONObject effects) {
+        this.potionEffects = effects;
+        return this;
+    }
+
     public Area build() {
         if (name == null || world == null) {
             throw new IllegalStateException("Area name and world must be set");
@@ -205,7 +240,15 @@ public class AreaBuilder {
                     if (!key.startsWith("gui.permissions.toggles.")) {
                         normalizedKey = "gui.permissions.toggles." + key;
                     }
-                    toggleStates.put(normalizedKey, settings.getBoolean(key));
+                    
+                    // Handle strength settings (which are integers) differently from toggle settings (which are booleans)
+                    if (key.endsWith("Strength") || normalizedKey.endsWith("Strength")) {
+                        // This is a strength setting, store it as an integer
+                        toggleStates.put(normalizedKey, settings.optInt(key, 0));
+                    } else {
+                        // This is a regular toggle setting, store it as a boolean
+                        toggleStates.put(normalizedKey, settings.optBoolean(key, false));
+                    }
                 }
             }
         }
@@ -227,7 +270,8 @@ public class AreaBuilder {
             enterMessage != null ? enterMessage : "",
             leaveMessage != null ? leaveMessage : "",
             trackPermissions,
-            playerPermissions
+            playerPermissions,
+            potionEffects
         );
 
         // Create Area instance
@@ -257,7 +301,8 @@ public class AreaBuilder {
               .enterMessage(dto.enterMessage())
               .leaveMessage(dto.leaveMessage())
               .trackPermissions(dto.trackPermissions())
-              .playerPermissions(dto.playerPermissions());
+              .playerPermissions(dto.playerPermissions())
+              .potionEffects(dto.potionEffects());
 
         // Set permissions from the DTO's permission record
         builder.setPermission("allowBlockBreak", dto.permissions().allowBlockBreak());

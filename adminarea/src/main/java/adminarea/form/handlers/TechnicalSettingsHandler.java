@@ -54,12 +54,13 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.TECHNICAL);
             if (toggles != null) {
                 for (PermissionToggle toggle : toggles) {
+                    String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
                     String description = plugin.getLanguageManager().get(
                         "gui.permissions.toggles." + toggle.getPermissionNode());
                     form.addElement(new ElementToggle(
                         plugin.getLanguageManager().get("gui.permissions.toggle.format", 
                             Map.of("name", toggle.getDisplayName(), "description", description)),
-                        settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
+                        settings.optBoolean(permissionNode, toggle.getDefaultValue())
                     ));
                 }
             }
@@ -94,30 +95,67 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
             // Track number of changes
             int changedSettings = 0;
 
+            // Debug log the response data
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing technical settings form response:");
+                plugin.debug("Number of responses: " + response.getResponses().size());
+                for (int i = 0; i < response.getResponses().size(); i++) {
+                    plugin.debug("Response " + i + ": " + response.getResponse(i));
+                }
+            }
+
             // Skip header label (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
+                    String permissionNode = normalizePermissionNode(toggles.get(i).getPermissionNode());
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Processing toggle: " + toggles.get(i).getDisplayName() + 
+                                    " with permission node: " + permissionNode);
+                    }
+                    
                     // Get current value from settings
                     boolean currentValue = updatedSettings.optBoolean(
-                        toggles.get(i).getPermissionNode(), 
+                        permissionNode, 
                         toggles.get(i).getDefaultValue()
                     );
                     
-                    try {
-                        Boolean toggleResponse = response.getToggleResponse(i + 1);
-                        if (toggleResponse != null && currentValue != toggleResponse) {
-                            changedSettings++; // Increment counter when value actually changes
-                            updatedSettings.put(toggles.get(i).getPermissionNode(), toggleResponse);
+                    // Get raw response first
+                    Object rawResponse = response.getResponse(i + 1);
+                    if (rawResponse == null) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Null raw response for toggle " + permissionNode + " at index " + (i + 1));
                         }
-                    } catch (Exception e) {
-                        plugin.getLogger().debug("Error reading toggle " + toggles.get(i).getPermissionNode() + 
-                            ", using current value: " + e.getMessage());
+                        continue;
+                    }
+
+                    // Convert response to boolean
+                    boolean toggleValue;
+                    if (rawResponse instanceof Boolean) {
+                        toggleValue = (Boolean) rawResponse;
+                    } else {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Invalid response type for toggle " + permissionNode + 
+                                ": " + rawResponse.getClass().getName());
+                        }
+                        continue;
+                    }
+                    
+                    // Only count as changed if value is different
+                    if (currentValue != toggleValue) {
+                        changedSettings++;
+                        updatedSettings.put(permissionNode, toggleValue);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Updated toggle " + permissionNode + " from " + 
+                                currentValue + " to " + toggleValue);
+                        }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode(), e);
-                    player.sendMessage(plugin.getLanguageManager().get("messages.form.technical.toggleError",
-                        Map.of("toggle", toggles.get(i).getDisplayName())));
+                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    if (plugin.isDebugMode()) {
+                        e.printStackTrace();
+                    }
                 }
             }
 
@@ -141,8 +179,10 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling technical settings", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.technical.saveError",
-                Map.of("error", e.getMessage())));
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }
     }

@@ -14,7 +14,6 @@ public interface IGuiManager {
     void openPlayerAreaManagement(Player player);
     void openAreaSettings(Player player, Area area);
     void openBasicSettings(Player player, Area area);
-    void openProtectionSettings(Player player, Area area);
     void openBuildingPermissions(Player player, Area area);
     void openEnvironmentSettings(Player player, Area area);
     void openEntityControls(Player player, Area area);

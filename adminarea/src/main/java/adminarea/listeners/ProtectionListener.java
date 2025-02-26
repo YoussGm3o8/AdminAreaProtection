@@ -97,75 +97,137 @@ public class ProtectionListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerInteractBlock(PlayerInteractEvent event) {
-        if (event.getAction() == PlayerInteractEvent.Action.LEFT_CLICK_BLOCK) {
-            Block block = event.getBlock();
-            Player player = event.getPlayer();
-
-            // Check break permission early to prevent animation
-            Position pos = new Position(block.x, block.y, block.z, block.level);
-            if (handleProtection(pos, player, "break")) {
-                event.setCancelled(true);
-                // Send block update to prevent client-side break animation
-                block.level.sendBlocks(new Player[]{player}, new Block[]{block});
-                // Only show message if not on cooldown
-                sendProtectionMessage(player, "messages.protection.blockBreak");
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            if (event.getAction() == PlayerInteractEvent.Action.LEFT_CLICK_BLOCK) {
+                Position pos = event.getBlock().getLocation();
+                Player player = event.getPlayer();
+                
+                if (handleProtection(pos, player, "allowBlockBreak")) {
+                    event.setCancelled(true);
+                    sendProtectionMessage(player, "messages.protection.blockBreak");
+                }
             }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "interact_block_check");
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
-        Block block = event.getBlock();
-        Player player = event.getPlayer();
-
-        Position pos = new Position(block.x, block.y, block.z, block.level);
-        if (handleProtection(pos, player, "break")) {
-            event.setCancelled(true);
-            // Send block update to prevent client-side break animation
-            block.level.sendBlocks(new Player[]{player}, new Block[]{block});
-            sendProtectionMessage(player, "messages.protection.blockBreak");
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Position pos = event.getBlock().getLocation();
+            Player player = event.getPlayer();
+            
+            // Debug both the toggle state and the final decision for this specific event
+            if (plugin.isDebugMode()) {
+                Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                if (area != null) {
+                    boolean toggleState = area.getToggleState("gui.permissions.toggles.allowBlockBreak");
+                    plugin.debug("BlockBreak event: toggle state for allowBlockBreak in " + 
+                               area.getName() + " is " + toggleState);
+                }
+            }
+            
+            // Check protection - true means should block
+            if (handleProtection(pos, player, "allowBlockBreak")) {
+                event.setCancelled(true);
+                sendProtectionMessage(player, "messages.protection.blockBreak");
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "block_break_check");
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
-        Block block = event.getBlock();
-        Player player = event.getPlayer();
-
-        Position pos = new Position(block.x, block.y, block.z, block.level);
-        if (handleProtection(pos, player, "build")) {
-            event.setCancelled(true);
-            // Send block update to prevent client desyncs
-            block.level.sendBlocks(new Player[]{player}, new Block[]{block});
-            sendProtectionMessage(player, "messages.protection.blockPlace");
+        try {
+            Player player = event.getPlayer();
+            
+            // Skip if bypassing
+            if (plugin.isBypassing(player.getName())) {
+                return;
+            }
+            
+            Position pos = event.getBlock().getLocation();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("BlockPlace event: " + player.getName() + " placing " + 
+                           event.getBlock().getName() + " at " + 
+                           pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ());
+                           
+                // Get the area for debugging
+                Area area = plugin.getAreaManager().getHighestPriorityArea(
+                    pos.getLevel().getName(),
+                    pos.getX(),
+                    pos.getY(),
+                    pos.getZ()
+                );
+                
+                if (area != null) {
+                    // Check the direct toggle state
+                    boolean toggleState = area.getToggleState("allowBlockPlace");
+                    plugin.debug("BlockPlace event: toggle state for allowBlockPlace in " + area.getName() + " is " + toggleState);
+                    
+                    // Force clear caches if we're in debug mode and testing this issue
+                    if (plugin.getConfigManager().getBoolean("aggressive_cache_clearing", false)) {
+                        plugin.debug("AGGRESSIVE CACHE CLEARING for block place event");
+                        permissionChecker.invalidateCache(area.getName());
+                        area.clearCaches();
+                    }
+                    
+                    // Use diagnostic method if in debug mode 
+                    boolean shouldBlock = diagnoseBrokenPermission(pos, player, "allowBlockPlace");
+                    event.setCancelled(shouldBlock);
+                    
+                    if (shouldBlock) {
+                        sendProtectionMessage(player, "blockPlace", area);
+                    }
+                    return;
+                }
+            }
+            
+            // Normal protection handling
+            if (handleProtection(pos, player, "allowBlockPlace")) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("BlockPlace cancelled due to protection");
+                }
+                event.setCancelled(true);
+                sendProtectionMessage(player, "messages.protection.blockPlace");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error handling block place", e);
         }
     }
 
     @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
     public void onPlayerInteract(PlayerInteractEvent event) {
-        Block block = event.getBlock();
-        Player player = event.getPlayer();
-
-        // Skip air interactions
-        if (block.getId() == Block.AIR) {
-            return;
-        }
-
-        Position pos = new Position(block.x, block.y, block.z, block.level);
-
-        // Handle container interactions separately
-        if (isContainer(block)) {
-            if (handleProtection(pos, player, "container")) {
-                event.setCancelled(true);
-                sendProtectionMessage(player, "messages.protection.container");
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            if (event.getAction() == PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK) {
+                Block block = event.getBlock();
+                Player player = event.getPlayer();
+                
+                // Check container access first (more specific)
+                if (isContainer(block)) {
+                    Position pos = new Position(block.x, block.y, block.z, block.level);
+                    if (handleProtection(pos, player, "allowContainer")) {
+                        event.setCancelled(true);
+                        sendProtectionMessage(player, "messages.protection.container");
+                        return;
+                    }
+                }
+                
+                // Then check general interaction
+                Position pos = new Position(block.x, block.y, block.z, block.level);
+                if (handleProtection(pos, player, "allowInteract")) {
+                    event.setCancelled(true);
+                    sendProtectionMessage(player, "messages.protection.interact");
+                }
             }
-            return;
-        }
-
-        // Handle other interactions
-        if (handleProtection(pos, player, "interact")) {
-            event.setCancelled(true);
-            sendProtectionMessage(player, "messages.protection.interact");
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "player_interact_check");
         }
     }
 
@@ -180,11 +242,9 @@ public class ProtectionListener implements Listener {
             Block block = event.getBlock();
             Position pos = new Position(block.x, block.y, block.z, block.level);
             
-            // Log the attempt if redstone is protected in this area
-            if (handleProtection(pos, null, "gui.permissions.toggles.allowRedstone") && plugin.isDebugMode()) {
-                plugin.debug("Redstone event detected at " + pos.x + ", " + pos.y + ", " + pos.z +
-                             " (BlockRedstoneEvent not cancellable, old power: " + event.getOldPower() +
-                             ", new power: " + event.getNewPower() + ")");
+            if (handleProtection(pos, null, "allowRedstone") && plugin.isDebugMode()) {
+                plugin.debug("Cancelled redstone event at " + pos.toString());
+                // Note: BlockRedstoneEvent is not cancellable in Nukkit
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "redstone_check");
@@ -202,11 +262,10 @@ public class ProtectionListener implements Listener {
             Block block = event.getBlock();
             Position pos = new Position(block.x, block.y, block.z, block.level);
             
-            if (handleProtection(pos, null, "gui.permissions.toggles.allowRedstone")) {
+            if (handleProtection(pos, null, "allowRedstone")) {
                 event.setCancelled(true);
-                
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Cancelled redstone update at " + pos.x + ", " + pos.y + ", " + pos.z);
+                    plugin.debug("Cancelled redstone update at " + pos.toString());
                 }
             }
         } finally {
@@ -495,9 +554,24 @@ public class ProtectionListener implements Listener {
         try {
             // Get toggle state directly from area
             shouldCancel = !highestPriorityArea.getToggleState(explosionPermission);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Explosion check for " + explosionPermission + 
+                           " in area " + highestPriorityArea.getName() + 
+                           " returned toggle state: " + !shouldCancel +
+                           " (should cancel: " + shouldCancel + ")");
+            }
         } catch (Exception e) {
-            // Fallback to permission checker
-            shouldCancel = !permissionChecker.isAllowed(null, highestPriorityArea, explosionPermission);
+            // Fallback to permission checker if direct toggle access fails
+            boolean allowed = permissionChecker.isAllowed(null, highestPriorityArea, explosionPermission);
+            shouldCancel = !allowed; // Invert: true=allowed → false=cancel, false=denied → true=cancel
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Fallback explosion check for " + explosionPermission + 
+                           " in area " + highestPriorityArea.getName() + 
+                           " using permissionChecker returned: " + allowed +
+                           " (should cancel: " + shouldCancel + ")");
+            }
         }
         
         // Cache the result
@@ -525,19 +599,14 @@ public class ProtectionListener implements Listener {
         if (areas.size() == 1) {
             Area area = areas.get(0);
             // Check permission once for the entire area
-            if (!permissionChecker.isAllowed(null, area, explosionPermission)) {
-                // If protected, all blocks within this area should be removed from explosion
-                List<Block> protectedBlocks = new ArrayList<>();
-                for (Block block : blocks) {
-                    if (area.isInside(worldName, block.x, block.y, block.z)) {
-                        protectedBlocks.add(block);
-                    }
-                }
-                return protectedBlocks;
-            } else {
-                // If not protected, no blocks need to be removed
-                return Collections.emptyList();
+            // FIXED: Correct permission check logic
+            boolean isAllowed = permissionChecker.isAllowed(null, area, explosionPermission);
+            if (!isAllowed) {
+                // If the area doesn't allow explosions, protect all blocks
+                return new ArrayList<>(blocks);
             }
+            // If allowed, no blocks need protection
+            return new ArrayList<>();
         }
         
         // For multiple overlapping areas, check each block
@@ -587,7 +656,9 @@ public class ProtectionListener implements Listener {
                 
                 if (areaProtected == null) {
                     // Determine if this area protects against this explosion type
-                    areaProtected = !permissionChecker.isAllowed(null, area, explosionPermission);
+                    // FIXED: Correct permission check logic
+                    boolean isAllowed = permissionChecker.isAllowed(null, area, explosionPermission);
+                    areaProtected = !isAllowed; // Invert because true means "allowed" but we need true to mean "protected"
                     areaPermissionCache.put(cacheKey, areaProtected);
                 }
                 
@@ -645,10 +716,13 @@ public class ProtectionListener implements Listener {
             Player player = event.getPlayer();
             String playerName = player.getName();
 
-            // Only check every CHECK_INTERVAL ticks
+            // Check more frequently for better accuracy at boundaries 
+            // but still optimize performance
             int currentTick = player.getServer().getTick();
             int lastCheck = lastCheckTimes.getOrDefault(playerName, 0);
-            if (currentTick - lastCheck < CHECK_INTERVAL) {
+            
+            // Use a smaller interval for more precise detection
+            if (currentTick - lastCheck < 2) { // Reduced from 5 to 2
                 return;
             }
             lastCheckTimes.put(playerName, currentTick);
@@ -659,7 +733,12 @@ public class ProtectionListener implements Listener {
             }
 
             Position to = event.getTo();
-
+            Position from = event.getFrom();
+            
+            // Calculate moved distance for edge case detection
+            double movedDistance = from.distance(to);
+            boolean isNearBoundary = movedDistance < 0.5; // Likely near boundary if small move
+            
             // Get highest priority area at new position
             List<Area> areasAtNewPos = plugin.getAreaManager().getAreasAtLocation(
                 to.getLevel().getName(),
@@ -675,6 +754,36 @@ public class ProtectionListener implements Listener {
             }
 
             String previousAreaName = playerAreaCache.get(playerName);
+            
+            // Enhanced boundary detection
+            if (isNearBoundary && 
+                ((previousAreaName != null && !previousAreaName.equals(currentAreaName)) ||
+                 (previousAreaName == null && currentAreaName != null)) && 
+                plugin.isDebugMode()) {
+                
+                plugin.debug("Area boundary transition detected:");
+                plugin.debug("  Player: " + playerName);
+                plugin.debug("  From: " + (previousAreaName != null ? previousAreaName : "outside") + 
+                           " to: " + (currentAreaName != null ? currentAreaName : "outside"));
+                plugin.debug("  Position: " + to.getX() + ", " + to.getY() + ", " + to.getZ());
+                plugin.debug("  Movement Distance: " + movedDistance);
+                
+                // More thorough nearby position checking with smaller offset
+                plugin.debug("  Double-checking nearby positions:");
+                for (double dx = -0.05; dx <= 0.05; dx += 0.05) { // Smaller increments
+                    for (double dz = -0.05; dz <= 0.05; dz += 0.05) { // Smaller increments
+                        Position testPos = new Position(to.getX() + dx, to.getY(), to.getZ() + dz, to.getLevel());
+                        List<Area> testAreas = plugin.getAreaManager().getAreasAtLocation(
+                            testPos.getLevel().getName(),
+                            testPos.getX(),
+                            testPos.getY(),
+                            testPos.getZ()
+                        );
+                        String testAreaName = !testAreas.isEmpty() ? testAreas.get(0).getName() : "outside";
+                        plugin.debug("    Offset (" + dx + ", " + dz + "): " + testAreaName);
+                    }
+                }
+            }
 
             // Handle area transitions
             if (currentAreaName == null && previousAreaName != null) {
@@ -719,16 +828,27 @@ public class ProtectionListener implements Listener {
 
                 // Extract values with null checks
                 if (titleConfig != null) {
+                    // Create placeholder map with player name
+                    Map<String, String> placeholders = new HashMap<>();
+                    placeholders.put("area", areaName);
+                    placeholders.put("player", player.getName());
+                    
                     // Get main title with fallback
                     Object mainTitle = titleConfig.get("main");
                     if (mainTitle != null) {
-                        title = mainTitle.toString().replace("{area}", areaName);
+                        title = plugin.getLanguageManager().get(mainTitle.toString(), placeholders);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Processed enter title: " + title + " with placeholders: " + placeholders);
+                        }
                     }
                     
                     // Get subtitle with fallback
                     Object subTitle = titleConfig.get("subtitle");
                     if (subTitle != null) {
-                        subtitle = subTitle.toString().replace("{area}", areaName);
+                        subtitle = plugin.getLanguageManager().get(subTitle.toString(), placeholders);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Processed enter subtitle: " + subtitle + " with placeholders: " + placeholders);
+                        }
                     }
                     
                     // Get timing values with fallbacks
@@ -784,16 +904,27 @@ public class ProtectionListener implements Listener {
 
                 // Extract values with null checks
                 if (titleConfig != null) {
+                    // Create placeholder map with player name
+                    Map<String, String> placeholders = new HashMap<>();
+                    placeholders.put("area", areaName);
+                    placeholders.put("player", player.getName());
+                    
                     // Get main title with fallback
                     Object mainTitle = titleConfig.get("main");
                     if (mainTitle != null) {
-                        title = mainTitle.toString().replace("{area}", areaName);
+                        title = plugin.getLanguageManager().get(mainTitle.toString(), placeholders);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Processed leave title: " + title + " with placeholders: " + placeholders);
+                        }
                     }
                     
                     // Get subtitle with fallback
                     Object subTitle = titleConfig.get("subtitle");
                     if (subTitle != null) {
-                        subtitle = subTitle.toString().replace("{area}", areaName);
+                        subtitle = plugin.getLanguageManager().get(subTitle.toString(), placeholders);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Processed leave subtitle: " + subtitle + " with placeholders: " + placeholders);
+                        }
                     }
                     
                     // Get timing values with fallbacks
@@ -967,7 +1098,10 @@ public class ProtectionListener implements Listener {
                 return;
             }
             
-            if (handleProtection(block, null, "gui.permissions.toggles.allowBlockGravity")) {
+            Position pos = new Position(block.x, block.y, block.z, block.level);
+            
+            // Use diagnostic method
+            if (diagnoseBrokenPermission(pos, null, "allowBlockGravity")) {
                 event.setCancelled(true);
                 
                 if (plugin.isDebugMode()) {
@@ -1520,31 +1654,22 @@ public class ProtectionListener implements Listener {
             }
 
             // Normalize permission once to avoid repeated string operations
-            if (!permission.contains(".")) {
-                // Simple permission names like "break", "build", etc. are special cases
-                if (permission.equals("break")) {
-                    permission = "gui.permissions.toggles.allowBlockBreak";
-                } else if (permission.equals("build")) {
-                    permission = "gui.permissions.toggles.allowBlockPlace";
-                } else if (permission.equals("container")) {
-                    permission = "gui.permissions.toggles.allowContainer";
-                } else if (permission.equals("interact")) {
-                    permission = "gui.permissions.toggles.allowInteract";
-                } else if (permission.equals("itemDrop")) {
-                    permission = "gui.permissions.toggles.allowItemDrop";
-                } else if (permission.equals("itemPickup")) {
-                    permission = "gui.permissions.toggles.allowItemPickup";
-                } else {
-                    // For other simple permissions, add the prefix
-                    permission = "gui.permissions.toggles." + permission;
-                }
-            } else if (!permission.startsWith("gui.permissions.toggles.") && 
-                       !permission.startsWith("adminarea.") && 
-                       !permission.startsWith("group.")) {
-                // Add prefix if it's missing and not a special permission type
-                permission = "gui.permissions.toggles." + permission;
+            String normalizedPermission = normalizePermission(permission);
+            
+            // Build cache key - include player name for player-specific permissions
+            String cacheKey = pos.getLevel().getName() + ":" + 
+                          pos.getFloorX() + ":" + 
+                          pos.getFloorY() + ":" + 
+                          pos.getFloorZ() + ":" + 
+                          normalizedPermission + 
+                          (player != null ? ":" + player.getName() : "");
+            
+            // Check cache first with short timeout
+            Boolean cachedResult = protectionCache.getIfPresent(cacheKey);
+            if (cachedResult != null) {
+                return cachedResult;
             }
-
+            
             // Get all applicable areas for this position
             List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
                 pos.getLevel().getName(),
@@ -1555,22 +1680,88 @@ public class ProtectionListener implements Listener {
 
             // If no areas and global protection is disabled, allow action
             if (areas.isEmpty() && !plugin.isGlobalAreaProtection()) {
+                protectionCache.put(cacheKey, false);
                 return false;
             }
 
             // If no areas but global protection is enabled, check for global bypass
             if (areas.isEmpty()) {
-                return !hasGlobalBypass(player);
+                boolean result = !hasGlobalBypass(player);
+                protectionCache.put(cacheKey, result);
+                return result;
             }
 
             // Get the highest priority area
             Area highestPriorityArea = areas.get(0);
             
+            // DEBUG: Add detailed logging to diagnose toggle state issues
+            if (plugin.isDebugMode()) {
+                boolean toggleState = highestPriorityArea.getToggleState(normalizedPermission);
+                plugin.debug("Protection check for " + normalizedPermission + 
+                             " in area " + highestPriorityArea.getName() + 
+                             " returned toggle state: " + toggleState);
+            }
+            
             // Check if the action is allowed in this area
-            return !permissionChecker.isAllowed(player, highestPriorityArea, permission);
+            // isAllowed() returns TRUE if the action is allowed, FALSE if it should be blocked
+            boolean allowed = permissionChecker.isAllowed(player, highestPriorityArea, normalizedPermission);
+            
+            // For event cancellation, we need to return TRUE if the action should be BLOCKED
+            boolean shouldBlock = !allowed;
+            
+            // Add more debug information to understand the result
+            if (plugin.isDebugMode()) {
+                plugin.debug("Protection decision: " + (shouldBlock ? "BLOCK" : "ALLOW") + 
+                             " for " + normalizedPermission + 
+                             " in area " + highestPriorityArea.getName() +
+                             (player != null ? " for player " + player.getName() : ""));
+            }
+            
+            // Cache the result with short expiry time to ensure updates are reflected quickly
+            protectionCache.put(cacheKey, shouldBlock);
+            
+            return shouldBlock;
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "protection_check");
         }
+    }
+    
+    /**
+     * Normalizes permission names to ensure consistent format with prefix
+     * 
+     * @param permission Permission to normalize
+     * @return Normalized permission with proper prefix
+     */
+    private String normalizePermission(String permission) {
+        if (permission == null || permission.isEmpty()) {
+            return "gui.permissions.toggles.default";
+        }
+        
+        // Handle special case shortcuts
+        if (!permission.contains(".")) {
+            return switch (permission) {
+                case "break" -> "gui.permissions.toggles.allowBlockBreak";
+                case "build" -> "gui.permissions.toggles.allowBlockPlace";
+                case "container" -> "gui.permissions.toggles.allowContainer";
+                case "interact" -> "gui.permissions.toggles.allowInteract";
+                case "itemDrop" -> "gui.permissions.toggles.allowItemDrop";
+                case "itemPickup" -> "gui.permissions.toggles.allowItemPickup";
+                default -> "gui.permissions.toggles." + permission;
+            };
+        }
+        
+        // Most efficient check - if already has prefix, return as is
+        if (permission.startsWith("gui.permissions.toggles.")) {
+            return permission;
+        }
+        
+        // Skip special permission types that shouldn't be prefixed
+        if (permission.contains("adminarea.") || permission.contains("group.")) {
+            return permission;
+        }
+        
+        // Add prefix for other permission names
+        return "gui.permissions.toggles." + permission;
     }
 
     private String buildCacheKey(Position pos, Player player, String permission) {
@@ -1769,38 +1960,51 @@ public class ProtectionListener implements Listener {
     /**
      * Checks if an event should be cancelled based on area protection rules.
      * Only checks within CHUNK_CHECK_RADIUS chunks of any player.
+     * 
+     * @param pos The position to check
+     * @param player The player involved (can be null for environment actions)
+     * @param permission The permission to check
+     * @return true if the event should be cancelled (blocked), false if allowed
      */
     protected boolean shouldCancel(Position pos, Player player, String permission) {
-        for (Area area : plugin.getAreaManager().getNearbyAreas(pos)) {
+        // If position is null or in a different world, don't cancel
+        if (pos == null || pos.getLevel() == null) return false;
 
-            if (!area.getToggleState(permission)) {
-                return true;
-            }
-            // If position is null or in a different world, don't cancel
-            if (pos == null || pos.getLevel() == null) return false;
+        // If player has bypass permission, don't cancel
+        if (player != null && plugin.isBypassing(player.getName())) return false;
 
-            // If player has bypass permission, don't cancel
-            if (player != null && plugin.isBypassing(player.getName())) return false;
+        // Check if position is within range of any player
+        if (!isNearAnyPlayer(pos)) return false;
 
-            // Check if position is within range of any player
-            if (!isNearAnyPlayer(pos)) return false;
+        // Get applicable areas and check permissions
+        List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
+            pos.getLevel().getName(),
+            pos.getX(),
+            pos.getY(),
+            pos.getZ()
+        );
 
-            // Get applicable areas and check permissions
-            List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
-                pos.getLevel().getName(),
-                pos.getX(),
-                pos.getY(),
-                pos.getZ()
-            );
+        // No areas at location, don't cancel
+        if (areas.isEmpty()) return false;
 
-            // No areas at location, don't cancel
-            if (areas.isEmpty()) return false;
-
-            // Check permissions in highest priority area first
-            Area highestPriorityArea = areas.get(0);
-            return !highestPriorityArea.getToggleState(permission);
+        // Check permissions in highest priority area first
+        Area highestPriorityArea = areas.get(0);
+        
+        // Debug log the toggle state decision
+        if (plugin.isDebugMode()) {
+            boolean toggleState = highestPriorityArea.getToggleState(permission);
+            plugin.debug("shouldCancel check for " + permission + 
+                        " in area " + highestPriorityArea.getName() + 
+                        " returned toggle state: " + toggleState + 
+                        " (should cancel: " + !toggleState + ")");
         }
-        return false;
+        
+        // IMPORTANT: In our toggle system:
+        // - A toggle state of TRUE means the action is ALLOWED (don't cancel)
+        // - A toggle state of FALSE means the action is DENIED (should cancel)
+        // So we need to INVERT the toggle state to determine if we should cancel
+        boolean toggleState = highestPriorityArea.getToggleState(permission);
+        return !toggleState; // Invert: if toggle is true (allowed), return false (don't cancel)
     }
 
     /**
@@ -1861,6 +2065,38 @@ public class ProtectionListener implements Listener {
 
     private boolean isVehicle(Entity entity) {
         return entity instanceof EntityVehicle;
+    }
+
+    /**
+     * Handles item frame rotation events
+     * Prevents players from rotating items in frames if not allowed
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onItemFrameRotate(PlayerInteractEntityEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Entity entity = event.getEntity();
+            Player player = event.getPlayer();
+            
+            // Check if this is an item frame by entity name or class name
+            if (entity != null && (
+                    entity.getClass().getSimpleName().contains("ItemFrame") || 
+                    (entity.getName() != null && entity.getName().toLowerCase().contains("item frame"))
+                )) {
+                // Check if the player is allowed to rotate items in frames
+                if (handleProtection(entity, player, "allowItemRotation")) {
+                    event.setCancelled(true);
+                    sendProtectionMessage(player, "messages.protection.itemRotation");
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented item frame rotation by " + player.getName() + 
+                            " at " + entity.getX() + ", " + entity.getY() + ", " + entity.getZ());
+                    }
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "item_frame_rotation_check");
+        }
     }
 
     /**
@@ -1931,5 +2167,162 @@ public class ProtectionListener implements Listener {
             }
             return null;
         }
+    }
+
+    /**
+     * Special diagnostic method to trace the flow of a permission check
+     * Used only when debugging specific problematic permissions
+     */
+    boolean diagnoseBrokenPermission(Position pos, Player player, String permission) {
+        if (!plugin.isDebugMode()) {
+            return handleProtection(pos, player, permission);
+        }
+        
+        // Clear all caches to get a fresh result
+        plugin.debug("Clearing permission caches for fresh diagnostic...");
+        permissionCache.invalidateAll();
+        protectionCache.invalidateAll();
+        
+        // Also clear permission checker cache to force a complete recalculation
+        if (permissionChecker != null) {
+            permissionChecker.invalidateCache();
+            plugin.debug("Invalidated permission checker cache");
+        }
+        
+        plugin.debug("DIAGNOSTIC MODE: Tracing protection check for " + permission);
+        
+        // Normalize permission for consistent checking
+        String normalizedPermission = normalizePermission(permission);
+        plugin.debug("  Normalized permission: " + normalizedPermission);
+        
+        // Get the area
+        List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
+            pos.getLevel().getName(),
+            pos.getX(),
+            pos.getY(),
+            pos.getZ()
+        );
+        
+        plugin.debug("  Areas at location: " + (areas.isEmpty() ? "NONE" : areas.size()));
+        
+        if (areas.isEmpty()) {
+            plugin.debug("  No areas found, allowing by default");
+            return false; // No permission check needed as no areas exist
+        }
+        
+        Area area = areas.get(0);
+        plugin.debug("  Highest priority area: " + area.getName() + " (priority: " + area.getPriority() + ")");
+        
+        // Check the area toggle state directly
+        boolean toggleState = area.getToggleState(normalizedPermission);
+        plugin.debug("  Area toggle state for " + normalizedPermission + ": " + toggleState + " (true=allowed, false=denied)");
+
+        // Check for player-specific permissions
+        if (player != null) {
+            Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
+            if (playerPermissions != null && playerPermissions.containsKey(player.getName())) {
+                Map<String, Boolean> perms = playerPermissions.get(player.getName());
+                if (perms != null && perms.containsKey(normalizedPermission)) {
+                    boolean value = perms.get(normalizedPermission);
+                    plugin.debug("  Player has specific permission: " + value);
+                    plugin.debug("  This overrides the area toggle state.");
+                } else {
+                    plugin.debug("  Player doesn't have specific permission for " + normalizedPermission);
+                }
+            } else {
+                plugin.debug("  No player-specific permissions found for " + player.getName());
+            }
+            
+            // Check group permissions
+            plugin.debug("  Checking group permissions for player: " + player.getName());
+            Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+            boolean foundGroupPerm = false;
+            
+            for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                String groupName = entry.getKey();
+                if (player.hasPermission("group." + groupName)) {
+                    plugin.debug("  Player is in group: " + groupName);
+                    Map<String, Boolean> groupPerms = entry.getValue();
+                    if (groupPerms.containsKey(normalizedPermission)) {
+                        boolean groupAllowed = groupPerms.get(normalizedPermission);
+                        plugin.debug("  Group permission found: " + groupAllowed);
+                        plugin.debug("  This would override the area toggle state.");
+                        foundGroupPerm = true;
+                    }
+                }
+            }
+            
+            if (!foundGroupPerm) {
+                plugin.debug("  No relevant group permissions found for this permission");
+            }
+        }
+        
+        // Perform the actual permission check
+        boolean allowed = !permissionChecker.isAllowed(player, area, permission);
+        plugin.debug("  Permission checker result: " + (allowed ? "false" : "true") + " (true=allowed, false=denied)");
+        
+        if (toggleState != allowed && player != null) {
+            plugin.debug("  Note: Area toggle state is " + toggleState + ", but final result is " + allowed + ".");
+            
+            // Check if we have player or group specific permissions that might explain this
+            boolean hasSpecificPermissions = false;
+            
+            // Check player permissions
+            Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
+            if (playerPermissions != null && playerPermissions.containsKey(player.getName())) {
+                Map<String, Boolean> perms = playerPermissions.get(player.getName());
+                if (perms != null && perms.containsKey(normalizedPermission)) {
+                    hasSpecificPermissions = true;
+                }
+            }
+            
+            // Check group permissions if no player permissions found
+            if (!hasSpecificPermissions) {
+                Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+                for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                    String groupName = entry.getKey();
+                    if (player.hasPermission("group." + groupName)) {
+                        Map<String, Boolean> groupPerms = entry.getValue();
+                        if (groupPerms.containsKey(normalizedPermission)) {
+                            hasSpecificPermissions = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (!hasSpecificPermissions) {
+                plugin.debug("  This is UNEXPECTED as no specific permissions were found. Permission system may be buggy.");
+                
+                // Force invalidate all caches for this area
+                if (permissionChecker != null) {
+                    permissionChecker.invalidateCache(area.getName());
+                    plugin.debug("  EMERGENCY CACHE INVALIDATION for area " + area.getName());
+                }
+                
+                // Force invalidate toggle state cache
+                area.clearCaches();
+                plugin.debug("  EMERGENCY AREA CACHE INVALIDATION for area " + area.getName());
+                
+                // Try once more with all fresh values
+                boolean retryCheck = !permissionChecker.isAllowed(player, area, permission);
+                plugin.debug("  RETRY PERMISSION CHECK result: " + (retryCheck ? "false" : "true") + 
+                           " (true=allowed, false=denied)");
+                
+                // Compare with direct toggle state
+                boolean directToggleState = area.getToggleState(normalizedPermission);
+                plugin.debug("  DIRECT toggle state check: " + directToggleState);
+                
+                // Update the result if we got a different answer
+                if (allowed != retryCheck) {
+                    plugin.debug("  UPDATING RESULT based on fresh check: " + (retryCheck ? "BLOCK" : "ALLOW"));
+                    allowed = retryCheck;
+                }
+            }
+        }
+        
+        plugin.debug("  FINAL PROTECTION DECISION: " + (allowed ? "BLOCK" : "ALLOW"));
+        
+        return allowed;
     }
 }

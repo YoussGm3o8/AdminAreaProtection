@@ -44,6 +44,19 @@ public class PermissionChecker {
             return GUI_PERMISSIONS_PREFIX + "default";
         }
         
+        // Handle special case shortcuts
+        if (!permission.contains(".")) {
+            return switch (permission) {
+                case "break" -> GUI_PERMISSIONS_PREFIX + "allowBlockBreak";
+                case "build" -> GUI_PERMISSIONS_PREFIX + "allowBlockPlace";
+                case "container" -> GUI_PERMISSIONS_PREFIX + "allowContainer";
+                case "interact" -> GUI_PERMISSIONS_PREFIX + "allowInteract";
+                case "itemDrop" -> GUI_PERMISSIONS_PREFIX + "allowItemDrop";
+                case "itemPickup" -> GUI_PERMISSIONS_PREFIX + "allowItemPickup";
+                default -> GUI_PERMISSIONS_PREFIX + permission;
+            };
+        }
+        
         // Most efficient check first - if already has prefix, return as is
         if (permission.startsWith(GUI_PERMISSIONS_PREFIX)) {
             return permission;
@@ -71,16 +84,25 @@ public class PermissionChecker {
         try {
             // Quick bypass check first
             if (player != null && plugin.isBypassing(player.getName())) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Player " + player.getName() + " is bypassing protection");
+                }
                 return true;
             }
 
             // If area is null, allow the action by default
             if (area == null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Area is null, allowing by default");
+                }
                 return true;
             }
 
             // Normalize permission name once
             String normalizedPermission = normalizePermission(permission);
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Normalized permission: " + normalizedPermission);
+            }
             
             // Build cache key (minimal string operations)
             String cacheKey = area.getName() + ":" + normalizedPermission + (player != null ? ":" + player.getName() : "");
@@ -88,13 +110,23 @@ public class PermissionChecker {
             // Check cache first
             Boolean cached = permissionCache.getIfPresent(cacheKey);
             if (cached != null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Cache hit for key " + cacheKey + ", returning cached value: " + cached);
+                }
                 return cached;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Cache miss for " + cacheKey + ", computing fresh value");
             }
             
             // Rate limit permission checks for the same key
             long now = System.currentTimeMillis();
             Long lastCheck = lastPermissionCheck.get(cacheKey);
             if (lastCheck != null && now - lastCheck < CHECK_INTERVAL) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Rate limiting triggered, returning default true");
+                }
                 // Return default if no cached result (shouldn't happen often)
                 return true;
             }
@@ -102,49 +134,115 @@ public class PermissionChecker {
 
             // Player bypass checks
             if (player != null) {
-                // Check area bypass
-                if (player.hasPermission(BYPASS_PREFIX + area.getName())) {
-                    permissionCache.put(cacheKey, true);
-                    return true;
-                }
-                
-                // Check action bypass
-                String permWithoutPrefix = normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX) ?
-                    normalizedPermission.substring(GUI_PERMISSIONS_PREFIX.length()) : normalizedPermission;
-                if (player.hasPermission(BYPASS_PREFIX + permWithoutPrefix)) {
-                    permissionCache.put(cacheKey, true);
-                    return true;
+                // Only check for area and action bypass permissions if the player is actually in bypass mode
+                if (plugin.isBypassing(player.getName())) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("[PermissionChecker] Player " + player.getName() + " is in bypass mode, checking specific bypass permissions");
+                    }
+                    
+                    // Check area bypass
+                    if (player.hasPermission(BYPASS_PREFIX + area.getName())) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("[PermissionChecker] Player has area bypass permission: " + BYPASS_PREFIX + area.getName());
+                        }
+                        permissionCache.put(cacheKey, true);
+                        return true;
+                    }
+                    
+                    // Check action bypass
+                    String permWithoutPrefix = normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX) ?
+                        normalizedPermission.substring(GUI_PERMISSIONS_PREFIX.length()) : normalizedPermission;
+                    if (player.hasPermission(BYPASS_PREFIX + permWithoutPrefix)) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("[PermissionChecker] Player has action bypass permission: " + BYPASS_PREFIX + permWithoutPrefix);
+                        }
+                        permissionCache.put(cacheKey, true);
+                        return true;
+                    }
+                } else if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Player " + player.getName() + " is NOT in bypass mode, specific bypass permissions will not be checked");
                 }
             }
 
-            // Get the toggle state
-            boolean allowed = area.getToggleState(normalizedPermission);
+            // Get the toggle state directly from the area
+            boolean toggleState = area.getToggleState(normalizedPermission);
             
-            // Check player and group permissions if allowed by toggle
-            if (allowed && player != null) {
-                // Check player-specific permissions first (most specific)
+            // Debug log the toggle state
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Toggle state for " + normalizedPermission + 
+                           " in area " + area.getName() + ": " + toggleState +
+                           " (true=allowed, false=denied)");
+            }
+            
+            // Check specific overrides before using toggle state
+            if (player != null) {
+                // Check player-specific permissions first (highest priority)
                 Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
                 Map<String, Boolean> playerPerms = playerPermissions.get(player.getName());
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Player permissions map: " + 
+                               (playerPerms != null ? playerPerms.toString() : "null"));
+                }
+                
                 if (playerPerms != null && playerPerms.containsKey(normalizedPermission)) {
-                    allowed = playerPerms.get(normalizedPermission);
-                } else {
-                    // Check group permissions (can override)
-                    Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
-                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
-                        if (player.hasPermission("group." + entry.getKey())) {
-                            Map<String, Boolean> groupPerms = entry.getValue();
-                            if (groupPerms.containsKey(normalizedPermission)) {
-                                // Group permissions override player permissions if more restrictive
-                                allowed = allowed && groupPerms.get(normalizedPermission);
+                    boolean playerAllowed = playerPerms.get(normalizedPermission);
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("[PermissionChecker] Found player-specific permission: " + playerAllowed);
+                        plugin.debug("[PermissionChecker] DECISION: " + playerAllowed + " - storing in cache and returning");
+                    }
+                    permissionCache.put(cacheKey, playerAllowed);
+                    return playerAllowed;
+                }
+                
+                // Check group permissions (next priority)
+                Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Checking group permissions. Groups: " + 
+                               (groupPermissions != null ? groupPermissions.keySet() : "null"));
+                }
+                
+                for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                    String groupName = entry.getKey();
+                    if (player.hasPermission("group." + groupName)) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("[PermissionChecker] Player is in group: " + groupName);
+                        }
+                        
+                        Map<String, Boolean> groupPerms = entry.getValue();
+                        if (groupPerms.containsKey(normalizedPermission)) {
+                            boolean groupAllowed = groupPerms.get(normalizedPermission);
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("[PermissionChecker] Found group permission for " + normalizedPermission + 
+                                           " in group " + groupName + ": " + groupAllowed);
+                                plugin.debug("[PermissionChecker] DECISION: " + groupAllowed + " - storing in cache and returning");
                             }
+                            permissionCache.put(cacheKey, groupAllowed);
+                            return groupAllowed;
                         }
                     }
                 }
+                
+                // No specific permissions found, use the toggle state
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] No specific player or group permissions found");
+                    plugin.debug("[PermissionChecker] USING TOGGLE STATE as final decision: " + toggleState);
+                    plugin.debug("[PermissionChecker] DECISION: " + toggleState + " - storing in cache and returning");
+                }
+                
+                // Cache and return the toggle state 
+                permissionCache.put(cacheKey, toggleState);
+                return toggleState;
             }
 
-            // Cache the result
-            permissionCache.put(cacheKey, allowed);
-            return allowed;
+            // For environment actions (no player), use the toggle state as the final answer
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Environment action (no player), using toggle state: " + toggleState);
+                plugin.debug("[PermissionChecker] DECISION: " + toggleState + " - storing in cache and returning");
+            }
+            permissionCache.put(cacheKey, toggleState);
+            return toggleState;
             
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "permission_check");

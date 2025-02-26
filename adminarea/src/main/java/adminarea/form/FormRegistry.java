@@ -19,6 +19,7 @@ public class FormRegistry {
         plugin.debug("Initializing FormRegistry...");
         registerDefaultHandlers();
         registerHandler(new ItemsDropsHandler(plugin));
+        registerHandler(new PotionEffectsHandler(plugin));
     }
 
     private void registerDefaultHandlers() {

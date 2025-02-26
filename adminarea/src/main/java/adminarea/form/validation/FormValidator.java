@@ -38,7 +38,6 @@ public class FormValidator {
             case FormIds.CREATE_AREA -> validateCreateAreaForm(response);
             case FormIds.EDIT_AREA -> validateEditAreaForm(response);
             case FormIds.BASIC_SETTINGS -> validateBasicSettingsForm(response);
-            case FormIds.PROTECTION_SETTINGS -> validateProtectionSettingsForm(response);
             case FormIds.BUILDING_SETTINGS, 
                  FormIds.ENVIRONMENT_SETTINGS,
                  FormIds.ENTITY_SETTINGS,
@@ -94,19 +93,6 @@ public class FormValidator {
         };
     }
 
-    private static ValidationResult validateProtectionSettingsForm(FormResponseCustom response) {
-        try {
-            // Verify all toggle responses are boolean
-            for (Object resp : response.getResponses().values()) {
-                if (resp != null && !(resp instanceof Boolean)) {
-                    return ValidationResult.error("Invalid toggle response type");
-                }
-            }
-            return ValidationResult.success();
-        } catch (Exception e) {
-            return ValidationResult.error("Invalid protection settings form data");
-        }
-    }
 
     public static ValidationResult validateCreateAreaForm(FormResponseCustom response) {
         try {

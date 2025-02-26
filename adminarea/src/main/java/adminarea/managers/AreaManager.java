@@ -375,14 +375,11 @@ public class AreaManager implements IAreaManager {
         // Validate inputs to prevent crashes
         if (world == null) return Collections.emptyList();
         
-        // Round coordinates to integers for better cache utilization
-        // This is a practical optimization for most use cases
-        int blockX = (int)Math.floor(x);
-        int blockY = (int)Math.floor(y);
-        int blockZ = (int)Math.floor(z);
-        
-        // Build cache key with integer coordinates
-        String cacheKey = world + ":" + blockX + ":" + blockY + ":" + blockZ;
+        // Use exact coordinates for cache key to maintain precision at boundaries
+        // Use a consistent string format to ensure caching works correctly
+        String cacheKey = world + ":" + String.format("%.3f", x) + ":" + 
+                          String.format("%.3f", y) + ":" + 
+                          String.format("%.3f", z);
         
         // Use cached result if available, otherwise calculate
         return locationCache.get(cacheKey, k -> calculateAreasAtLocation(world, x, y, z));

@@ -87,9 +87,21 @@ public class DatabaseManager {
                             default_toggle_states TEXT DEFAULT '{}',
                             inherited_toggle_states TEXT DEFAULT '{}',
                             track_permissions TEXT DEFAULT '{}',
-                            player_permissions TEXT DEFAULT '{}'
+                            player_permissions TEXT DEFAULT '{}',
+                            potion_effects TEXT DEFAULT '{}'
                         )
                     """);
+
+                    // Check if potion_effects column exists, and add it if it doesn't
+                    try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", "potion_effects")) {
+                        if (!rs.next()) {
+                            // Column doesn't exist, add it
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Adding potion_effects column to areas table");
+                            }
+                            stmt.executeUpdate("ALTER TABLE areas ADD COLUMN potion_effects TEXT DEFAULT '{}'");
+                        }
+                    }
 
                     // Check if settings column exists and migrate data
                     try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", "settings")) {
@@ -150,8 +162,8 @@ public class DatabaseManager {
              PreparedStatement stmt = conn.prepareStatement(
                 "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
                 "priority, show_title, group_permissions, inherited_permissions, enter_message, leave_message, " +
-                "toggle_states, default_toggle_states, inherited_toggle_states, track_permissions, player_permissions) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "toggle_states, default_toggle_states, inherited_toggle_states, track_permissions, player_permissions, potion_effects) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
              )) {
 
             AreaDTO dto = area.toDTO();
@@ -180,6 +192,9 @@ public class DatabaseManager {
             stmt.setString(17, dto.inheritedToggleStates().toString());
             stmt.setString(18, new JSONObject(dto.trackPermissions()).toString());
             stmt.setString(19, new JSONObject(dto.playerPermissions()).toString());
+            
+            // Save potion effects JSON
+            stmt.setString(20, dto.potionEffects().toString());
 
             stmt.executeUpdate();
 
@@ -288,6 +303,15 @@ public class DatabaseManager {
         JSONObject defaultToggleStates = new JSONObject(rs.getString("default_toggle_states"));
         JSONObject inheritedToggleStates = new JSONObject(rs.getString("inherited_toggle_states"));
         
+        // Get potion effects JSON
+        String potionEffectsJson = rs.getString("potion_effects");
+        JSONObject potionEffects = potionEffectsJson != null && !potionEffectsJson.isEmpty() ? 
+            new JSONObject(potionEffectsJson) : new JSONObject();
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("  Loaded potion effects from DB: " + potionEffects.toString());
+        }
+        
         // Get raw player permissions JSON
         String playerPermsJson = rs.getString("player_permissions");
         if (plugin.isDebugMode()) {
@@ -339,7 +363,8 @@ public class DatabaseManager {
             rs.getString("enter_message"),
             rs.getString("leave_message"),
             trackPerms,
-            playerPerms
+            playerPerms,
+            potionEffects
         );
 
         if (plugin.isDebugMode()) {
@@ -417,6 +442,38 @@ public class DatabaseManager {
     public void close() {
         if (dataSource != null) {
             dataSource.close();
+        }
+    }
+
+    /**
+     * Loads a single area by name from the database.
+     * 
+     * @param areaName The name of the area to load
+     * @return The loaded area, or null if not found
+     * @throws DatabaseException If there's an error accessing the database
+     */
+    public Area loadArea(String areaName) throws DatabaseException {
+        if (areaName == null || areaName.isEmpty()) {
+            throw new IllegalArgumentException("Area name cannot be null or empty");
+        }
+        
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement("SELECT * FROM areas WHERE name = ?")) {
+            
+            stmt.setString(1, areaName);
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    Area area = buildAreaFromResultSet(rs);
+                    areaCache.put(area.getName(), area);
+                    return area;
+                }
+            }
+            
+            return null; // Area not found
+            
+        } catch (SQLException e) {
+            throw new DatabaseException("Failed to load area: " + areaName, e);
         }
     }
 }

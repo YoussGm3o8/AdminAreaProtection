@@ -54,12 +54,13 @@ public class SpecialSettingsHandler extends BaseFormHandler {
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
             if (toggles != null) {
                 for (PermissionToggle toggle : toggles) {
+                    String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
                     String description = plugin.getLanguageManager().get(
                         "gui.permissions.toggles." + toggle.getPermissionNode());
                     form.addElement(new ElementToggle(
                         plugin.getLanguageManager().get("gui.permissions.toggle.format", 
                             Map.of("name", toggle.getDisplayName(), "description", description)),
-                        settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue(toggle.getPermissionNode()))
+                        settings.optBoolean(permissionNode, toggle.getDefaultValue())
                     ));
                 }
             }
@@ -106,17 +107,24 @@ public class SpecialSettingsHandler extends BaseFormHandler {
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
+                    String permissionNode = normalizePermissionNode(toggles.get(i).getPermissionNode());
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Processing toggle: " + toggles.get(i).getDisplayName() + 
+                                    " with permission node: " + permissionNode);
+                    }
+                    
                     // Get current value from settings
                     boolean currentValue = updatedSettings.optBoolean(
-                        toggles.get(i).getPermissionNode(), 
-                        toggles.get(i).getDefaultValue(toggles.get(i).getPermissionNode())
+                        permissionNode, 
+                        toggles.get(i).getDefaultValue()
                     );
                     
                     // Get raw response first
                     Object rawResponse = response.getResponse(i + 1);
                     if (rawResponse == null) {
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Null raw response for toggle " + toggles.get(i).getPermissionNode() + " at index " + (i + 1));
+                            plugin.debug("Null raw response for toggle " + permissionNode + " at index " + (i + 1));
                         }
                         continue;
                     }
@@ -127,7 +135,7 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                         toggleValue = (Boolean) rawResponse;
                     } else {
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Invalid response type for toggle " + toggles.get(i).getPermissionNode() + 
+                            plugin.debug("Invalid response type for toggle " + permissionNode + 
                                 ": " + rawResponse.getClass().getName());
                         }
                         continue;
@@ -136,14 +144,17 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                     // Only count as changed if value is different
                     if (currentValue != toggleValue) {
                         changedSettings++;
-                        updatedSettings.put(toggles.get(i).getPermissionNode(), toggleValue);
+                        updatedSettings.put(permissionNode, toggleValue);
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Updated toggle " + toggles.get(i).getPermissionNode() + " from " + 
+                            plugin.debug("Updated toggle " + permissionNode + " from " + 
                                 currentValue + " to " + toggleValue);
                         }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    if (plugin.isDebugMode()) {
+                        e.printStackTrace();
+                    }
                 }
             }
 
@@ -167,6 +178,9 @@ public class SpecialSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling special settings", e);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }

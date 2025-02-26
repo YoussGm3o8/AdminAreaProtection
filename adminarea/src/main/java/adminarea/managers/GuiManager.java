@@ -61,10 +61,6 @@ public class GuiManager {
         openFormById(player, FormIds.BASIC_SETTINGS, area);
     }
 
-    public void openProtectionSettings(Player player, Area area) {
-        openFormById(player, FormIds.PROTECTION_SETTINGS, area);
-    }
-
     public void openBuildingPermissions(Player player, Area area) {
         openFormById(player, FormIds.BUILDING_SETTINGS, area);
     }

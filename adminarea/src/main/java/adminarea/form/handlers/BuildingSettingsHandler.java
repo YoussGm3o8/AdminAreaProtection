@@ -87,29 +87,67 @@ public class BuildingSettingsHandler extends BaseFormHandler {
             // Track number of changes
             int changedSettings = 0;
 
+            // Debug log the response data
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing building settings form response:");
+                plugin.debug("Number of responses: " + response.getResponses().size());
+                for (int i = 0; i < response.getResponses().size(); i++) {
+                    plugin.debug("Response " + i + ": " + response.getResponse(i));
+                }
+            }
+
             // Skip header label element (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
+                    String permissionNode = normalizePermissionNode(toggles.get(i).getPermissionNode());
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Processing toggle: " + toggles.get(i).getDisplayName() + 
+                                    " with permission node: " + permissionNode);
+                    }
+                    
                     // Get current value from settings
                     boolean currentValue = updatedSettings.optBoolean(
-                        toggles.get(i).getPermissionNode(), 
+                        permissionNode, 
                         toggles.get(i).getDefaultValue()
                     );
                     
-                    Boolean toggleResponse = response.getToggleResponse(i + 1);
-                    if (toggleResponse == null) {
-                        plugin.getLogger().debug("Null toggle response for " + toggles.get(i).getPermissionNode());
+                    // Get raw response first
+                    Object rawResponse = response.getResponse(i + 1);
+                    if (rawResponse == null) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Null raw response for toggle " + permissionNode + " at index " + (i + 1));
+                        }
+                        continue;
+                    }
+
+                    // Convert response to boolean
+                    boolean toggleValue;
+                    if (rawResponse instanceof Boolean) {
+                        toggleValue = (Boolean) rawResponse;
+                    } else {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Invalid response type for toggle " + permissionNode + 
+                                ": " + rawResponse.getClass().getName());
+                        }
                         continue;
                     }
                     
                     // Only count as changed if value is different
-                    if (currentValue != toggleResponse) {
+                    if (currentValue != toggleValue) {
                         changedSettings++;
-                        updatedSettings.put(toggles.get(i).getPermissionNode(), toggleResponse);
+                        updatedSettings.put(permissionNode, toggleValue);
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Updated toggle " + permissionNode + " from " + 
+                                currentValue + " to " + toggleValue);
+                        }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().debug("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
+                    if (plugin.isDebugMode()) {
+                        e.printStackTrace();
+                    }
                 }
             }
 
@@ -133,6 +171,9 @@ public class BuildingSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling building settings", e);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }
