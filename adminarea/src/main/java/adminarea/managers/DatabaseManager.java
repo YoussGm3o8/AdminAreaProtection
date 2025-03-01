@@ -5,6 +5,8 @@ import adminarea.area.Area;
 import adminarea.area.AreaDTO;
 import adminarea.area.AreaBuilder;
 import adminarea.exception.DatabaseException;
+import adminarea.permissions.PermissionToggle;
+
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.zaxxer.hikari.HikariConfig;
@@ -158,6 +160,12 @@ public class DatabaseManager {
     }
 
     public void saveArea(Area area) throws DatabaseException {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Saving area to database: " + area.getName());
+            plugin.debug("  Toggle states to save: " + area.toDTO().toggleStates());
+            plugin.debug("  Potion effects to save: " + area.toDTO().potionEffects());
+        }
+        
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(
                 "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
@@ -186,29 +194,81 @@ public class DatabaseManager {
             stmt.setString(13, dto.enterMessage());
             stmt.setString(14, dto.leaveMessage());
             
-            // Save toggle states JSON
-            stmt.setString(15, dto.toggleStates().toString());
+            // Save toggle states JSON - ensure it's not an empty object if there are actual toggle states
+            String toggleStatesJson = dto.toggleStates().toString();
+            if (toggleStatesJson.equals("{}") && !area.getAllToggleKeys().isEmpty()) {
+                // If the JSON is empty but we have toggle keys, something is wrong
+                // Try to rebuild the toggle states
+                JSONObject rebuiltToggles = new JSONObject();
+                for (String key : area.getAllToggleKeys()) {
+                    rebuiltToggles.put(key, area.getToggleState(key));
+                }
+                
+                if (rebuiltToggles.length() == 0) {
+                    // Still no toggles - something is seriously wrong, use defaults
+                    plugin.debug("  No toggle states found, applying defaults");
+                    for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+                        String permNode = toggle.getPermissionNode();
+                        if (!permNode.startsWith("gui.permissions.toggles.")) {
+                            permNode = "gui.permissions.toggles." + permNode;
+                        }
+                        rebuiltToggles.put(permNode, toggle.getDefaultValue());
+                    }
+                }
+                
+                toggleStatesJson = rebuiltToggles.toString();
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Rebuilt toggle states: " + toggleStatesJson);
+                }
+            }
+            stmt.setString(15, toggleStatesJson);
+            
             stmt.setString(16, dto.defaultToggleStates().toString());
             stmt.setString(17, dto.inheritedToggleStates().toString());
             stmt.setString(18, new JSONObject(dto.trackPermissions()).toString());
             stmt.setString(19, new JSONObject(dto.playerPermissions()).toString());
             
-            // Save potion effects JSON
-            stmt.setString(20, dto.potionEffects().toString());
+            // Save potion effects JSON - ensure it's not empty if there are actual potion effects
+            String potionEffectsJson = dto.potionEffects().toString();
+            if (potionEffectsJson.equals("{}") && area.hasPotionEffects()) {
+                // Try to rebuild the potion effects if we have them but they're not in the JSON
+                // This would need to be customized based on how your potion effects are stored
+                try {
+                    java.lang.reflect.Method method = area.getClass().getMethod("getPotionEffectsAsJSON");
+                    Object result = method.invoke(area);
+                    if (result instanceof JSONObject) {
+                        potionEffectsJson = result.toString();
+                    }
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Rebuilt potion effects: " + potionEffectsJson);
+                    }
+                } catch (Exception e) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Could not rebuild potion effects: " + e.getMessage());
+                    }
+                }
+            }
+            stmt.setString(20, potionEffectsJson);
 
             stmt.executeUpdate();
-
+            
             if (plugin.isDebugMode()) {
-                plugin.debug(String.format("Saved area to database: %s", dto.name()));
-                plugin.debug(String.format("Toggle states: %s", dto.toggleStates().toString()));
-                plugin.debug(String.format("Enter/leave messages: %s / %s", dto.enterMessage(), dto.leaveMessage()));
-                
-                // Also ensure title info is in config file
-                ensureAreaTitlesConfig(dto);
+                // Verify what was actually saved by reading it back
+                try {
+                    Area freshArea = loadArea(area.getName());
+                    if (freshArea != null) {
+                        plugin.debug("  Verified saved area from database:");
+                        plugin.debug("  Toggle states in DB: " + freshArea.toDTO().toggleStates());
+                        plugin.debug("  Potion effects in DB: " + freshArea.toDTO().potionEffects());
+                    }
+                } catch (Exception e) {
+                    plugin.debug("  Failed to verify saved area: " + e.getMessage());
+                }
             }
 
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to save area", e);
+            throw new DatabaseException("Failed to save area: " + area.getName(), e);
         }
     }
 
@@ -474,6 +534,42 @@ public class DatabaseManager {
             
         } catch (SQLException e) {
             throw new DatabaseException("Failed to load area: " + areaName, e);
+        }
+    }
+
+    /**
+     * Updates a single toggle state in the database without recreating the entire area
+     */
+    public void updateAreaToggleState(String areaName, String permission, Object value) throws DatabaseException {
+        try (Connection conn = getConnection()) {
+            // First load existing area data
+            Area area = loadArea(areaName);
+            if (area == null) {
+                throw new DatabaseException("Area not found: " + areaName);
+            }
+
+            // Get current toggle states
+            JSONObject toggleStates = area.toDTO().toggleStates();
+            
+            // Update the specific toggle
+            toggleStates.put(permission, value);
+
+            // Update database with new toggle states - only update toggle_states column
+            try (PreparedStatement stmt = conn.prepareStatement(
+                "UPDATE areas SET toggle_states = ? WHERE name = ?")) {
+                stmt.setString(1, toggleStates.toString());
+                stmt.setString(2, areaName);
+                stmt.executeUpdate();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Updated toggle state in database for area " + areaName);
+                    plugin.debug("  Permission: " + permission + ", Value: " + value);
+                    plugin.debug("  New toggle states: " + toggleStates.toString());
+                }
+            }
+
+        } catch (SQLException e) {
+            throw new DatabaseException("Failed to update toggle state", e);
         }
     }
 }

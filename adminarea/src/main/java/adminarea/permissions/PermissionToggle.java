@@ -14,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 import java.io.IOException;
 import java.nio.file.*;
 import com.google.gson.Gson;
@@ -408,6 +409,7 @@ public class PermissionToggle implements AutoCloseable {
     toggles.add(new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING));
     toggles.add(new PermissionToggle("Allow Armor Stand Access", "allowArmorStand", false, Category.BUILDING));
     toggles.add(new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING));
+    toggles.add(new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING));
     
     // Redstone & Mechanics
     toggles.add(new PermissionToggle("Allow Redstone", "allowRedstone", true, Category.TECHNICAL));
@@ -473,6 +475,7 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
             new PermissionToggle("Hanging Break", "allowHangingBreak", true, Category.BUILDING),
             new PermissionToggle("Armor Stands", "allowArmorStand", false, Category.BUILDING),
+            new PermissionToggle("Door Interaction", "allowDoors", false, Category.BUILDING),
 
             // Entity toggles
             new PermissionToggle("PvP", "allowPvP", false, Category.ENTITY),
@@ -528,7 +531,8 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
             new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
             new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING),
-            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING)
+            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING),
+            new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING)
         ));
 
         // Environment toggles
@@ -672,7 +676,8 @@ public class PermissionToggle implements AutoCloseable {
             new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
             new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
             new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING),
-            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING)
+            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING),
+            new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING)
         ));
         
         // Environment toggles
@@ -760,5 +765,79 @@ public class PermissionToggle implements AutoCloseable {
 
     public Boolean getDefaultValue() {
         return defaultValue;
+    }
+
+    /**
+     * Checks if a given key is a valid permission toggle
+     * @param key The key to check
+     * @return true if the key represents a valid permission toggle, false otherwise
+     */
+    public static boolean isValidToggle(String key) {
+        // First normalize the key if it doesn't have the prefix
+        String normalizedKey = key;
+        if (!key.startsWith("gui.permissions.toggles.")) {
+            normalizedKey = "gui.permissions.toggles." + key;
+        }
+        
+        // Check if any toggle has this permission node
+        for (PermissionToggle toggle : getDefaultToggles()) {
+            if (toggle.getPermissionNode().equals(normalizedKey) || 
+                normalizedKey.equals("gui.permissions.toggles." + toggle.getPermissionNode())) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Validates whether a permission toggle is valid for a given track.
+     * Some toggles may not be appropriate for track-based permissions.
+     * 
+     * @param toggle The toggle name or permission node to check
+     * @param track The track to validate against
+     * @return true if the toggle can be used with track permissions, false otherwise
+     */
+    public static boolean isValidTrackToggle(String toggle, String track) {
+        // First ensure it's a valid toggle
+        if (!isValidToggle(toggle)) {
+            return false;
+        }
+
+        // Some toggles don't make sense for tracks or could be dangerous
+        // This is a safety check to prevent misuse
+        String[] invalidTrackToggles = {
+            "allowTNT",
+            "allowCreeper", 
+            "allowBedExplosion",
+            "allowCrystalExplosion",
+            "allowFire",
+            "allowLiquid",
+            "allowRedstone",
+            "allowPistons",
+            "allowHopper",
+            "allowDispenser",
+            "allowMonsterSpawn"
+        };
+
+        // Check against full permission node or just the toggle name
+        String normalizedToggle = toggle.replace("gui.permissions.toggles.", "");
+        for (String invalid : invalidTrackToggles) {
+            if (normalizedToggle.equals(invalid)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Gets a list of safe toggles that can be used with tracks
+     * @return List of PermissionToggle objects safe for track use
+     */
+    public static List<PermissionToggle> getSafeTrackToggles() {
+        return getDefaultToggles().stream()
+            .filter(toggle -> isValidTrackToggle(toggle.getPermissionNode(), null))
+            .collect(Collectors.toList());
     }
 }

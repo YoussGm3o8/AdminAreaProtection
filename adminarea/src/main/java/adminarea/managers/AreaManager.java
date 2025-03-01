@@ -28,6 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class AreaManager implements IAreaManager {
     private final AdminAreaProtectionPlugin plugin;
+    private final java.util.concurrent.locks.ReentrantReadWriteLock lock = new java.util.concurrent.locks.ReentrantReadWriteLock();
+    private final java.util.concurrent.locks.Lock writeLock = lock.writeLock();
     private final Map<String, TaskHandler> visualizationTasks = new HashMap<>();
     private final Map<String, AreaStatistics> areaStats = new HashMap<>();
     private final Map<String, Area> areasByName = new HashMap<>();
@@ -148,47 +150,75 @@ public class AreaManager implements IAreaManager {
 
     @Override
     public void addArea(Area area) {
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try {
-            if (area == null) {
-                throw new IllegalArgumentException("Area cannot be null");
-            }
+        if (area == null) {
+            throw new IllegalArgumentException("Area cannot be null");
+        }
 
-            if (plugin.isDebugMode()) {
-                plugin.debug("Adding area to memory: " + area.getName());
-            }
+        try {
+            writeLock.lock();
 
             // Check for duplicate names
             if (hasArea(area.getName())) {
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Area with name " + area.getName() + " already exists, skipping add");
+                    plugin.debug("Area with name already exists: " + area.getName());
                 }
                 return;
             }
 
+            // Initialize default toggle states for all available toggles if not set
+            if (plugin.isDebugMode()) {
+                plugin.debug("Initializing default toggle states for area " + area.getName());
+                plugin.debug("Current toggle states: " + area.toDTO().toggleStates());
+            }
+
+            PermissionToggle.getDefaultToggles().forEach(toggle -> {
+                String key = toggle.getPermissionNode();
+                if (!key.startsWith("gui.permissions.toggles.")) {
+                    key = "gui.permissions.toggles." + key;
+                }
+                if (!area.getToggleState(key)) {  // Changed from hasToggleState to getToggleState
+                    area.setToggleState(key, toggle.getDefaultValue());
+                }
+            });
+
+            if (plugin.isDebugMode()) {
+                plugin.debug("Toggle states after initialization: " + area.toDTO().toggleStates());
+            }
+
+            // Detect global area
+            boolean isGlobal = isGlobalArea(area);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Adding area to memory: " + area.getName() + 
+                          (isGlobal ? " (GLOBAL AREA)" : ""));
+            }
+
             // Add area to memory maps
             String world = area.getWorld();
-            if (isGlobalArea(area)) {
+            if (isGlobal) {
                 globalAreasByWorld.put(world, area);
             } else {
                 areas.add(area);
+                // Only add non-global areas to spatial index
+                addToSpatialIndex(area);
             }
+            
+            // Add to world areas and name lookup for all area types
             worldAreas.computeIfAbsent(world, k -> new ArrayList<>()).add(area);
             areasByName.put(area.getName().toLowerCase(), area);
 
-            // Add to spatial index
-            addToSpatialIndex(area);
-
-            // Register area in chunkAreaMap
+            // Register area in chunkAreaMap 
             registerArea(area);
 
             if (plugin.isDebugMode()) {
-                plugin.debug("Successfully added area: " + area.getName());
-                plugin.debug("Current areas in memory: " + areasByName.keySet());
+                plugin.debug("Successfully added area: " + area.getName() + 
+                          (isGlobal ? " (global, world: " + area.getWorld() + ")" : ""));
+                plugin.debug("Current areas in memory: " + areasByName.size() + 
+                          " (global: " + globalAreasByWorld.size() + ", local: " + areas.size() + ")");
             }
 
         } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "area_add");
+            writeLock.unlock();
         }
     }
 
@@ -260,35 +290,109 @@ public class AreaManager implements IAreaManager {
     public void updateArea(Area area) {
         if (area == null) return;
         
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updating area: " + area.getName());
+            plugin.debug("  Player permissions: " + area.getPlayerPermissions());
+            plugin.debug("  Toggle states: " + area.toDTO().toggleStates());
+        }
+        
         try {
-            // Remove from spatial index first
-            removeFromSpatialIndex(area);
-            
-            // Save updated area to database
-            plugin.getDatabaseManager().updateArea(area);
-            
-            // Invalidate caches for this area
-            locationCache.invalidateAll();
-            nameCache.invalidate(area.getName());
-            
-            // Reload area from database to ensure fresh state
-            List<Area> freshAreas = plugin.getDatabaseManager().loadAreas();
-            Area freshArea = freshAreas.stream()
-                .filter(a -> a.getName().equals(area.getName()))
-                .findFirst()
-                .orElse(area);
-            
-            // Update in-memory area
-            areasByName.put(area.getName(), freshArea);
-            
-            // Re-index the updated area
-            addToSpatialIndex(freshArea);
+            // Synchronize toggle states before saving
+            area = area.synchronizeToggleStates();
             
             if (plugin.isDebugMode()) {
-                plugin.debug("Updated and reloaded area " + area.getName() + " from database");
-                plugin.debug("New toggle states: " + freshArea.toDTO().toggleStates());
+                plugin.debug("  After synchronization - Toggle states: " + area.toDTO().toggleStates());
+                plugin.debug("  After synchronization - Settings: " + area.toDTO().settings());
             }
             
+            // First update in database
+            plugin.getDatabaseManager().updateArea(area);
+            
+            // Update in memory
+            Area oldArea = areasByName.get(area.getName().toLowerCase());
+            String world = area.getWorld();
+            
+            // Check if we need to re-register the area (bounds changed)
+            boolean needsReregister = false;
+            if (oldArea != null) {
+                needsReregister = !oldArea.getBounds().equals(area.getBounds()) ||
+                                  !oldArea.getWorld().equals(world);
+            }
+            
+            // Update in all collections to avoid duplication
+            boolean isGlobal = isGlobalArea(area);
+            
+            // Remove old area from appropriate collections
+            if (oldArea != null) {
+                if (isGlobalArea(oldArea)) {
+                    // Remove from global areas if it was previously a global area
+                    globalAreasByWorld.remove(oldArea.getWorld());
+                } else {
+                    // Remove from areas list if it was a regular area
+                    areas.remove(oldArea);
+                }
+                
+                // Remove old area from world areas list
+                List<Area> worldAreaList = worldAreas.get(oldArea.getWorld());
+                if (worldAreaList != null) {
+                    worldAreaList.remove(oldArea);
+                }
+                
+                // Unregister old area to clean up spatial indexes
+                unregisterArea(oldArea);
+            }
+            
+            // Add the updated area to the appropriate collections
+            if (isGlobal) {
+                globalAreasByWorld.put(world, area);
+            } else {
+                areas.add(area);
+                addToSpatialIndex(area);
+            }
+            
+            // Update in world areas collection
+            worldAreas.computeIfAbsent(world, k -> new ArrayList<>()).add(area);
+            
+            // Update in name lookup map
+            areasByName.put(area.getName().toLowerCase(), area);
+            
+            // Re-register in chunk map
+            registerArea(area);
+            
+            // Fire AreaPermissionUpdateEvent if permissions changed
+            if (oldArea != null && !oldArea.getPlayerPermissions().equals(area.getPlayerPermissions())) {
+                plugin.getServer().getPluginManager().callEvent(
+                    new AreaPermissionUpdateEvent(
+                        area,
+                        PermissionToggle.Category.ALL,
+                        null,
+                        oldArea.getPlayerPermissions(),
+                        area.getPlayerPermissions()
+                    )
+                );
+            }
+            
+            // Clear caches to ensure fresh data is used
+            locationCache.invalidateAll();
+            nameCache.invalidate(area.getName().toLowerCase());
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area updated successfully: " + area.getName());
+                plugin.debug("  Player permissions after update: " + area.getPlayerPermissions());
+                
+                // Verify in database
+                try {
+                    Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                    if (freshArea != null) {
+                        plugin.debug("  Verified area from database:");
+                        plugin.debug("  Player permissions from DB: " + freshArea.getPlayerPermissions());
+                        plugin.debug("  Toggle states from DB: " + freshArea.toDTO().toggleStates());
+                        plugin.debug("  Settings from DB: " + freshArea.toDTO().settings());
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to verify area update in database", e);
+                }
+            }
         } catch (Exception e) {
             plugin.getLogger().error("Failed to update area: " + area.getName(), e);
         }
@@ -297,6 +401,7 @@ public class AreaManager implements IAreaManager {
     /**
      * Invalidates all caches for the specified area
      */
+    @SuppressWarnings("unused")
     private void invalidateAreaCaches(Area area) {
         if (area == null) return;
         
@@ -360,104 +465,61 @@ public class AreaManager implements IAreaManager {
     }
 
     /**
-     * Gets all areas at a specific location, sorted by priority in descending order.
-     * When areas overlap, the area with the highest priority takes precedence.
-     * Example: If area A (priority 50) and area B (priority 25) overlap,
-     * area A's settings will override area B's settings in the overlapping space.
-     *
-     * @param world The world name
-     * @param x X coordinate
-     * @param y Y coordinate
-     * @param z Z coordinate
-     * @return List of areas at location, sorted by priority (highest first)
+     * Gets a list of all areas that overlap with the given coordinates
+     * Optimized for performance with spatial indexing and caching
      */
     public List<Area> getAreasAtLocation(String world, double x, double y, double z) {
-        // Validate inputs to prevent crashes
-        if (world == null) return Collections.emptyList();
-        
-        // Use exact coordinates for cache key to maintain precision at boundaries
-        // Use a consistent string format to ensure caching works correctly
-        String cacheKey = world + ":" + String.format("%.3f", x) + ":" + 
-                          String.format("%.3f", y) + ":" + 
-                          String.format("%.3f", z);
-        
-        // Use cached result if available, otherwise calculate
-        return locationCache.get(cacheKey, k -> calculateAreasAtLocation(world, x, y, z));
-    }
-
-    /**
-     * Internal method that does the actual calculation of areas at a location.
-     * This is optimized for performance with early exits and efficient data structures.
-     */
-    private List<Area> calculateAreasAtLocation(String world, double x, double y, double z) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Skip if called recursively for the same location (prevents stack overflow)
-            String recursionKey = world + ":" + (int)x + ":" + (int)y + ":" + (int)z;
-            if (Thread.currentThread().getStackTrace().length > 50 || 
-                !recursionChecks.add(recursionKey)) {
-                plugin.getLogger().warning("Prevented infinite recursion in area lookup at " + recursionKey);
+            // Skip if world name is invalid
+            if (world == null || world.isEmpty()) {
                 return Collections.emptyList();
             }
+            
+            // Check recursion to prevent stack overflow with overlapping areas
+            String recursionKey = world + ":" + x + ":" + y + ":" + z;
+            if (recursionChecks.contains(recursionKey)) {
+                return Collections.emptyList();
+            }
+            recursionChecks.add(recursionKey);
             
             try {
                 // Pre-allocate result list with estimated capacity
                 List<Area> result = new ArrayList<>(4); // Most locations have few overlapping areas
                 
-                // First check global area - this is the most efficient path
+                // Check for global area first (most efficient)
                 Area globalArea = globalAreasByWorld.get(world);
                 if (globalArea != null) {
                     result.add(globalArea);
+                    
+                    // For global areas, we can avoid further processing completely
+                    // This is a significant optimization for servers with many players
                     return result; // Global area overrides all others
                 }
                 
-                // Only check local areas if we're near a player to save resources
-                if (isNearAnyPlayer(x, z)) {
-                    // Get chunk coordinates for spatial index lookup
-                    int chunkX = (int)x >> 4;
-                    int chunkZ = (int)z >> 4;
-                    int chunkKey = getChunkKey(chunkX, chunkZ);
-                    
-                    // Look up areas in this chunk using spatial index
-                    Map<Integer, List<Area>> worldIndex = spatialIndex.get(world);
-                    if (worldIndex != null) {
-                        List<Area> chunkAreas = worldIndex.get(chunkKey);
-                        if (chunkAreas != null && !chunkAreas.isEmpty()) {
-                            // Filter areas by exact position check
-                            for (Area area : chunkAreas) {
-                                if (area.isInside(world, x, y, z)) {
-                                    result.add(area);
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Also check chunk area map for any areas we might have missed
-                    Set<Area> mapAreas = chunkAreaMap.get(toLongKey(chunkX, chunkZ));
-                    if (mapAreas != null && !mapAreas.isEmpty()) {
-                        for (Area area : mapAreas) {
-                            // Skip areas we've already added
-                            if (!result.contains(area) && area.isInside(world, x, y, z)) {
-                                result.add(area);
-                            }
-                        }
-                    }
-                }
+                // Get all potential areas in this chunk
+                long chunkKey = toLongKey((int)(x) >> 4, (int)(z) >> 4); // Use toLongKey instead of getChunkKey
+                Set<Area> chunkAreas = chunkAreaMap.getOrDefault(chunkKey, Collections.emptySet());
                 
-                // If we have more than one area, sort by priority (highest first)
-                if (result.size() > 1) {
-                    result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority()));
+                if (!chunkAreas.isEmpty()) {
+                    // Filter areas that actually contain the point and sort by priority
+                    for (Area area : chunkAreas) {
+                        if (area.isInside(world, x, y, z)) { // Use isInside instead of contains
+                            result.add(area);
+                        }
+                    }
+                    
+                    if (!result.isEmpty()) {
+                        result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority())); 
+                    }
                 }
                 
                 return result;
-                
             } finally {
-                // Clean up to prevent memory leaks
                 recursionChecks.remove(recursionKey);
             }
-            
         } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "area_lookup");
+            plugin.getPerformanceMonitor().stopTimer(sample, "get_areas_at_location");
         }
     }
 
@@ -487,6 +549,7 @@ public class AreaManager implements IAreaManager {
         return false;
     }
 
+    @SuppressWarnings("unused")
     private void invalidateLocationCache() {
         locationCache.invalidateAll();
     }
@@ -918,11 +981,20 @@ public class AreaManager implements IAreaManager {
      * Call this whenever an area is created or updated.
      */
     public void registerArea(Area area) {
+        // Skip chunk registration for global areas - they apply to the entire world
+        // This prevents excessive memory usage
+        if (isGlobalArea(area)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Skipping chunk registration for global area: " + area.getName());
+            }
+            return;
+        }
+        
         // Remove from existing chunk index first:
         unregisterArea(area);
         // Compute chunk bounds and add to chunkAreaMap
-        for (long chunkKey : getCoveredChunks(area)) {
-            chunkAreaMap.computeIfAbsent(chunkKey, k -> new HashSet<>()).add(area);
+        for (long key : computeChunkKeys(area)) {
+            chunkAreaMap.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(area);
         }
     }
 
@@ -930,6 +1002,11 @@ public class AreaManager implements IAreaManager {
      * Removes an area from chunkAreaMap.
      */
     public void unregisterArea(Area area) {
+        // Skip for global areas as they aren't registered in the chunk map
+        if (isGlobalArea(area)) {
+            return;
+        }
+        
         for (Set<Area> set : chunkAreaMap.values()) {
             set.remove(area);
         }
@@ -967,15 +1044,53 @@ public class AreaManager implements IAreaManager {
      * Determines chunk coordinates covered by the area.
      * Calculates all chunks that intersect with the area's bounding box.
      */
+    @SuppressWarnings("unused")
     private List<Long> getCoveredChunks(Area area) {
         List<Long> keys = new ArrayList<>();
         AreaDTO.Bounds bounds = area.toDTO().bounds();
+        
+        // Skip processing for global areas
+        if (isGlobalArea(area)) {
+            return keys; // Return empty list for global areas
+        }
         
         // Convert block coordinates to chunk coordinates
         int minChunkX = bounds.xMin() >> 4;
         int maxChunkX = bounds.xMax() >> 4;
         int minChunkZ = bounds.zMin() >> 4;
         int maxChunkZ = bounds.zMax() >> 4;
+        
+        // Safety check: limit the number of chunks to prevent memory issues
+        // 100 x 100 chunks is a very large area (1.6M blocks) and should be sufficient
+        int chunkXSpan = maxChunkX - minChunkX + 1;
+        int chunkZSpan = maxChunkZ - minChunkZ + 1;
+        
+        final int MAX_CHUNK_SPAN = 100; // Maximum chunks in any direction
+        
+        if (chunkXSpan > MAX_CHUNK_SPAN || chunkZSpan > MAX_CHUNK_SPAN) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area too large for chunk registration: " + area.getName() + 
+                           " - " + chunkXSpan + "x" + chunkZSpan + " chunks");
+            }
+            
+            // Reduce the span to a reasonable size
+            if (chunkXSpan > MAX_CHUNK_SPAN) {
+                int halfExcess = (chunkXSpan - MAX_CHUNK_SPAN) / 2;
+                minChunkX += halfExcess;
+                maxChunkX = minChunkX + MAX_CHUNK_SPAN - 1;
+            }
+            
+            if (chunkZSpan > MAX_CHUNK_SPAN) {
+                int halfExcess = (chunkZSpan - MAX_CHUNK_SPAN) / 2;
+                minChunkZ += halfExcess;
+                maxChunkZ = minChunkZ + MAX_CHUNK_SPAN - 1;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Reduced chunk span to " + MAX_CHUNK_SPAN + "x" + MAX_CHUNK_SPAN + 
+                           " for area: " + area.getName());
+            }
+        }
         
         // Iterate through all chunks in the area's bounds
         for (int x = minChunkX; x <= maxChunkX; x++) {
@@ -988,9 +1103,8 @@ public class AreaManager implements IAreaManager {
     }
 
     /**
-     * Master check for whether any event/action should be processed.
-     * This should be called before any area or protection checks.
-     * Returns false if the event should be ignored (no players nearby).
+     * Efficiently determines if an event at a specific position should be processed
+     * based on proximity to players and area containment
      *
      * @param pos The position to check
      * @param ignoreGlobal If true, even global areas require player proximity
@@ -1000,25 +1114,29 @@ public class AreaManager implements IAreaManager {
         if (pos == null || pos.getLevel() == null) {
             return false;
         }
+        
+        String worldName = pos.getLevel().getName();
 
         // Get chunk coordinates of the event location
         int eventChunkX = pos.getChunkX();
         int eventChunkZ = pos.getChunkZ();
 
-        // Always process if chunk is not loaded
+        // Skip if chunk is not loaded
         if (!pos.getLevel().isChunkLoaded(eventChunkX, eventChunkZ)) {
             return false;
         }
 
-        // Check for global area first
-        Area globalArea = getGlobalAreaForWorld(pos.getLevel().getName());
+        // Check for global area first - most efficient path
+        Area globalArea = globalAreasByWorld.get(worldName);
         if (globalArea != null && !ignoreGlobal) {
             // For global areas, still require a player to be online in the world
-            return pos.getLevel().getPlayers().values().stream()
-                .anyMatch(p -> p.getLevel().getName().equals(pos.getLevel().getName()));
+            // This prevents processing events in empty worlds with global protection
+            return !pos.getLevel().getPlayers().isEmpty();
         }
 
         // For all other cases, require player proximity
+        // This is a significant optimization that prevents processing events
+        // in unpopulated chunks
         return isNearAnyPlayer(pos.x, pos.z);
     }
 
@@ -1027,7 +1145,7 @@ public class AreaManager implements IAreaManager {
      */
     public boolean shouldProcessEvent(Position pos, Area area) {
         // If it's a global area, use less strict checking
-        boolean ignoreGlobal = (area != null && isGlobalArea(area));
+        boolean ignoreGlobal = (area != null && area.isGlobal());
         return shouldProcessEvent(pos, ignoreGlobal);
     }
 
@@ -1055,5 +1173,285 @@ public class AreaManager implements IAreaManager {
         if (plugin.isDebugMode()) {
             plugin.debug("All area toggle states normalized and saved");
         }
+    }
+
+    /**
+     * Recreates an area by deleting and creating a new one with the same name but updated settings.
+     * This is a more robust way to ensure all settings, including toggles, are properly persisted.
+     * 
+     * @param area The area with updated settings to recreate
+     * @return The newly created area
+     */
+    public Area recreateArea(Area area) {
+        if (area == null) return null;
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Recreating area: " + area.getName());
+            plugin.debug("  Toggle states before recreation: " + area.toDTO().toggleStates());
+            plugin.debug("  Settings before recreation: " + area.toDTO().settings());
+            plugin.debug("  Potion effects before recreation: " + area.toDTO().potionEffects());
+        }
+        
+        try {
+            // Synchronize toggle states first to ensure we have all the latest changes
+            area = area.synchronizeToggleStates();
+            
+            // Get all the area information we need to recreate it
+            AreaDTO currentDTO = area.toDTO();
+            String areaName = currentDTO.name();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Toggle states after synchronization: " + currentDTO.toggleStates());
+                plugin.debug("  Settings after synchronization: " + currentDTO.settings());
+                plugin.debug("  Potion effects after synchronization: " + currentDTO.potionEffects());
+            }
+            
+            // Remove the area from memory maps
+            if (isGlobalArea(area)) {
+                globalAreasByWorld.remove(area.getWorld());
+            } else {
+                areas.remove(area);
+                removeFromSpatialIndex(area);
+            }
+            
+            // Remove from name lookup map
+            areasByName.remove(areaName.toLowerCase());
+            
+            // Delete from database
+            try {
+                databaseManager.deleteArea(areaName);
+            } catch (DatabaseException e) {
+                plugin.getLogger().error("Failed to delete area for recreation: " + areaName, e);
+                // Continue with recreation even if database delete fails
+            }
+            
+            // Clear caches
+            locationCache.invalidateAll();
+            nameCache.invalidate(areaName.toLowerCase());
+            
+            // Unregister area from chunkAreaMap
+            unregisterArea(area);
+            
+            // Filter out invalid toggle states
+            JSONObject filteredToggleStates = new JSONObject();
+            JSONObject originalToggleStates = currentDTO.toggleStates();
+            
+            // Only keep valid toggle states
+            for (String key : originalToggleStates.keySet()) {
+                // Keep all toggle states except for obviously invalid ones (like null or empty)
+                if (key != null && !key.isEmpty()) {
+                    if (originalToggleStates.isNull(key)) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Filtering out null toggle value for key: " + key);
+                        }
+                        continue;
+                    }
+                    
+                    // Keep the toggle state regardless of whether it's "valid" according to the system
+                    // This ensures custom toggle states from forms are preserved
+                    try {
+                        // Check if it's a boolean value
+                        if (originalToggleStates.has(key)) {
+                            Object value = originalToggleStates.get(key);
+                            if (value instanceof Boolean) {
+                                filteredToggleStates.put(key, originalToggleStates.getBoolean(key));
+                            } else if (value instanceof Number) {
+                                // For strength values
+                                filteredToggleStates.put(key, originalToggleStates.getInt(key));
+                            } else if (value instanceof String) {
+                                // For string values, try to convert to boolean
+                                try {
+                                    filteredToggleStates.put(key, Boolean.parseBoolean((String)value));
+                                } catch (Exception e) {
+                                    // Keep as string if can't convert to boolean
+                                    filteredToggleStates.put(key, value);
+                                }
+                            } else {
+                                // For other types, just convert to string
+                                filteredToggleStates.put(key, String.valueOf(value));
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Error processing toggle key: " + key + ", error: " + e.getMessage());
+                        }
+                    }
+                } else {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Filtering out invalid toggle key: " + key);
+                    }
+                }
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Original toggle states: " + originalToggleStates);
+                plugin.debug("  Filtered toggle states: " + filteredToggleStates);
+            }
+            
+            // Ensure potion effects are properly preserved
+            JSONObject potionEffects = new JSONObject(currentDTO.potionEffects().toString());
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Preserved potion effects: " + potionEffects);
+            }
+            
+            // Create a new area with the same settings but filtered toggle states
+            Area newArea = Area.builder()
+                .name(currentDTO.name())
+                .world(currentDTO.world())
+                .coordinates(
+                    currentDTO.bounds().xMin(), currentDTO.bounds().xMax(),
+                    currentDTO.bounds().yMin(), currentDTO.bounds().yMax(),
+                    currentDTO.bounds().zMin(), currentDTO.bounds().zMax()
+                )
+                .priority(currentDTO.priority())
+                .showTitle(currentDTO.showTitle())
+                .enterMessage(currentDTO.enterMessage())
+                .leaveMessage(currentDTO.leaveMessage())
+                .settings(currentDTO.settings())
+                .toggleStates(filteredToggleStates)
+                .defaultToggleStates(currentDTO.defaultToggleStates())
+                .inheritedToggleStates(currentDTO.inheritedToggleStates())
+                .groupPermissions(currentDTO.groupPermissions())
+                .inheritedPermissions(currentDTO.inheritedPermissions())
+                .playerPermissions(currentDTO.playerPermissions())
+                .trackPermissions(currentDTO.trackPermissions())
+                .potionEffects(potionEffects)
+                .build();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("New area built with:");
+                plugin.debug("  Toggle states: " + newArea.toDTO().toggleStates());
+                plugin.debug("  Potion effects: " + newArea.toDTO().potionEffects());
+            }
+            
+            // Before saving, ensure toggle states and potion effects are populated
+            if (newArea.toDTO().toggleStates().length() == 0 && filteredToggleStates.length() > 0) {
+                plugin.debug("WARNING: Toggle states were lost during area creation!");
+                
+                // Try to manually apply the toggle states
+                for (String key : filteredToggleStates.keySet()) {
+                    boolean value = filteredToggleStates.getBoolean(key);
+                    newArea.setToggleState(key, value);
+                }
+            }
+            
+            if (newArea.toDTO().potionEffects().length() == 0 && potionEffects.length() > 0) {
+                plugin.debug("WARNING: Potion effects were lost during area creation!");
+                
+                // Try to manually apply the potion effects - this depends on how your potion effects are stored
+                // You may need to customize this part based on your implementation
+                try {
+                    // Use reflection to access the setPotionEffects method if available
+                    java.lang.reflect.Method method = newArea.getClass().getMethod("setPotionEffects", JSONObject.class);
+                    method.invoke(newArea, potionEffects);
+                } catch (Exception e) {
+                    plugin.debug("Could not restore potion effects: " + e.getMessage());
+                }
+            }
+            
+            // Save the new area to the database
+            if (plugin.isDebugMode()) {
+                plugin.debug("Saving area to database with toggle states: " + newArea.toDTO().toggleStates());
+                plugin.debug("Saving area to database with potion effects: " + newArea.toDTO().potionEffects());
+            }
+            
+            databaseManager.saveArea(newArea);
+            
+            // Add the new area to memory maps
+            addArea(newArea);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area recreated successfully: " + newArea.getName());
+                plugin.debug("  Toggle states after recreation: " + newArea.toDTO().toggleStates());
+                plugin.debug("  Settings after recreation: " + newArea.toDTO().settings());
+                plugin.debug("  Potion effects after recreation: " + newArea.toDTO().potionEffects());
+                
+                // Verify in database
+                try {
+                    Area freshArea = databaseManager.loadArea(newArea.getName());
+                    if (freshArea != null) {
+                        plugin.debug("  Verified area from database:");
+                        plugin.debug("  Toggle states from DB: " + freshArea.toDTO().toggleStates());
+                        plugin.debug("  Settings from DB: " + freshArea.toDTO().settings());
+                        plugin.debug("  Potion effects from DB: " + freshArea.toDTO().potionEffects());
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to verify area recreation in database", e);
+                }
+            }
+            
+            return newArea;
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to recreate area: " + area.getName(), e);
+            // Try to keep the original area if recreation fails
+            try {
+                // Make sure the area is still in the system
+                if (!hasArea(area.getName())) {
+                    addArea(area);
+                }
+            } catch (Exception ex) {
+                plugin.getLogger().error("Failed to restore original area after failed recreation", ex);
+            }
+            return area;
+        }
+    }
+
+    /**
+     * Computes chunk keys for area registration
+     */
+    protected List<Long> computeChunkKeys(Area area) {
+        List<Long> keys = new ArrayList<>();
+        AreaDTO.Bounds bounds = area.toDTO().bounds();
+        
+        // Skip processing for global areas
+        if (isGlobalArea(area)) {
+            return keys; // Return empty list for global areas
+        }
+        
+        // Convert block coordinates to chunk coordinates
+        int minChunkX = bounds.xMin() >> 4;
+        int maxChunkX = bounds.xMax() >> 4;
+        int minChunkZ = bounds.zMin() >> 4;
+        int maxChunkZ = bounds.zMax() >> 4;
+        
+        // Safety check: limit the number of chunks to prevent memory issues
+        int chunkXSpan = maxChunkX - minChunkX + 1;
+        int chunkZSpan = maxChunkZ - minChunkZ + 1;
+        
+        final int MAX_CHUNK_SPAN = 100; // Maximum chunks in any direction
+        
+        if (chunkXSpan > MAX_CHUNK_SPAN || chunkZSpan > MAX_CHUNK_SPAN) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area too large for chunk registration: " + area.getName() + 
+                           " - " + chunkXSpan + "x" + chunkZSpan + " chunks");
+            }
+            
+            // Reduce the span to a reasonable size
+            if (chunkXSpan > MAX_CHUNK_SPAN) {
+                int halfExcess = (chunkXSpan - MAX_CHUNK_SPAN) / 2;
+                minChunkX += halfExcess;
+                maxChunkX = minChunkX + MAX_CHUNK_SPAN - 1;
+            }
+            
+            if (chunkZSpan > MAX_CHUNK_SPAN) {
+                int halfExcess = (chunkZSpan - MAX_CHUNK_SPAN) / 2;
+                minChunkZ += halfExcess;
+                maxChunkZ = minChunkZ + MAX_CHUNK_SPAN - 1;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Reduced chunk span to " + MAX_CHUNK_SPAN + "x" + MAX_CHUNK_SPAN + 
+                           " for area: " + area.getName());
+            }
+        }
+        
+        // Iterate through all chunks in the area's bounds
+        for (int x = minChunkX; x <= maxChunkX; x++) {
+            for (int z = minChunkZ; z <= maxChunkZ; z++) {
+                keys.add(toLongKey(x, z));
+            }
+        }
+        return keys;
     }
 }

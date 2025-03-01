@@ -6,6 +6,7 @@ import adminarea.area.AreaDTO;
 import adminarea.event.AreaDeletedEvent;
 import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.LuckPermsTrackChangeEvent;
 import adminarea.event.PermissionChangeEvent;
 import adminarea.exception.DatabaseException;
 import adminarea.permissions.PermissionChecker;
@@ -34,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -43,6 +45,7 @@ import adminarea.area.AreaDTO;
 import adminarea.event.AreaDeletedEvent;
 import adminarea.event.AreaPermissionUpdateEvent;
 import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.LuckPermsTrackChangeEvent;
 import adminarea.event.PermissionChangeEvent;
 import cn.nukkit.math.Vector3;
 import cn.nukkit.entity.passive.EntityWolf;
@@ -208,6 +211,16 @@ public class ProtectionListener implements Listener {
             if (event.getAction() == PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK) {
                 Block block = event.getBlock();
                 Player player = event.getPlayer();
+                
+                // Check door interaction first (new check)
+                if (isDoor(block)) {
+                    Position pos = new Position(block.x, block.y, block.z, block.level);
+                    if (handleProtection(pos, player, "allowDoors")) {
+                        event.setCancelled(true);
+                        sendProtectionMessage(player, "messages.protection.door");
+                        return;
+                    }
+                }
                 
                 // Check container access first (more specific)
                 if (isContainer(block)) {
@@ -640,7 +653,6 @@ public class ProtectionListener implements Listener {
     private void processBlockBatch(String worldName, List<Block> batch, List<Block> protectedBlocks, 
                                   List<Area> areas, Map<String, Boolean> areaPermissionCache, String explosionPermission) {
         for (Block block : batch) {
-            Position pos = Position.fromObject(block, block.level);
             
             // Check if block is in any protected area
             boolean isProtected = false;
@@ -836,18 +848,38 @@ public class ProtectionListener implements Listener {
                     // Get main title with fallback
                     Object mainTitle = titleConfig.get("main");
                     if (mainTitle != null) {
-                        title = plugin.getLanguageManager().get(mainTitle.toString(), placeholders);
+                        // Check if the value is a language path or raw message
+                        String mainTitlePath = mainTitle.toString();
+                        if (mainTitlePath.startsWith("titles.") || 
+                            plugin.getLanguageManager().getRaw(mainTitlePath) != null) {
+                            // It's a language key path, use it directly
+                            title = plugin.getLanguageManager().getAreaTransitionMessage(mainTitlePath, areaName, player.getName());
+                        } else {
+                            // It's a raw message, process directly
+                            title = plugin.getLanguageManager().getAreaTransitionMessage(mainTitlePath, areaName, player.getName());
+                        }
+                        
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Processed enter title: " + title + " with placeholders: " + placeholders);
+                            plugin.debug("Processed enter title: " + title + " with placeholders for area: " + areaName + " and player: " + player.getName());
                         }
                     }
                     
                     // Get subtitle with fallback
                     Object subTitle = titleConfig.get("subtitle");
                     if (subTitle != null) {
-                        subtitle = plugin.getLanguageManager().get(subTitle.toString(), placeholders);
+                        // Check if the value is a language path or raw message
+                        String subTitlePath = subTitle.toString();
+                        if (subTitlePath.startsWith("titles.") || 
+                            plugin.getLanguageManager().getRaw(subTitlePath) != null) {
+                            // It's a language key path, use it directly
+                            subtitle = plugin.getLanguageManager().getAreaTransitionMessage(subTitlePath, areaName, player.getName());
+                        } else {
+                            // It's a raw message, process directly
+                            subtitle = plugin.getLanguageManager().getAreaTransitionMessage(subTitlePath, areaName, player.getName());
+                        }
+                        
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Processed enter subtitle: " + subtitle + " with placeholders: " + placeholders);
+                            plugin.debug("Processed enter subtitle: " + subtitle + " with placeholders for area: " + areaName + " and player: " + player.getName());
                         }
                     }
                     
@@ -912,18 +944,38 @@ public class ProtectionListener implements Listener {
                     // Get main title with fallback
                     Object mainTitle = titleConfig.get("main");
                     if (mainTitle != null) {
-                        title = plugin.getLanguageManager().get(mainTitle.toString(), placeholders);
+                        // Check if the value is a language path or raw message
+                        String mainTitlePath = mainTitle.toString();
+                        if (mainTitlePath.startsWith("titles.") || 
+                            plugin.getLanguageManager().getRaw(mainTitlePath) != null) {
+                            // It's a language key path, use it directly
+                            title = plugin.getLanguageManager().getAreaTransitionMessage(mainTitlePath, areaName, player.getName());
+                        } else {
+                            // It's a raw message, process directly
+                            title = plugin.getLanguageManager().getAreaTransitionMessage(mainTitlePath, areaName, player.getName());
+                        }
+                        
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Processed leave title: " + title + " with placeholders: " + placeholders);
+                            plugin.debug("Processed leave title: " + title + " with placeholders for area: " + areaName + " and player: " + player.getName());
                         }
                     }
                     
                     // Get subtitle with fallback
                     Object subTitle = titleConfig.get("subtitle");
                     if (subTitle != null) {
-                        subtitle = plugin.getLanguageManager().get(subTitle.toString(), placeholders);
+                        // Check if the value is a language path or raw message
+                        String subTitlePath = subTitle.toString();
+                        if (subTitlePath.startsWith("titles.") || 
+                            plugin.getLanguageManager().getRaw(subTitlePath) != null) {
+                            // It's a language key path, use it directly
+                            subtitle = plugin.getLanguageManager().getAreaTransitionMessage(subTitlePath, areaName, player.getName());
+                        } else {
+                            // It's a raw message, process directly
+                            subtitle = plugin.getLanguageManager().getAreaTransitionMessage(subTitlePath, areaName, player.getName());
+                        }
+                        
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Processed leave subtitle: " + subtitle + " with placeholders: " + placeholders);
+                            plugin.debug("Processed leave subtitle: " + subtitle + " with placeholders for area: " + areaName + " and player: " + player.getName());
                         }
                     }
                     
@@ -1006,7 +1058,7 @@ public class ProtectionListener implements Listener {
             if (attacker instanceof Player player) {
                 if (handleProtection(event.getVehicle().getPosition(), player, "allowVehicleDamage")) {
                     event.setCancelled(true);
-                    sendProtectionMessage(player, "messages.protection.vehicleDamage", new HashMap<>());
+                    sendProtectionMessage(player, "messages.protection.vehicleDamage");
                 }
             }
         } finally {
@@ -1023,7 +1075,7 @@ public class ProtectionListener implements Listener {
                 event.setCancelled(true);
                 // Fire messages only shown for player-caused ignition
                 if (event.getEntity() instanceof Player player) {
-                    sendProtectionMessage(player, "messages.protection.fire", new HashMap<>());
+                    sendProtectionMessage(player, "messages.protection.fire");
                 }
             }
         } finally {
@@ -1298,21 +1350,39 @@ public class ProtectionListener implements Listener {
     public void onPermissionChange(PermissionChangeEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Invalidate any cached permissions for this area/group
-            String cacheKey = event.getArea().getName() + ":" + 
-                            event.getGroup() + ":" + 
-                            event.getPermission();
-            permissionCache.invalidate(cacheKey);
+            Area area = event.getArea();
+            String permission = event.getPermission();
+            String group = event.getGroup();
             
-            // Log permission change if debug is enabled
+            // Invalidate specific area cache
+            permissionChecker.invalidateCache(area.getName());
+            
+            if (group != null) {
+                // If this is a group permission change, also invalidate for all players in the group
+                Set<String> playersInGroup = plugin.getLuckPermsCache().getPlayersInGroup(group);
+                if (playersInGroup != null) {
+                    playersInGroup.forEach(playerName -> {
+                        permissionChecker.invalidatePlayerCache(playerName);
+                        // Fix: Collect keys first, then invalidate
+                        Set<String> keysToInvalidate = new HashSet<>();
+                        for (String key : protectionCache.asMap().keySet()) {
+                            if (key.contains(":" + permission + ":") && key.endsWith(":" + playerName)) {
+                                keysToInvalidate.add(key);
+                            }
+                        }
+                        protectionCache.invalidateAll(keysToInvalidate);
+                    });
+                }
+            }
+            
             if (plugin.isDebugMode()) {
-                plugin.getLogger().debug(String.format(
-                    "Permission changed in area %s for group %s: %s %s -> %s",
-                    event.getArea().getName(),
-                    event.getGroup(),
-                    event.getPermission(),
+                plugin.debug(String.format(
+                    "Permission changed in area %s: %s %s -> %s (group: %s) - cache invalidated",
+                    area.getName(),
+                    permission,
                     event.getOldValue(),
-                    event.getNewValue()
+                    event.getNewValue(),
+                    group != null ? group : "none"
                 ));
             }
         } finally {
@@ -1325,39 +1395,56 @@ public class ProtectionListener implements Listener {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             Area area = event.getArea();
+            Player player = event.getPlayer();
             
-            // Clear all permission types
+            // Always invalidate area cache
+            permissionChecker.invalidateCache(area.getName());
+            
+            // If this is a player-specific update, also invalidate their caches
+            if (player != null) {
+                permissionChecker.invalidatePlayerCache(player.getName());
+                // Fix: Collect keys first, then invalidate
+                Set<String> playerKeysToInvalidate = new HashSet<>();
+                for (String key : protectionCache.asMap().keySet()) {
+                    if (key.endsWith(":" + player.getName())) {
+                        playerKeysToInvalidate.add(key);
+                    }
+                }
+                protectionCache.invalidateAll(playerKeysToInvalidate);
+                
+                // If player is in any groups, also invalidate group caches
+                List<String> playerGroupsList = plugin.getLuckPermsCache().getGroups(player.getName());
+                Set<String> playerGroups = new HashSet<>(playerGroupsList); // Convert List to Set
+                if (playerGroups != null) {
+                    playerGroups.forEach(group -> {
+                        // Fix: Collect keys first, then invalidate
+                        Set<String> groupKeysToInvalidate = new HashSet<>();
+                        for (String key : protectionCache.asMap().keySet()) {
+                            if (key.contains(":" + group + ":")) {
+                                groupKeysToInvalidate.add(key);
+                            }
+                        }
+                        protectionCache.invalidateAll(groupKeysToInvalidate);
+                    });
+                }
+            }
+
+            // Reload area from database to ensure fresh state
             try {
-                area.clearAllPermissions();
-            } catch (DatabaseException e) {
-                plugin.getLogger().error("Failed to clear permissions for area " + area.getName(), e);
-                return;
-            }
-            
-            // Invalidate all cached permissions for this area
-            String areaPrefix = area.getName() + ":";
-            permissionCache.asMap().keySet().removeIf(key -> key.startsWith(areaPrefix));
-            
-            // Clear player permission cache for this area
-            playerPermissionCache.clear();
-            
-            // Save the area to persist the changes
-            plugin.updateArea(area);
-            
-            // Send warning message to player if available
-            if (event.getPlayer() != null) {
-                event.getPlayer().sendMessage(plugin.getLanguageManager().get(
-                    "messages.form.areaPermissionResetWarning",
-                    Map.of("area", area.getName())
-                ));
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug(String.format(
-                    "Area permission update in area %s for category %s - cleared all permissions", 
-                    area.getName(),
-                    event.getCategory().name()
-                ));
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null && plugin.isDebugMode()) {
+                    plugin.debug(String.format(
+                        "Area permission update processed for '%s':\n" +
+                        "- Category: %s\n" +
+                        "- Player: %s\n" +
+                        "- Cache invalidated and area reloaded",
+                        area.getName(),
+                        event.getCategory().name(),
+                        player != null ? player.getName() : "ALL"
+                    ));
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area after permission update", e);
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_permission_update_handle");
@@ -1368,96 +1455,95 @@ public class ProtectionListener implements Listener {
     public void onLuckPermsGroupChange(LuckPermsGroupChangeEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Invalidate cached permissions for this area/group
-            String cachePrefix = event.getArea().getName() + ":" + event.getGroup();
-            permissionCache.asMap().keySet().removeIf(key -> key.startsWith(cachePrefix));
+            Area area = event.getArea();
+            String groupName = event.getGroup();
+            
+            // More thorough cache invalidation
+            permissionChecker.invalidateCache(area.getName());
+            
+            // Also invalidate caches for all affected players in this group
+            Set<String> playersInGroup = plugin.getLuckPermsCache().getPlayersInGroup(groupName);
+            if (playersInGroup != null) {
+                playersInGroup.forEach(playerName -> {
+                    permissionChecker.invalidatePlayerCache(playerName);
+                    // Fix: Collect keys first, then invalidate
+                    Set<String> keysToInvalidate = new HashSet<>();
+                    for (String key : protectionCache.asMap().keySet()) {
+                        if (key.endsWith(":" + playerName)) {
+                            keysToInvalidate.add(key);
+                        }
+                    }
+                    protectionCache.invalidateAll(keysToInvalidate);
+                });
+            }
             
             if (plugin.isDebugMode()) {
-                plugin.getLogger().debug(String.format(
-                    "LuckPerms group permissions changed in area %s for group %s",
-                    event.getArea().getName(),
-                    event.getGroup() 
+                plugin.debug(String.format(
+                    "LuckPerms group permissions changed in area %s for group %s - invalidated caches for %d players",
+                    area.getName(),
+                    groupName,
+                    playersInGroup != null ? playersInGroup.size() : 0
                 ));
             }
         } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "luckperms_group_change_handle"); 
+            plugin.getPerformanceMonitor().stopTimer(sample, "luckperms_group_change_handle");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onLuckPermsTrackChange(LuckPermsTrackChangeEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Area area = event.getArea();
+            String trackName = event.getTrack();
+            
+            // Invalidate area cache
+            permissionChecker.invalidateCache(area.getName());
+            
+            // Also invalidate caches for all affected players in this track
+            Set<String> playersInTrack = plugin.getLuckPermsCache().getPlayersInTrack(trackName);
+            if (playersInTrack != null) {
+                playersInTrack.forEach(playerName -> {
+                    permissionChecker.invalidatePlayerCache(playerName);
+                    // Fix: Collect keys first, then invalidate
+                    Set<String> keysToInvalidate = new HashSet<>();
+                    for (String key : protectionCache.asMap().keySet()) {
+                        if (key.endsWith(":" + playerName)) {
+                            keysToInvalidate.add(key);
+                        }
+                    }
+                    protectionCache.invalidateAll(keysToInvalidate);
+                });
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug(String.format(
+                    "LuckPerms track permissions changed in area %s for track %s - invalidated caches for %d players",
+                    area.getName(),
+                    trackName,
+                    playersInTrack != null ? playersInTrack.size() : 0
+                ));
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "luckperms_track_change_handle");
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onAreaDeleted(AreaDeletedEvent event) {
-        Area area = event.getArea();
-        if (area == null) {
-            return;
-        }
-
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            int cacheEntriesRemoved = 0;
+            Area area = event.getArea();
+            if (area == null) return;
 
-            // Use AtomicInteger for thread-safe counter that can be modified in lambda
-            AtomicInteger protectionCacheRemoved = new AtomicInteger(0);
-            
-            // Clear protection cache for the area's bounds
-            protectionCache.asMap().entrySet().removeIf(entry -> {
-                String[] parts = entry.getKey().split(":");
-                if (parts.length < 4) return false;
-                String world = parts[0];
-                double x = Double.parseDouble(parts[1]);
-                double y = Double.parseDouble(parts[2]);
-                double z = Double.parseDouble(parts[3]);
-                boolean shouldRemove = world.equals(area.toDTO().world()) &&
-                    x >= area.toDTO().bounds().xMin() && x <= area.toDTO().bounds().xMax() &&
-                    y >= area.toDTO().bounds().yMin() && y <= area.toDTO().bounds().yMax() &&
-                    z >= area.toDTO().bounds().zMin() && z <= area.toDTO().bounds().zMax();
-                if (shouldRemove) {
-                    protectionCacheRemoved.incrementAndGet();
-                }
-                return shouldRemove;
-            });
-
-            // Clear permission cache for this area
-            String areaPrefix = area.getName() + ":";
-            AtomicInteger permCacheRemoved = new AtomicInteger(0);
-            permissionCache.asMap().keySet().removeIf(key -> {
-                boolean shouldRemove = key.startsWith(areaPrefix);
-                if (shouldRemove) {
-                    permCacheRemoved.incrementAndGet();
-                }
-                return shouldRemove;
-            });
+            // Use new invalidation system
+            permissionChecker.invalidateCache(area.getName());
 
             // Clear temporary permissions for this area
-            AtomicInteger tempPermsRemoved = new AtomicInteger(0);
-            for (Set<String> permSet : temporaryPermissions.values()) {
-                int sizeBefore = permSet.size();
-                permSet.removeIf(perm -> perm.endsWith("." + area.getName()));
-                tempPermsRemoved.addAndGet(sizeBefore - permSet.size());
-            }
-
-            // Remove from player area cache
-            AtomicInteger areaNameRemoved = new AtomicInteger(0);
-            playerAreaCache.entrySet().removeIf(entry -> {
-                boolean shouldRemove = entry.getValue().equals(area.getName());
-                if (shouldRemove) {
-                    areaNameRemoved.incrementAndGet();
-                }
-                return shouldRemove;
-            });
+            temporaryPermissions.keySet().removeIf(key -> key.startsWith(area.getName() + ":"));
 
             if (plugin.isDebugMode()) {
-                plugin.debug(String.format(
-                    "Area deletion cache cleanup for '%s':\n" +
-                    "- Protection cache entries removed: %d\n" +
-                    "- Permission cache entries removed: %d\n" +
-                    "- Temporary permissions removed: %d\n" +
-                    "- Area name cache entries removed: %d",
-                    area.getName(),
-                    protectionCacheRemoved.get(),
-                    permCacheRemoved.get(),
-                    tempPermsRemoved.get(),
-                    areaNameRemoved.get()
-                ));
+                plugin.debug(String.format("Area deletion cache cleanup for '%s' completed", area.getName()));
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_deletion_cleanup");
@@ -1815,56 +1901,84 @@ public class ProtectionListener implements Listener {
         };
     }
 
+    /**
+     * Sends a protection message to the player.
+     * This handles formatting the message with the area name and sending it.
+     *
+     * @param player The player to send the message to
+     * @param message The message key or full message
+     */
     void sendProtectionMessage(Player player, String message) {
-        if (!plugin.isEnableMessages()) return;
+        if (player == null || !plugin.isEnableMessages()) return;
         
+        // Apply message cooldown
         long now = System.currentTimeMillis();
         long lastWarning = lastWarningTime.getOrDefault(player.getName(), 0L);
         
-        if (now - lastWarning >= WARNING_COOLDOWN) {
-            // Get the area at player's location
-            Area area = plugin.getHighestPriorityArea(
-                player.getLevel().getName(),
-                player.getX(),
-                player.getY(),
-                player.getZ()
-            );
+        if (now - lastWarning < WARNING_COOLDOWN) {
+            // Still on cooldown, don't send message
+            return;
+        }
+        
+        try {
+            // Find highest priority area at player position
+            Area area = getAreaAtPlayer(player);
+            String areaName = area != null ? area.getName() : "unknown area";
             
-            // Add area name to placeholders if available
-            HashMap<String, String> placeholders = new HashMap<>();
-            if (area != null) {
-                placeholders.put("area", area.getName());
-            }
+            // Get player's current position for context
+            Position pos = player.getPosition();
+            String worldName = pos.getLevel().getName();
             
-            // Use default message if none provided
-            if (message == null) {
-                message = plugin.getLanguageManager().get("messages.protectionDenied", placeholders);
+            if (message.startsWith("messages.")) {
+                // Message is a language key, use language manager
+                String messageContent = plugin.getLanguageManager().getProtectionMessage(
+                    message.replace("messages.protection.", ""), 
+                    areaName,
+                    player
+                );
+                player.sendMessage(messageContent);
             } else {
-                // Replace placeholders in the provided message
-                message = plugin.getLanguageManager().get(message, placeholders);
+                // Direct message, just use it as is but replace {area} placeholder
+                player.sendMessage(message.replace("{area}", areaName)
+                    .replace("{world}", worldName)
+                    .replace("{priority}", area != null ? String.valueOf(area.getPriority()) : "0"));
             }
             
-            player.sendMessage(message);
+            // Update last warning time
             lastWarningTime.put(player.getName(), now);
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().error("Error sending protection message: " + e.getMessage());
+                e.printStackTrace();
+            }
+            // Fallback to directly sending the raw message
+            player.sendMessage(message);
         }
     }
-
-    // Add this new overload for sendProtectionMessage
+    
+    /**
+     * Sends a protection message to the player with custom placeholders.
+     *
+     * @param player The player to send the message to
+     * @param messageKey The message key
+     * @param placeholders The placeholders to use in the message
+     */
     private void sendProtectionMessage(Player player, String messageKey, Map<String, String> placeholders) {
-        if (!plugin.isEnableMessages()) return;
+        if (player == null || !plugin.isEnableMessages()) return;
         
+        // Apply message cooldown
         long now = System.currentTimeMillis();
         long lastWarning = lastWarningTime.getOrDefault(player.getName(), 0L);
         
-        if (now - lastWarning >= WARNING_COOLDOWN) {
+        if (now - lastWarning < WARNING_COOLDOWN) {
+            // Still on cooldown, don't send message
+            return;
+        }
+        
+        try {
             // Get the area at player's location if not provided in placeholders
             if (!placeholders.containsKey("area")) {
-                Area area = plugin.getHighestPriorityArea(
-                    player.getLevel().getName(),
-                    player.getX(),
-                    player.getY(),
-                    player.getZ()
-                );
+                Area area = getAreaAtPlayer(player);
                 
                 if (area != null) {
                     placeholders.put("area", area.getName());
@@ -1873,8 +1987,23 @@ public class ProtectionListener implements Listener {
                     placeholders.put("area", "this area");
                 }
             }
-
-            String message = plugin.getLanguageManager().get(messageKey, placeholders);
+            
+            // Add player's world if not already set
+            if (!placeholders.containsKey("world") && player.getLevel() != null) {
+                placeholders.put("world", player.getLevel().getName());
+            }
+            
+            // Use our new method in LanguageManager that takes a Player
+            String message;
+            if (messageKey.startsWith("messages.protection.")) {
+                message = plugin.getLanguageManager().getProtectionMessage(
+                    messageKey.replace("messages.protection.", ""), 
+                    placeholders.getOrDefault("area", "this area"),
+                    player
+                );
+            } else {
+                message = plugin.getLanguageManager().get(messageKey, placeholders);
+            }
             
             if (message != null && !message.isEmpty()) {
                 player.sendMessage(message);
@@ -1886,6 +2015,13 @@ public class ProtectionListener implements Listener {
             } else if (plugin.isDebugMode()) {
                 plugin.getLogger().debug("Empty or null message for key: " + messageKey);
             }
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().error("Error sending protection message: " + e.getMessage());
+                e.printStackTrace();
+            }
+            // Fallback to directly sending the raw message
+            player.sendMessage(messageKey);
         }
     }
 
@@ -2049,11 +2185,50 @@ public class ProtectionListener implements Listener {
      * Sends a protection denied message to a player
      */
     protected void sendProtectionMessage(Player player, String action, Area area) {
-        if (player != null && plugin.isEnableMessages()) {
-            player.sendMessage(plugin.getLanguageManager().get(
-                "messages.protection." + action,
-                Map.of("area", getAreaName(area))
-            ));
+        if (player == null || !plugin.isEnableMessages()) return;
+        
+        // Apply message cooldown
+        long now = System.currentTimeMillis();
+        long lastWarning = lastWarningTime.getOrDefault(player.getName(), 0L);
+        
+        if (now - lastWarning < WARNING_COOLDOWN) {
+            // Still on cooldown, don't send message
+            return;
+        }
+        
+        try {
+            // If area is null, try to get it from player's position
+            if (area == null) {
+                area = getAreaAtPlayer(player);
+            }
+            
+            // Get area name or default
+            String areaName = area != null ? area.getName() : "this area";
+            
+            // Use our new overload that takes a player parameter
+            String message = plugin.getLanguageManager().getProtectionMessage(
+                action.replace("messages.protection.", ""), 
+                areaName,
+                player
+            );
+            
+            player.sendMessage(message);
+            
+            // Update last warning time
+            lastWarningTime.put(player.getName(), now);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Sent protection message for action " + action + " in area " + areaName);
+            }
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.getLogger().error("Error sending protection message with area: " + e.getMessage());
+                e.printStackTrace();
+            }
+            
+            // Fallback to basic message
+            player.sendMessage(plugin.getLanguageManager().get("messages.denied", 
+                Map.of("area", area != null ? area.getName() : "this area")));
         }
     }
 
@@ -2324,5 +2499,58 @@ public class ProtectionListener implements Listener {
         plugin.debug("  FINAL PROTECTION DECISION: " + (allowed ? "BLOCK" : "ALLOW"));
         
         return allowed;
+    }
+
+    /**
+     * Gets the highest priority area at a player's position.
+     * 
+     * @param player The player to check location for
+     * @return The highest priority area, or null if none found
+     */
+    private Area getAreaAtPlayer(Player player) {
+        if (player == null || player.getLevel() == null) return null;
+        
+        return plugin.getHighestPriorityArea(
+            player.getLevel().getName(),
+            player.getX(),
+            player.getY(),
+            player.getZ()
+        );
+    }
+
+    /**
+     * Checks if a block is a door, trapdoor or fence gate
+     * 
+     * @param block The block to check
+     * @return true if the block is a door/trapdoor/gate
+     */
+    private boolean isDoor(Block block) {
+        return switch (block.getId()) {
+            // Regular doors
+            case Block.WOODEN_DOOR_BLOCK,
+                 Block.SPRUCE_DOOR_BLOCK,
+                 Block.BIRCH_DOOR_BLOCK,
+                 Block.JUNGLE_DOOR_BLOCK,
+                 Block.ACACIA_DOOR_BLOCK,
+                 Block.DARK_OAK_DOOR_BLOCK,
+                 Block.CRIMSON_DOOR_BLOCK,
+                 Block.WARPED_DOOR_BLOCK,
+                 Block.IRON_DOOR_BLOCK -> true;
+            // Trapdoors
+            case Block.TRAPDOOR,
+                 Block.IRON_TRAPDOOR,
+                 Block.SPRUCE_TRAPDOOR, 
+                 Block.BIRCH_TRAPDOOR,
+                 Block.JUNGLE_TRAPDOOR,
+                 Block.ACACIA_TRAPDOOR,
+                 Block.DARK_OAK_TRAPDOOR,
+                 Block.CRIMSON_TRAPDOOR,
+                 Block.WARPED_TRAPDOOR -> true;
+            // Gates
+            case Block.FENCE_GATE,
+                 Block.CRIMSON_FENCE_GATE,
+                 Block.WARPED_FENCE_GATE -> true;
+            default -> false;
+        };
     }
 }

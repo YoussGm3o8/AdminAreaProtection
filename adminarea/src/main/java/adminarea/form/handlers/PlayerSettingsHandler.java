@@ -223,6 +223,12 @@ public class PlayerSettingsHandler extends BaseFormHandler {
 
             // Get current DTO
             AreaDTO currentDTO = area.toDTO();
+            String targetPlayer = playerData.getFormId();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing player permissions for " + targetPlayer + " in area " + area.getName());
+                plugin.debug("DTO before processing: " + currentDTO);
+            }
             
             // Process permissions
             Map<String, Boolean> newPerms = new HashMap<>();
@@ -234,28 +240,66 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             }
 
             // Update player permissions
-            String targetPlayer = playerData.getFormId();
             Map<String, Map<String, Boolean>> playerPerms = new HashMap<>(currentDTO.playerPermissions());
             Map<String, Boolean> oldPerms = playerPerms.getOrDefault(targetPlayer, new HashMap<>());
-            playerPerms.put(targetPlayer, newPerms);
+            
+            // IMPORTANT: Make sure to create new instances to avoid reference issues
+            playerPerms = new HashMap<>(playerPerms);
+            playerPerms.put(targetPlayer, new HashMap<>(newPerms));
 
+            if (plugin.isDebugMode()) {
+                plugin.debug("Updating player permissions for " + targetPlayer + " in area " + area.getName());
+                plugin.debug("Old permissions: " + oldPerms);
+                plugin.debug("New permissions: " + newPerms);
+                plugin.debug("Updated player permissions map: " + playerPerms);
+            }
+
+            // Create updated area with new permissions
             Area updatedArea = AreaBuilder.fromDTO(currentDTO)
                 .playerPermissions(playerPerms)
                 .build();
+
+            if (plugin.isDebugMode()) {
+                plugin.debug("Built updated area: " + updatedArea.getName());
+                plugin.debug("Updated area player permissions: " + updatedArea.getPlayerPermissions());
+                plugin.debug("DTO player permissions: " + updatedArea.toDTO().playerPermissions());
+            }
 
             // Fire event
             PlayerPermissionChangeEvent event = new PlayerPermissionChangeEvent(area, targetPlayer, oldPerms, newPerms);
             plugin.getServer().getPluginManager().callEvent(event);
 
             if (event.isCancelled()) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.form.permissionUpdateCancelled"));
                 return;
             }
 
-            // Update area in plugin
-            plugin.updateArea(updatedArea);
-            
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsUpdated",
-                Map.of("player", targetPlayer, "area", area.getName())));
+            // Update area in plugin (this will save to database)
+            try {
+                // IMPORTANT: Clear permission caches before updating
+                updatedArea.clearCaches();
+                plugin.updateArea(updatedArea);
+                
+                if (plugin.isDebugMode()) {
+                    // Verify the update worked by retrieving the area again
+                    Area verifyArea = plugin.getArea(area.getName());
+                    if (verifyArea != null) {
+                        plugin.debug("Verification - area player permissions after update: " + verifyArea.getPlayerPermissions());
+                        plugin.debug("Verification - permissions for " + targetPlayer + ": " + verifyArea.getPlayerPermissions(targetPlayer));
+                    } else {
+                        plugin.debug("Verification failed - area not found after update");
+                    }
+                }
+                
+                player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsUpdated",
+                    Map.of("player", targetPlayer, "area", area.getName())));
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to update player permissions for " + targetPlayer, e);
+                if (plugin.isDebugMode()) {
+                    e.printStackTrace();
+                }
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.failedToUpdatePermissions"));
+            }
 
             // Clear player selection and return to edit menu
             plugin.getFormIdMap().remove(player.getName() + PLAYER_DATA_KEY);
@@ -263,6 +307,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling player permissions response", e);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             handleCancel(player);
         }

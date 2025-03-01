@@ -72,6 +72,19 @@ public class CreateAreaHandler extends BaseFormHandler {
                 return;
             }
 
+            // Check if a global area already exists for this world when trying to create a global area
+            if (isGlobal) {
+                String worldName = player.getLevel().getName();
+                Area existingGlobalArea = plugin.getAreaManager().getGlobalAreaForWorld(worldName);
+                if (existingGlobalArea != null) {
+                    player.sendMessage(plugin.getLanguageManager().get("messages.area.globalExists", 
+                        Map.of("world", worldName, "area", existingGlobalArea.getName())));
+                    // Reopen form to let them try again
+                    plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                    return;
+                }
+            }
+
             // Initialize coordinates
             int x1, x2, y1, y2, z1, z2;
 
@@ -189,8 +202,10 @@ public class CreateAreaHandler extends BaseFormHandler {
             // Successfully created area
             plugin.saveArea(area);
             
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.created", 
-                Map.of("area", area.getName())));
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.created",
+                Map.of("area", area.getName(),
+                       "world", area.getWorld(),
+                       "priority", String.valueOf(area.getPriority()))));
 
             // Clear all form tracking data
             cleanup(player);

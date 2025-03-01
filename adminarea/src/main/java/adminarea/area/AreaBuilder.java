@@ -26,6 +26,7 @@ public class AreaBuilder {
     private Map<String, Map<String, Boolean>> playerPermissions;
     private JSONObject potionEffects;
     private boolean isGlobal = false;
+    private AdminAreaProtectionPlugin plugin;
 
     public AreaBuilder() {
         this.settings = new JSONObject();
@@ -41,6 +42,7 @@ public class AreaBuilder {
         initializeDefaultPermissions();
         this.trackPermissions = new HashMap<>(4, 1.0f);
         this.playerPermissions = new HashMap<>(8, 1.0f);
+        this.plugin = AdminAreaProtectionPlugin.getInstance();
     }
 
     private void initializeDefaultPermissions() {
@@ -195,8 +197,51 @@ public class AreaBuilder {
         return this;
     }
 
+    /**
+     * Set the player-specific permissions for this area.
+     * Each entry maps a player name to their permission map.
+     * 
+     * @param playerPermissions A map of player names to their permission maps
+     * @return this builder
+     */
     public AreaBuilder playerPermissions(Map<String, Map<String, Boolean>> playerPermissions) {
-        this.playerPermissions = new HashMap<>(playerPermissions);
+        if (playerPermissions == null) {
+            this.playerPermissions = new HashMap<>(4, 1.0f);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Player permissions set to empty map (null input)");
+            }
+        } else {
+            this.playerPermissions = new HashMap<>(playerPermissions);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Player permissions set to: " + this.playerPermissions);
+            }
+        }
+        return this;
+    }
+    
+    /**
+     * Add permissions for a specific player
+     * 
+     * @param playerName The player's name
+     * @param permissions The permission map
+     * @return this builder
+     */
+    public AreaBuilder addPlayerPermissions(String playerName, Map<String, Boolean> permissions) {
+        if (playerName == null || permissions == null) {
+            return this;
+        }
+        
+        if (this.playerPermissions == null) {
+            this.playerPermissions = new HashMap<>(4, 1.0f);
+        }
+        
+        this.playerPermissions.put(playerName, new HashMap<>(permissions));
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Added player permissions for " + playerName + ": " + permissions);
+            plugin.debug("Updated player permissions map: " + this.playerPermissions);
+        }
+        
         return this;
     }
 

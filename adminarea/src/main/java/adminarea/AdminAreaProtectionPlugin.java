@@ -25,16 +25,8 @@ import java.util.stream.Collectors;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.group.Group;
-import adminarea.listeners.EnderPearlListener;
-import adminarea.listeners.EntityListener;
-import adminarea.listeners.EnvironmentListener;
 import adminarea.listeners.FormResponseListener;
-import adminarea.listeners.ItemListener;
-import adminarea.listeners.ProtectionListener;
-import adminarea.listeners.VehicleListener;
 import adminarea.listeners.WandListener;
-import adminarea.listeners.PlayerEffectListener;
-import adminarea.listeners.ExperienceListener;
 import adminarea.listeners.FormCleanupListener;
 import adminarea.managers.AreaManager;
 import adminarea.managers.ConfigManager;
@@ -257,7 +249,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
                     try {
                         luckPermsApi = LuckPermsProvider.get();
-                        luckPermsCache = new LuckPermsCache(luckPermsApi);
+                        luckPermsCache = new LuckPermsCache(this, luckPermsApi);
                         
                         // Register listener for LuckPerms changes
                         luckPermsApi.getEventBus().subscribe(this, 

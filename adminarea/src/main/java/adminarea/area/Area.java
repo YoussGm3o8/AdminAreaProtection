@@ -1,6 +1,7 @@
 package adminarea.area;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.permissions.PermissionToggle;
 import adminarea.exception.DatabaseException;
 
 import java.util.*;
@@ -147,6 +148,11 @@ public final class Area {
         // Fast world name check first
         if (!this.world.equals(world)) return false;
         
+        // Fast path for global areas - avoid unnecessary bounds checks
+        if (isGlobal()) {
+            return true; // Global areas contain all points in their world
+        }
+        
         // Use a smaller epsilon for more precise boundary detection
         final double EPSILON = 0.0001;
         AreaDTO.Bounds bounds = dto.bounds();
@@ -174,6 +180,19 @@ public final class Area {
         }
         
         return isInside;
+    }
+
+    /**
+     * Checks if this is a global area (covers an entire world)
+     * Global areas have extreme bounds that cover the entire world
+     * 
+     * @return true if this is a global area
+     */
+    public boolean isGlobal() {
+        AreaDTO.Bounds bounds = dto.bounds();
+        // Global areas have extreme bounds
+        return bounds.xMin() <= -29000000 && bounds.xMax() >= 29000000 &&
+               bounds.zMin() <= -29000000 && bounds.zMax() >= 29000000;
     }
 
     /**
@@ -209,14 +228,24 @@ public final class Area {
     }
 
     /**
-     * Sets a toggle state with proper key normalization
+     * Sets a toggle state with proper key normalization and immediate database update
      */
     public void setToggleState(String permission, boolean state) {
         String normalizedPermission = normalizeToggleKey(permission);
         
         // Update cache and storage
         toggleStates.put(normalizedPermission, state);
-        toggleStateCache.invalidateAll(); // Invalidate all toggle cache, not just this key
+        toggleStateCache.invalidateAll();
+        
+        // We don't need to update settings in DTO since it's not stored in the database
+        // Just keep the toggle states updated in memory
+        
+        // Update database asynchronously
+        try {
+            plugin.getDatabaseManager().updateAreaToggleState(name, normalizedPermission, state);
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update toggle state in database", e);
+        }
         
         // Invalidate protection cache in ProtectionListener
         if (plugin.getListenerManager() != null && 
@@ -228,36 +257,15 @@ public final class Area {
             if (plugin.getListenerManager().getEnvironmentListener() != null) {
                 plugin.getListenerManager().getEnvironmentListener().invalidateCache();
             }
-            
-            // Directly access and invalidate permission cache in PermissionChecker
-            try {
-                var protectionListener = plugin.getListenerManager().getProtectionListener();
-                java.lang.reflect.Field field = protectionListener.getClass().getDeclaredField("permissionChecker");
-                field.setAccessible(true);
-                var permChecker = field.get(protectionListener);
-                
-                // Call invalidateCache on the permission checker 
-                java.lang.reflect.Method invalidateMethod = permChecker.getClass().getMethod("invalidateCache");
-                invalidateMethod.invoke(permChecker);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Invalidated permission checker cache via reflection");
-                }
-            } catch (Exception e) {
-                // If reflection fails, don't crash, just log
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Failed to invalidate permission checker cache via reflection: " + e.getMessage());
-                }
-            }
         }
         
         if (plugin.isDebugMode()) {
             plugin.debug("Setting toggle state for " + normalizedPermission + " to " + state + " in area " + name);
         }
     }
-    
+
     /**
-     * Sets a toggle state with proper key normalization for integer values (used for potion effect strengths)
+     * Sets a toggle state with proper key normalization for integer values
      */
     public void setToggleState(String permission, int value) {
         String normalizedPermission = normalizeToggleKey(permission);
@@ -266,13 +274,21 @@ public final class Area {
         toggleStates.put(normalizedPermission, value);
         toggleStateCache.invalidateAll();
         
+        // We don't need to update settings in DTO since it's not stored in the database
+        // Just keep the toggle states updated in memory
+        
+        // Update database asynchronously
+        try {
+            plugin.getDatabaseManager().updateAreaToggleState(name, normalizedPermission, value);
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update toggle state in database", e);
+        }
+        
         // Invalidate protection cache in ProtectionListener
         if (plugin.getListenerManager() != null && 
             plugin.getListenerManager().getProtectionListener() != null) {
-            // Cleanup will invalidate both protection listener cache and permission checker cache
             plugin.getListenerManager().getProtectionListener().cleanup();
             
-            // Also invalidate environment listener cache
             if (plugin.getListenerManager().getEnvironmentListener() != null) {
                 plugin.getListenerManager().getEnvironmentListener().invalidateCache();
             }
@@ -506,16 +522,22 @@ public final class Area {
         // Create a JSONObject from toggleStates map
         JSONObject toggleStatesJson = new JSONObject(toggleStates);
         
-        // Ensure settings and toggle states are in sync
+        // Create a copy of the original settings
         JSONObject updatedSettings = new JSONObject(dto.settings());
+        
+        // Ensure toggle states are reflected in settings for backward compatibility
+        // This is only for in-memory representation, not database storage
         for (String key : toggleStates.keySet()) {
+            Object value = toggleStates.get(key);
+            
             // For toggle states with the prefix, also add them to settings without the prefix
             if (key.startsWith("gui.permissions.toggles.")) {
                 String shortKey = key.substring("gui.permissions.toggles.".length());
-                updatedSettings.put(shortKey, toggleStates.get(key));
+                updatedSettings.put(shortKey, value);
             }
+            
             // Also add the full key to settings
-            updatedSettings.put(key, toggleStates.get(key));
+            updatedSettings.put(key, value);
         }
         
         if (plugin.isDebugMode()) {
@@ -531,10 +553,10 @@ public final class Area {
             dto.bounds(),
             priority,
             dto.showTitle(),
-            updatedSettings,  // Use the updated settings
+            updatedSettings,  // Use the updated settings for in-memory representation
             new HashMap<>(groupPermissions),
             dto.inheritedPermissions(),
-            toggleStatesJson,  // Use the actual toggle states
+            toggleStatesJson,  // Use the actual toggle states for database storage
             dto.defaultToggleStates(),
             dto.inheritedToggleStates(),
             dto.permissions(),
@@ -590,12 +612,6 @@ public final class Area {
         return result;
     }
 
-    private boolean isGlobal() {
-        AreaDTO.Bounds bounds = dto.bounds();
-        return bounds.xMin() <= -29000000 && bounds.xMax() >= 29000000 &&
-               bounds.zMin() <= -29000000 && bounds.zMax() >= 29000000;
-    }
-
     public void cleanup() {
         containsCache.invalidateAll();
         effectivePermissionCache.clear();
@@ -647,21 +663,31 @@ public final class Area {
         return trackPermissions;
     }
 
+    /**
+     * Get all player-specific permissions for this area
+     * @return Map of player names to their permission maps
+     */
     public Map<String, Map<String, Boolean>> getPlayerPermissions() {
         // Return cached permissions if available
         if (cachedPlayerPermissions != null) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Getting player permissions for area " + name + " (cached)");
+            }
             return new HashMap<>(cachedPlayerPermissions);
         }
 
         if (plugin.isDebugMode()) {
             plugin.debug("Getting player permissions for area " + name + " (not cached)");
         }
-
+        
         // Cache permissions
         cachedPlayerPermissions = new HashMap<>(playerPermissions);
         return new HashMap<>(cachedPlayerPermissions);
     }
-
+    
+    /**
+     * Get permissions for a specific player in this area
+     */
     public Map<String, Boolean> getPlayerPermissions(String playerName) {
         if (plugin.isDebugMode()) {
             plugin.debug("Getting permissions for player " + playerName + " in area " + name);
@@ -684,14 +710,25 @@ public final class Area {
         // Update local map
         playerPermissions.put(playerName, new HashMap<>(permissions));
         
+        // Clear cache to ensure fresh data is used
+        cachedPlayerPermissions = null;
+        
         // Save to database
         try {
+            // Create updated DTO with current permissions
+            AreaDTO updatedDTO = toDTO();
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Updated DTO player permissions: " + updatedDTO.playerPermissions());
+                plugin.debug("  Current player permissions map: " + playerPermissions);
+            }
+            
             plugin.getDatabaseManager().saveArea(this);
             if (plugin.isDebugMode()) {
                 plugin.debug("  Saved updated permissions to database");
             }
         } catch (Exception e) {
             plugin.getLogger().error("Failed to save player permissions to database", e);
+            throw new DatabaseException("Failed to save player permissions to database", e);
         }
     }
 
@@ -704,15 +741,26 @@ public final class Area {
         // Update local map
         Map<String, Boolean> playerPerms = playerPermissions.computeIfAbsent(playerName, k -> new HashMap<>());
         playerPerms.put(permission, value);
+        
+        // Clear cache to ensure fresh data is used
+        cachedPlayerPermissions = null;
 
         // Save to database
         try {
+            // Create updated DTO with current permissions
+            AreaDTO updatedDTO = toDTO();
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Updated DTO player permissions: " + updatedDTO.playerPermissions());
+                plugin.debug("  Current player permissions map: " + playerPermissions);
+            }
+            
             plugin.getDatabaseManager().saveArea(this);
             if (plugin.isDebugMode()) {
                 plugin.debug("  Saved updated permission to database");
             }
         } catch (Exception e) {
             plugin.getLogger().error("Failed to save player permission to database", e);
+            throw new DatabaseException("Failed to save player permission to database", e);
         }
     }
 
@@ -890,5 +938,237 @@ public final class Area {
                 plugin.getListenerManager().getEnvironmentListener().invalidateCache();
             }
         }
+    }
+
+    /**
+     * Get a setting value with automatic type casting.
+     * This is a more optimized version of getSettingInt/getSettingBoolean that avoids multiple lookups.
+     *
+     * @param key The setting key to get
+     * @param defaultValue The default value to return if the setting is not found
+     * @return The setting value, or defaultValue if not found
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getSettingObject(String key, T defaultValue) {
+        String normalizedKey = normalizeToggleKey(key);
+        
+        // Try cache first for better performance
+        if (toggleStateCache != null) {
+            if (defaultValue instanceof Boolean) {
+                Boolean cachedResult = toggleStateCache.getIfPresent(normalizedKey);
+                if (cachedResult != null) {
+                    return (T) cachedResult;
+                }
+            }
+        }
+        
+        // Try to get the value from toggleStates
+        Object result = toggleStates.get(normalizedKey);
+        if (result == null) {
+            return defaultValue;
+        }
+        
+        // Handle type conversion
+        try {
+            if (defaultValue instanceof Boolean && result instanceof Number) {
+                // If we're expecting a boolean but got a number, treat 0 as false, anything else as true
+                return (T) Boolean.valueOf(((Number) result).intValue() != 0);
+            } else if (defaultValue instanceof Integer && result instanceof Boolean) {
+                // If we're expecting an integer but got a boolean, treat false as 0, true as 1
+                return (T) Integer.valueOf(((Boolean) result) ? 1 : 0);
+            } else if (defaultValue instanceof Integer && result instanceof Number) {
+                // If we're expecting an integer and got a number, convert to integer
+                return (T) Integer.valueOf(((Number) result).intValue());
+            } else if (defaultValue instanceof Boolean && result instanceof Boolean) {
+                // If we're expecting a boolean and got a boolean, return as is
+                return (T) result;
+            } else if (defaultValue instanceof String && result instanceof String) {
+                // If we're expecting a string and got a string, return as is
+                return (T) result;
+            }
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error converting setting " + key + " with value " + result + ": " + e.getMessage());
+            }
+        }
+        
+        // If we can't convert the type properly, return the default
+        return defaultValue;
+    }
+
+    /**
+     * Synchronizes toggles between the settings object and toggle state maps
+     * This ensures all toggle states are properly saved to the database
+     * @return The updated Area with synchronized toggle states
+     */
+    public Area synchronizeToggleStates() {
+        AreaDTO currentDTO = toDTO();
+        JSONObject settings = currentDTO.settings();
+        JSONObject toggleStatesJson = currentDTO.toggleStates();
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Synchronizing toggle states for area " + name);
+            plugin.debug("  Before - Toggle states: " + toggleStatesJson);
+        }
+        
+        // Ensure all toggle states from settings are in the toggleStates map
+        // This is important for backward compatibility
+        for (String key : settings.keySet()) {
+            if (PermissionToggle.isValidToggle(key) && !toggleStatesJson.has(key)) {
+                Object value = settings.opt(key);
+                toggleStatesJson.put(key, value);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Adding missing toggle from settings: " + key + " = " + value);
+                }
+            }
+            
+            // If this is a short key (without prefix), add it with the prefix too
+            if (!key.startsWith("gui.permissions.toggles.") && PermissionToggle.isValidToggle("gui.permissions.toggles." + key)) {
+                String fullKey = "gui.permissions.toggles." + key;
+                if (!toggleStatesJson.has(fullKey)) {
+                    Object value = settings.opt(key);
+                    toggleStatesJson.put(fullKey, value);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Adding prefixed toggle: " + fullKey + " = " + value);
+                    }
+                }
+            }
+        }
+        
+        // Also ensure all toggle states from the in-memory map are in the JSON
+        for (Map.Entry<String, Object> entry : toggleStates.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            
+            if (!toggleStatesJson.has(key)) {
+                toggleStatesJson.put(key, value);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Adding missing toggle from memory: " + key + " = " + value);
+                }
+            }
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("  After - Toggle states: " + toggleStatesJson);
+        }
+        
+        // Update area with synchronized toggle states
+        return AreaBuilder.fromDTO(currentDTO)
+            .toggleStates(toggleStatesJson)
+            .build();
+    }
+
+    /**
+     * Gets all toggle keys that have been set in this area
+     * @return Set of all toggle keys
+     */
+    public Set<String> getAllToggleKeys() {
+        Set<String> keys = new HashSet<>();
+        
+        // Add keys from toggleStates
+        for (String key : toggleStates.keySet()) {
+            keys.add(key);
+        }
+        
+        // Add keys from settings
+        JSONObject settingsJson = toDTO().settings();
+        for (String key : settingsJson.keySet()) {
+            if (key.startsWith("gui.permissions.toggles.")) {
+                keys.add(key);
+            }
+        }
+        
+        // Add keys from default toggles
+        for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+            keys.add(toggle.getPermissionNode());
+        }
+        
+        return keys;
+    }
+
+    /**
+     * Checks if this area has any potion effects
+     * @return true if the area has potion effects, false otherwise
+     */
+    public boolean hasPotionEffects() {
+        // Check if potionEffects JSON has any entries
+        if (potionEffects != null && potionEffects.length() > 0) {
+            return true;
+        }
+        
+        // Check for potion effect toggles in the settings
+        JSONObject settingsJson = toDTO().settings();
+        for (String key : settingsJson.keySet()) {
+            if (key.startsWith("gui.permissions.toggles.allowPotion")) {
+                boolean value = settingsJson.optBoolean(key, false);
+                if (value) {
+                    return true;
+                }
+                
+                // Also check for strength values > 0
+                String strengthKey = key + "Strength";
+                int strength = settingsJson.optInt(strengthKey, 0);
+                if (strength > 0) {
+                    return true;
+                }
+            }
+        }
+        
+        // Also check toggleStates map for direct toggle values
+        for (String key : toggleStates.keySet()) {
+            if (key.contains("allowPotion")) {
+                Object value = toggleStates.get(key);
+                
+                // Check boolean toggle values
+                if (value instanceof Boolean && (Boolean)value) {
+                    return true;
+                }
+                
+                // Check strength values
+                if (key.endsWith("Strength") && value instanceof Integer && (Integer)value > 0) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Gets all potion effects as a JSONObject
+     * @return JSONObject containing potion effects
+     */
+    public JSONObject getPotionEffectsAsJSON() {
+        // Return existing potionEffects if available
+        if (potionEffects != null && potionEffects.length() > 0) {
+            return new JSONObject(potionEffects.toString());
+        }
+        
+        // Rebuild from settings
+        JSONObject result = new JSONObject();
+        JSONObject settingsJson = toDTO().settings();
+        
+        // Check for potion effect toggles and their strength values
+        for (String key : settingsJson.keySet()) {
+            if (key.startsWith("gui.permissions.toggles.allowPotion")) {
+                boolean value = settingsJson.optBoolean(key, false);
+                if (value) {
+                    // Extract the potion effect name
+                    String potionName = key.replace("gui.permissions.toggles.allowPotion", "");
+                    
+                    // Check for strength value
+                    String strengthKey = key + "Strength";
+                    int strength = settingsJson.optInt(strengthKey, 1);
+                    
+                    // Add to result
+                    result.put(potionName, strength);
+                }
+            }
+        }
+        
+        return result;
     }
 }

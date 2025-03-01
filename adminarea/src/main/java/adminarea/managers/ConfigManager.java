@@ -26,7 +26,6 @@ public class ConfigManager {
 
     private void initializeDefaults() {
         defaults.put("enableMessages", true);
-        defaults.put("allowRegularAreaCreation", false);
         defaults.put("debug", false);
         defaults.put("wandItemType", 280); // Stick by default
         
@@ -53,6 +52,8 @@ public class ConfigManager {
         defaults.put("messages.areaCreated", "§aArea {area} created successfully.");
         defaults.put("messages.areaDeleted", "§aArea {area} deleted successfully.");
         defaults.put("messages.areaUpdated", "§aArea {area} updated successfully.");
+        defaults.put("messages.area.exists", "§cAn area with the name {area} already exists.");
+        defaults.put("messages.area.globalExists", "§cA global area already exists for world {world}: {area}");
         defaults.put("messages.selectionCleared", "§aSelection points cleared.");
         defaults.put("messages.selectionComplete", "§aBoth positions set! Use /area create to create your area.");
         defaults.put("messages.wandGiven", "§eYou have received the Area Wand!");
@@ -97,6 +98,7 @@ public class ConfigManager {
         defaultPerms.put("allowBreak", false);
         defaultPerms.put("allowInteract", false);
         defaultPerms.put("allowContainer", false);
+        defaultPerms.put("allowItemFrame", false);
         defaultPerms.put("allowPvP", false);
         defaultPerms.put("allowMobSpawn", true);
         defaultPerms.put("allowRedstone", true);
@@ -342,29 +344,7 @@ public class ConfigManager {
     }
 
     public Map<String, Object> getTitleConfig(String type) {
-        Map<String, Object> titleConfig = new HashMap<>();
-        ConfigSection section = config.getSection("title." + type);
-        
-        if (section != null) {
-            titleConfig = section.getAllMap();
-        } else {
-            // Fallback to defaults if section not found
-            if ("enter".equals(type)) {
-                titleConfig.put("main", "titles.enter.default.main");
-                titleConfig.put("subtitle", "titles.enter.default.subtitle");
-                titleConfig.put("fadeIn", 20);
-                titleConfig.put("stay", 40);
-                titleConfig.put("fadeOut", 20);
-            } else if ("leave".equals(type)) {
-                titleConfig.put("main", "titles.leave.default.main");
-                titleConfig.put("subtitle", "titles.leave.default.subtitle");
-                titleConfig.put("fadeIn", 20);
-                titleConfig.put("stay", 40);
-                titleConfig.put("fadeOut", 20);
-            }
-        }
-        
-        return titleConfig;
+        return config.getSection("title." + type).getAllMap();
     }
 
     /**

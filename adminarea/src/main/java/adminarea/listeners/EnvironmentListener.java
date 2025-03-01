@@ -74,6 +74,22 @@ public class EnvironmentListener implements Listener {
                     return false;
                 }
 
+                // Optimize global area check - most efficient path
+                Area globalArea = plugin.getAreaManager().getGlobalAreaForWorld(block.getLevel().getName());
+                if (globalArea != null) {
+                    // For environment events in global areas, only process if there are players in the world
+                    if (block.getLevel().getPlayers().isEmpty()) {
+                        // Skip if no players in the world - optimization for empty worlds
+                        protectionCache.put(cacheKey, false);
+                        return false;
+                    }
+                    
+                    // Check global area permission directly
+                    boolean result = !globalArea.getToggleState(permission);
+                    protectionCache.put(cacheKey, result);
+                    return result;
+                }
+
                 // Master check with try-catch
                 try {
                     if (!plugin.getAreaManager().shouldProcessEvent(pos, false)) {
@@ -85,15 +101,13 @@ public class EnvironmentListener implements Listener {
                     return false;
                 }
 
-                // Get the global area first - more efficient
-                Area globalArea = plugin.getAreaManager().getGlobalAreaForWorld(block.getLevel().getName());
-                if (globalArea != null) {
-                    boolean result = !globalArea.getToggleState(permission);
-                    protectionCache.put(cacheKey, result);
-                    return result;
+                // Only check local areas if we're near a player - skip expensive lookups if not
+                if (!isNearAnyPlayer(block)) {
+                    protectionCache.put(cacheKey, false);
+                    return false;
                 }
 
-                // Only check local areas if we're near a player
+                // Get areas at location
                 List<Area> areas = plugin.getAreaManager().getAreasAtLocation(
                     pos.getLevel().getName(),
                     pos.getX(),

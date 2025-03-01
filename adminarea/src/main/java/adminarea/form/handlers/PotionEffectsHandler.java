@@ -159,7 +159,8 @@ public class PotionEffectsHandler extends BaseFormHandler {
                     
                     if (plugin.isDebugMode()) {
                         plugin.debug("Processing effect: " + toggle.displayName + 
-                                    " with permission node: " + permissionNode);
+                                    " with permission node: " + permissionNode +
+                                    " and strength node: " + strengthNode);
                     }
                     
                     // Calculate index for slider (2 + index of effect)
@@ -215,8 +216,14 @@ public class PotionEffectsHandler extends BaseFormHandler {
                         // If strength > 0, also ensure the toggle is enabled (for backwards compatibility)
                         if (strengthValue > 0) {
                             area.setToggleState(permissionNode, true);
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Setting toggle state for " + permissionNode + " to TRUE");
+                            }
                         } else {
                             area.setToggleState(permissionNode, false);
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Setting toggle state for " + permissionNode + " to FALSE");
+                            }
                         }
                         
                         if (plugin.isDebugMode()) {
@@ -234,9 +241,59 @@ public class PotionEffectsHandler extends BaseFormHandler {
                 }
             }
 
-            // Save changes
-            plugin.updateArea(area);
+            // Save changes - first make sure toggle states are synchronized
+            if (changedSettings > 0) {
+                // Explicitly synchronize toggle states before recreation
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Before synchronization - toggle states: " + area.toDTO().toggleStates());
+                    plugin.debug("Before synchronization - potion effects: " + area.toDTO().potionEffects());
+                }
+                
+                area = area.synchronizeToggleStates();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("After synchronization - toggle states: " + area.toDTO().toggleStates());
+                    plugin.debug("After synchronization - settings: " + area.toDTO().settings());
+                    plugin.debug("After synchronization - potion effects: " + area.toDTO().potionEffects());
+                }
+                
+                // Now recreate the area with the updated toggle states and potion effects
+                area = plugin.getAreaManager().recreateArea(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Recreated area with " + changedSettings + " effect changes for area " + area.getName());
+                    plugin.debug("Final toggle states: " + area.toDTO().toggleStates());
+                    plugin.debug("Final settings: " + area.toDTO().settings());
+                    plugin.debug("Final potion effects: " + area.toDTO().potionEffects());
+                    
+                    // Double-check if the changes were saved
+                    try {
+                        Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                        if (freshArea != null) {
+                            plugin.debug("Verification from database:");
+                            plugin.debug("  Toggle states from DB: " + freshArea.toDTO().toggleStates());
+                            plugin.debug("  Settings from DB: " + freshArea.toDTO().settings());
+                            plugin.debug("  Potion effects from DB: " + freshArea.toDTO().potionEffects());
+                        }
+                    } catch (Exception e) {
+                        plugin.debug("Error verifying area from database: " + e.getMessage());
+                    }
+                }
+                
+                // Log area potion effects for debugging
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area " + area.getName() + " potion effects after recreation:");
+                    for (ToggleDefinition toggle : POTION_TOGGLES) {
+                        String permissionNode = normalizePermissionNode(toggle.permissionNode);
+                        String strengthNode = permissionNode + "Strength";
+                        int strength = area.getPotionEffectStrength(strengthNode);
+                        boolean toggleState = area.getToggleState(permissionNode);
+                        plugin.debug("  - " + toggle.displayName + ": strength=" + strength + ", toggle=" + toggleState);
+                    }
+                }
+            }
             
+            // Show success message with change count
             player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
                 Map.of(
                     "area", area.getName(),

@@ -52,7 +52,9 @@ public class DeleteAreaHandler extends BaseFormHandler {
             for (Area area : areas) {
                 String buttonText = area.getName();
                 if (area.toDTO().bounds().isGlobal()) {
-                    buttonText += "\n§3(Global Area)";
+                    buttonText += "\n§3(Global Area - " + area.getWorld() + ")";
+                } else {
+                    buttonText += "\n§7(World: " + area.getWorld() + ")";
                 }
                 form.addButton(new ElementButton(buttonText));
             }

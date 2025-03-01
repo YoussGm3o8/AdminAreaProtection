@@ -79,18 +79,6 @@ public class SpecialSettingsHandler extends BaseFormHandler {
             Area area = getEditingArea(player);
             if (area == null) return;
 
-            // Get current DTO
-            AreaDTO currentDTO = area.toDTO();
-            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
-
-            // Get category toggles
-            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
-            if (toggles == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
-                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
-                return;
-            }
-
             // Track number of changes
             int changedSettings = 0;
 
@@ -103,7 +91,15 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                 }
             }
 
-            // Skip header label (index 0)
+            // Get category toggles
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
+            if (toggles == null) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+                return;
+            }
+
+            // Skip header label element (index 0)
             // Process each toggle starting at index 1
             for (int i = 0; i < toggles.size(); i++) {
                 try {
@@ -114,11 +110,8 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                                     " with permission node: " + permissionNode);
                     }
                     
-                    // Get current value from settings
-                    boolean currentValue = updatedSettings.optBoolean(
-                        permissionNode, 
-                        toggles.get(i).getDefaultValue()
-                    );
+                    // Get current value directly from the area's toggle state
+                    boolean currentValue = area.getToggleState(permissionNode);
                     
                     // Get raw response first
                     Object rawResponse = response.getResponse(i + 1);
@@ -144,7 +137,10 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                     // Only count as changed if value is different
                     if (currentValue != toggleValue) {
                         changedSettings++;
-                        updatedSettings.put(permissionNode, toggleValue);
+                        
+                        // Update the toggle state directly in the area object
+                        area.setToggleState(permissionNode, toggleValue);
+                        
                         if (plugin.isDebugMode()) {
                             plugin.debug("Updated toggle " + permissionNode + " from " + 
                                 currentValue + " to " + toggleValue);
@@ -158,13 +154,41 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                 }
             }
 
-            // Create updated area
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .settings(updatedSettings)
-                .build();
-
-            // Save changes
-            plugin.updateArea(updatedArea); 
+            // Save changes - first make sure toggle states are synchronized
+            if (changedSettings > 0) {
+                // Explicitly synchronize toggle states before recreation
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Before synchronization - toggle states: " + area.toDTO().toggleStates());
+                }
+                
+                area = area.synchronizeToggleStates();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("After synchronization - toggle states: " + area.toDTO().toggleStates());
+                    plugin.debug("After synchronization - settings: " + area.toDTO().settings());
+                }
+                
+                // Now recreate the area with the updated toggle states
+                area = plugin.getAreaManager().recreateArea(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Recreated area with " + changedSettings + " toggle changes for area " + area.getName());
+                    plugin.debug("Final toggle states: " + area.toDTO().toggleStates());
+                    plugin.debug("Final settings: " + area.toDTO().settings());
+                    
+                    // Double-check if the changes were saved
+                    try {
+                        Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                        if (freshArea != null) {
+                            plugin.debug("Verification from database:");
+                            plugin.debug("  Toggle states from DB: " + freshArea.toDTO().toggleStates());
+                            plugin.debug("  Settings from DB: " + freshArea.toDTO().settings());
+                        }
+                    } catch (Exception e) {
+                        plugin.debug("Error verifying area from database: " + e.getMessage());
+                    }
+                }
+            }
             
             // Show success message with change count
             player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
@@ -174,7 +198,7 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                 )));
 
             // Return to edit menu
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling special settings", e);

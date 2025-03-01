@@ -9,6 +9,8 @@ import adminarea.listeners.ItemListener;
 import adminarea.listeners.PlayerEffectListener;
 import adminarea.listeners.ProtectionListener;
 import adminarea.listeners.VehicleListener;
+import adminarea.listeners.WandListener;
+import cn.nukkit.Player;
 import cn.nukkit.event.Listener;
 import io.micrometer.core.instrument.Timer;
 import java.util.ArrayList;
@@ -30,6 +32,7 @@ public class ListenerManager {
     private ItemListener itemListener;
     private EnvironmentListener environmentListener;
     private EntityListener entityListener;
+    private WandListener wandListener;
 
     /**
      * Creates a new ListenerManager and initializes all listeners
@@ -72,6 +75,9 @@ public class ListenerManager {
             
             entityListener = new EntityListener(plugin, protectionListener);
             listeners.add(entityListener);
+            
+            wandListener = new WandListener(plugin);
+            listeners.add(wandListener);
             
             // Register all listeners with the server
             for (Listener listener : listeners) {
@@ -125,6 +131,10 @@ public class ListenerManager {
             protectionListener.cleanup();
         }
         
+        if (wandListener != null) {
+            wandListener.cleanup();
+        }
+        
         // Clear the entity handler's cache
         adminarea.entity.MonsterHandler.cleanup();
         
@@ -134,12 +144,12 @@ public class ListenerManager {
     /**
      * Handles a player leaving the server
      * 
-     * @param playerName The name of the player who left
+     * @param player The player who left
      */
-    public void handlePlayerQuit(String playerName) {
+    public void handlePlayerQuit(Player player) {
         // Clean up any player-specific caches
         if (protectionListener != null) {
-            protectionListener.cleanup();
+            protectionListener.cleanup(player);
         }
     }
     
@@ -177,5 +187,14 @@ public class ListenerManager {
      */
     public PlayerEffectListener getPlayerEffectListener() {
         return playerEffectListener;
+    }
+    
+    /**
+     * Gets the wand listener
+     * 
+     * @return The wand listener
+     */
+    public WandListener getWandListener() {
+        return wandListener;
     }
 }

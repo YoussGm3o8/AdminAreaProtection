@@ -56,10 +56,7 @@ public class PluginSettingsHandler extends BaseFormHandler {
                 plugin.getLanguageManager().get("gui.pluginSettings.labels.enableMessages"),
                 plugin.getConfigManager().getBoolean("enableMessages", true)
             ));
-            form.addElement(new ElementToggle(
-                plugin.getLanguageManager().get("gui.pluginSettings.labels.allowRegularAreaCreation"),
-                plugin.getConfigManager().getBoolean("allowRegularAreaCreation", false)
-            ));
+            // Removed allowRegularAreaCreation toggle
 
             // Area Settings
             form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.pluginSettings.sections.area")));
@@ -142,37 +139,37 @@ public class PluginSettingsHandler extends BaseFormHandler {
             plugin.setDebugMode(response.getToggleResponse(1));
             plugin.getConfigManager().set("debugStackTraces", response.getToggleResponse(2));
             plugin.getConfigManager().set("enableMessages", response.getToggleResponse(3));
-            plugin.getConfigManager().set("allowRegularAreaCreation", response.getToggleResponse(4));
+            // Removed allowRegularAreaCreation toggle
 
             // Area Settings
-            plugin.getConfigManager().set("areaSettings.useMostRestrictiveMerge", response.getToggleResponse(6));
+            plugin.getConfigManager().set("areaSettings.useMostRestrictiveMerge", response.getToggleResponse(5));
 
             // Tool Settings
-            int wandItemType = Integer.parseInt(response.getInputResponse(8));
+            int wandItemType = Integer.parseInt(response.getInputResponse(7));
             plugin.getConfigManager().set("wandItemType", wandItemType);
             
             // Handle particle visualization settings
             Map<String, Object> particleSection = new HashMap<>();
-            particleSection.put("enabled", response.getToggleResponse(9));
-            particleSection.put("duration", Integer.parseInt(response.getInputResponse(10)));
+            particleSection.put("enabled", response.getToggleResponse(8));
+            particleSection.put("duration", Integer.parseInt(response.getInputResponse(9)));
             plugin.getConfigManager().set("particleVisualization", particleSection);
             
-            plugin.getConfigManager().set("selectionCooldown", Integer.parseInt(response.getInputResponse(11)));
+            plugin.getConfigManager().set("selectionCooldown", Integer.parseInt(response.getInputResponse(10)));
 
             // Cache Settings
-            int cacheExpiry = Integer.parseInt(response.getInputResponse(13));
+            int cacheExpiry = Integer.parseInt(response.getInputResponse(12));
             validateRange("cacheExpiry", cacheExpiry, MIN_CACHE_EXPIRY, MAX_CACHE_EXPIRY);
             plugin.getConfigManager().set("cacheExpiryMinutes", cacheExpiry);
 
-            int undoHistory = Integer.parseInt(response.getInputResponse(14));
+            int undoHistory = Integer.parseInt(response.getInputResponse(13));
             validateRange("undoHistory", undoHistory, MIN_UNDO_HISTORY, MAX_UNDO_HISTORY);
             plugin.getConfigManager().set("undoHistorySize", undoHistory);
 
             // Integrations
-            plugin.getConfigManager().set("luckperms.enabled", response.getToggleResponse(16));
-            plugin.getConfigManager().set("luckperms.inheritPermissions", response.getToggleResponse(17));
+            plugin.getConfigManager().set("luckperms.enabled", response.getToggleResponse(15));
+            plugin.getConfigManager().set("luckperms.inheritPermissions", response.getToggleResponse(16));
             
-            int updateInterval = Integer.parseInt(response.getInputResponse(18));
+            int updateInterval = Integer.parseInt(response.getInputResponse(17));
             validateRange("updateInterval", updateInterval, MIN_UPDATE_INTERVAL, MAX_UPDATE_INTERVAL);
             plugin.getConfigManager().set("luckperms.updateInterval", updateInterval);
 
@@ -200,12 +197,12 @@ public class PluginSettingsHandler extends BaseFormHandler {
 
     private void validateNumericInputs(FormResponseCustom response) throws NumberFormatException {
         // Validate all numeric inputs
-        Integer.parseInt(response.getInputResponse(8));  // wandItemType
-        Integer.parseInt(response.getInputResponse(10)); // visualizationDuration
-        Integer.parseInt(response.getInputResponse(11)); // selectionCooldown
-        Integer.parseInt(response.getInputResponse(13)); // cacheExpiry
-        Integer.parseInt(response.getInputResponse(14)); // undoHistory
-        Integer.parseInt(response.getInputResponse(18)); // updateInterval
+        Integer.parseInt(response.getInputResponse(7));  // wandItemType
+        Integer.parseInt(response.getInputResponse(9)); // visualizationDuration
+        Integer.parseInt(response.getInputResponse(10)); // selectionCooldown
+        Integer.parseInt(response.getInputResponse(12)); // cacheExpiry
+        Integer.parseInt(response.getInputResponse(13)); // undoHistory
+        Integer.parseInt(response.getInputResponse(17)); // updateInterval
     }
 
     private void validateRange(String field, int value, int min, int max) {

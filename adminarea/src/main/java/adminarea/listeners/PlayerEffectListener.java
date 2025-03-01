@@ -34,11 +34,14 @@ public class PlayerEffectListener implements Listener {
     // Map to track which players are in which areas
     private final Map<String, String> playerAreaMap = new ConcurrentHashMap<>();
     
-    // Map to track active effects on players
+    // Map to track active effects on players - stores effect key to amplifier
     private final Map<String, Map<String, Integer>> playerEffects = new ConcurrentHashMap<>();
     
     // Task handler for effect application
     private TaskHandler effectTask;
+    
+    // Maximum effect strength - changing from 255 to 10
+    private static final int MAX_EFFECT_STRENGTH = 10;
     
     static {
         // Initialize potion permissions mapping
@@ -136,8 +139,16 @@ public class PlayerEffectListener implements Listener {
      * Start the task that applies effects to players in areas
      */
     private void startEffectTask() {
-        // Run every 5 seconds (100 ticks)
-        effectTask = plugin.getServer().getScheduler().scheduleRepeatingTask(plugin, this::applyAreaEffects, 100);
+        try {
+            // Run every 2 seconds (40 ticks) instead of 5 seconds for more responsive effects
+            effectTask = plugin.getServer().getScheduler().scheduleRepeatingTask(plugin, this::applyAreaEffects, 40);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Started potion effect application task - will run every 2 seconds");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to start potion effect task", e);
+        }
     }
     
     /**
@@ -146,23 +157,42 @@ public class PlayerEffectListener implements Listener {
     private void applyAreaEffects() {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Running area effects application task...");
+            }
+            
             // Process each online player
             for (Player player : plugin.getServer().getOnlinePlayers().values()) {
                 if (player == null || !player.isConnected()) continue;
                 
                 // Skip if player is bypassing protection
-                if (plugin.isBypassing(player.getName())) continue;
+                if (plugin.isBypassing(player.getName())) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Skipping player " + player.getName() + " who is bypassing protection");
+                    }
+                    continue;
+                }
                 
                 // Get the area at the player's position
                 Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(player.getPosition());
                 String areaName = (area != null) ? area.getName() : null;
                 String playerName = player.getName();
                 
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Checking effects for player " + playerName + " in area: " + 
+                        (areaName != null ? areaName : "none"));
+                }
+                
                 // Check if player has changed areas
                 String previousArea = playerAreaMap.get(playerName);
                 if (!Objects.equals(previousArea, areaName)) {
                     // Player has changed areas
                     if (previousArea != null) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Player " + playerName + " moved from area " + 
+                                previousArea + " to " + (areaName != null ? areaName : "none"));
+                        }
+                        
                         // Remove effects from previous area
                         removeAreaEffects(player, previousArea);
                     }
@@ -177,6 +207,9 @@ public class PlayerEffectListener implements Listener {
                 
                 // Apply effects for current area if any
                 if (area != null) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Applying area effects to player " + playerName + " in area " + areaName);
+                    }
                     applyAreaEffectsToPlayer(player, area);
                 }
             }
@@ -226,103 +259,140 @@ public class PlayerEffectListener implements Listener {
     }
     
     /**
-     * Apply effects from an area to a player
+     * Applies the potion effects from an area to a player.
+     *
+     * @param player The player to apply the effects to
+     * @param area The area to get the effects from
      */
     private void applyAreaEffectsToPlayer(Player player, Area area) {
+        if (player == null || area == null) {
+            return;
+        }
+
         String playerName = player.getName();
         String areaName = area.getName();
-        
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Applying area effects to player " + playerName + " in area " + areaName);
+        }
+
         // Get or create player effects map
         Map<String, Integer> activeEffects = playerEffects.computeIfAbsent(playerName, k -> new HashMap<>());
-        
-        // Check each potion effect toggle
-        for (Map.Entry<String, Integer> entry : EFFECT_IDS.entrySet()) {
-            String permissionNode = entry.getKey();
-            int effectId = entry.getValue();
-            
-            // Check if effect is enabled for this area
-            if (area.getToggleState(permissionNode)) {
-                // Get effect strength (0-255)
-                String strengthNode = permissionNode + "Strength";
-                int strength = area.getSettingInt(strengthNode, 0);
+        boolean effectsUpdated = false;
+
+        for (String effectKey : EFFECT_IDS.keySet()) {
+            try {
+                // Create the full permission node path
+                String fullPermNode = "gui.permissions.toggles." + effectKey;
                 
-                // Skip if strength is 0 (disabled)
-                if (strength == 0) continue;
+                // Get the strength using the settingInt method (1-10 scale)
+                int strength = area.getSettingInt(fullPermNode + "Strength", 0);
                 
-                // Calculate amplifier (strength - 1, capped at 0-255)
-                int amplifier = Math.max(0, Math.min(255, strength - 1));
-                
-                // Check if effect is already active with same strength
-                Integer currentAmplifier = activeEffects.get(permissionNode);
-                if (currentAmplifier != null && currentAmplifier == amplifier) {
-                    // Effect already active with same strength, skip
-                    continue;
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Checking effect " + effectKey + " for player " + playerName + 
+                        " in area " + areaName + ", strength=" + strength);
                 }
                 
-                // Apply the effect (duration 10 seconds, will be refreshed by task)
-                Effect effect = Effect.getEffect(effectId);
-                if (effect != null) {
-                    // Set effect properties
-                    effect.setAmplifier(amplifier);
-                    effect.setDuration(20 * 10); // 10 seconds in ticks
-                    effect.setVisible(true);
+                // Apply effect if strength > 0
+                if (strength > 0) {
+                    // Cap strength at maximum defined value
+                    if (strength > MAX_EFFECT_STRENGTH) {
+                        strength = MAX_EFFECT_STRENGTH;
+                    }
+
+                    // Get the potion effect ID
+                    int effectId = EFFECT_IDS.get(effectKey);
                     
-                    // Apply to player
+                    // Calculate amplifier (strength - 1, capped at 0-9)
+                    // This makes strength 1 = amplifier 0, strength 10 = amplifier 9
+                    int amplifier = Math.max(0, Math.min(MAX_EFFECT_STRENGTH - 1, strength - 1));
+                    
+                    // Check if effect is already active with same strength
+                    Integer currentAmplifier = activeEffects.get(effectKey);
+                    if (currentAmplifier != null && currentAmplifier == amplifier) {
+                        // Effect already active with same strength, skip
+                        continue;
+                    }
+
+                    // Create and apply the effect
+                    Effect effect = Effect.getEffect(effectId);
+                    effect.setAmplifier(amplifier);
+                    effect.setDuration(Integer.MAX_VALUE);
+                    effect.setVisible(true);
                     player.addEffect(effect);
                     
-                    // Track the effect
-                    activeEffects.put(permissionNode, amplifier);
-                    
-                    // Send message if this is a new effect or strength changed
-                    if (currentAmplifier == null) {
-                        // New effect
-                        String effectName = getEffectName(effectId);
-                        player.sendMessage(plugin.getLanguageManager().get("potionEffect.applied", 
-                            Map.of(
-                                "effect", effectName,
-                                "strength", String.valueOf(strength),
-                                "area", areaName
-                            )));
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Applied " + effectName + " effect (level " + strength + 
-                                ") to player " + playerName + " in area " + areaName);
-                        }
-                    } else if (currentAmplifier != amplifier) {
-                        // Strength changed
-                        String effectName = getEffectName(effectId);
-                        player.sendMessage(plugin.getLanguageManager().get("potionEffect.strength.set", 
-                            Map.of(
-                                "effect", effectName,
-                                "strength", String.valueOf(strength),
-                                "area", areaName
-                            )));
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Updated " + effectName + " effect from level " + (currentAmplifier + 1) + 
-                                " to level " + strength + " for player " + playerName + " in area " + areaName);
-                        }
-                    }
-                }
-            } else {
-                // Effect is disabled for this area, remove if active
-                if (activeEffects.containsKey(permissionNode)) {
-                    player.removeEffect(effectId);
-                    String effectName = getEffectName(effectId);
-                    player.sendMessage(plugin.getLanguageManager().get("potionEffect.removed", 
-                        Map.of(
-                            "effect", effectName,
-                            "area", areaName
-                        )));
-                    
-                    activeEffects.remove(permissionNode);
+                    // Track the effect for this player
+                    activeEffects.put(effectKey, amplifier);
+                    effectsUpdated = true;
                     
                     if (plugin.isDebugMode()) {
-                        plugin.debug("Removed " + effectName + " effect from player " + 
-                            playerName + " in area " + areaName);
+                        plugin.debug("Applied effect " + getEffectName(effectId) + " with strength " + strength + 
+                            " (amplifier " + amplifier + ") to player " + playerName + " in area " + areaName);
+                    }
+                    
+                    // Get the effect display name with roman numeral
+                    String effectDisplayName = getEffectName(effectId) + " " + getRomanNumeralFromAmplifier(amplifier);
+                    
+                    // Inform the player
+                    String message;
+                    if (currentAmplifier == null) {
+                        // New effect
+                        message = plugin.getLanguageManager().get(
+                            "potionEffect.applied",
+                            Map.of(
+                                "effect", effectDisplayName,
+                                "strength", String.valueOf(strength),
+                                "area", areaName
+                            )
+                        );
+                    } else {
+                        // Updated effect
+                        message = plugin.getLanguageManager().get(
+                            "messages.effect.updated",
+                            Map.of(
+                                "effect", effectDisplayName,
+                                "strength", String.valueOf(strength),
+                                "area", areaName
+                            )
+                        );
+                    }
+                    player.sendMessage(message);
+                } else if (strength == 0) {
+                    // If strength is explicitly 0, remove the effect if it's active
+                    Integer currentAmplifier = activeEffects.get(effectKey);
+                    if (currentAmplifier != null) {
+                        // Effect is currently active, remove it
+                        int effectId = EFFECT_IDS.get(effectKey);
+                        player.removeEffect(effectId);
+                        activeEffects.remove(effectKey);
+                        effectsUpdated = true;
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Removed effect " + getEffectName(effectId) + 
+                                " from player " + playerName + " in area " + areaName + 
+                                " because strength is now 0");
+                        }
+                        
+                        // Inform player
+                        player.sendMessage(plugin.getLanguageManager().get(
+                            "potionEffect.removed",
+                            Map.of(
+                                "effect", getEffectName(effectId),
+                                "area", areaName
+                            )
+                        ));
                     }
                 }
+            } catch (Exception e) {
+                plugin.getLogger().error("Error applying effect " + effectKey + " to player " + playerName, e);
+                if (plugin.isDebugMode()) {
+                    e.printStackTrace();
+                }
             }
+        }
+
+        if (effectsUpdated) {
+            playerEffects.put(playerName, activeEffects);
         }
     }
     
@@ -342,17 +412,23 @@ public class PlayerEffectListener implements Listener {
                 if (effectId != null) {
                     player.removeEffect(effectId);
                     String effectName = getEffectName(effectId);
-                    player.sendMessage(plugin.getLanguageManager().get("potionEffect.removed", 
+                    
+                    // Get amplifier for more detailed logging
+                    int amplifier = entry.getValue();
+                    
+                    player.sendMessage(plugin.getLanguageManager().get(
+                        "potionEffect.removed",
                         Map.of(
-                            "effect", effectName,
+                            "effect", effectName + " " + getRomanNumeralFromAmplifier(amplifier),
                             "area", areaName
-                        )));
+                        )
+                    ));
                     
                     activeEffects.remove(permissionNode);
                     
                     if (plugin.isDebugMode()) {
-                        plugin.debug("Removed " + effectName + " effect from player " + 
-                            playerName + " when leaving area " + areaName);
+                        plugin.debug("Removed " + effectName + " effect with amplifier " + amplifier + 
+                            " from player " + playerName + " when leaving area " + areaName);
                     }
                 }
             }
@@ -374,49 +450,69 @@ public class PlayerEffectListener implements Listener {
             Player player = event.getPlayer();
             Item item = event.getItem();
             
-            // Only handle potion items
+            // Only handle potions
             if (!(item instanceof ItemPotion)) {
                 return;
             }
             
-            // Skip if player is bypassing protection
-            if (plugin.isBypassing(player.getName())) {
+            ItemPotion potion = (ItemPotion) item;
+            int potionId = potion.getDamage();
+            
+            // Check if this potion type requires permission
+            String permNode = POTION_PERMISSIONS.get(potionId);
+            if (permNode == null) {
+                // No permission needed for this potion
                 return;
             }
             
-            // Get the area at the player's position
+            // Check if player is in a protected area
             Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(player.getPosition());
             if (area == null) {
-                // No area, allow the potion
+                // Not in a protected area
                 return;
             }
             
-            // Get the potion damage value (meta)
-            int potionDamage = item.getDamage();
+            // Get the full permission node
+            String fullPermNode = "gui.permissions.toggles." + permNode;
             
-            // Get the permission node for this potion
-            String permissionNode = POTION_PERMISSIONS.get(potionDamage);
-            if (permissionNode == null) {
-                // If we don't have a specific permission for this potion, allow it
+            // Check if player can bypass protection
+            if (plugin.isBypassing(player.getName())) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Player " + player.getName() + " bypassed potion restriction " +
+                        fullPermNode + " in area " + area.getName());
+                }
                 return;
             }
             
-            // Check if the potion is allowed in this area
-            if (!area.getToggleState(permissionNode)) {
-                // Potion is not allowed, cancel the event
+            // Check if potion is allowed in this area
+            int strength = area.getSettingInt(fullPermNode + "Strength", 0);
+            if (strength == 0) {
+                // Potion effect is not allowed
                 event.setCancelled(true);
                 
-                // Send a message to the player
-                String potionName = getPotionName(potionDamage);
-                player.sendMessage(plugin.getLanguageManager().get("messages.protection.potionEffect", 
-                    Map.of("effect", potionName, "area", area.getName())));
+                // Inform player
+                String effectName = getPotionName(potionId);
+                String message = plugin.getLanguageManager().get(
+                    "messages.potion.blocked",
+                    Map.of(
+                        "effect", effectName,
+                        "area", area.getName()
+                    )
+                );
+                player.sendMessage(message);
                 
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Blocked " + potionName + " potion for player " + player.getName() + 
-                                " in area " + area.getName());
+                    plugin.debug("Blocked player " + player.getName() + " from using " +
+                        effectName + " potion in area " + area.getName());
                 }
             }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error checking potion permission", e);
+            if (plugin.isDebugMode()) {
+                e.printStackTrace();
+            }
         } finally {
+            // Record performance metrics
             plugin.getPerformanceMonitor().stopTimer(sample, "potion_consume_check");
         }
     }
@@ -562,6 +658,31 @@ public class PlayerEffectListener implements Listener {
             case Effect.SATURATION -> "Saturation";
             case Effect.LEVITATION -> "Levitation";
             default -> "Unknown Effect";
+        };
+    }
+    
+    /**
+     * Convert an amplifier value to a Roman numeral for display
+     * 
+     * @param amplifier The potion amplifier (0-based)
+     * @return The Roman numeral representation (I for amplifier 0, II for amplifier 1, etc.)
+     */
+    private String getRomanNumeralFromAmplifier(int amplifier) {
+        // Add 1 to convert 0-based amplifier to 1-based level
+        int level = amplifier + 1;
+        
+        return switch (level) {
+            case 1 -> "I";
+            case 2 -> "II";
+            case 3 -> "III";
+            case 4 -> "IV";
+            case 5 -> "V";
+            case 6 -> "VI";
+            case 7 -> "VII";
+            case 8 -> "VIII";
+            case 9 -> "IX";
+            case 10 -> "X";
+            default -> String.valueOf(level);
         };
     }
 }
