@@ -8,19 +8,11 @@ import cn.nukkit.Player;
 import cn.nukkit.utils.Config;
 
 import java.io.File;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-import com.google.gson.JsonElement;
 
 public class LanguageManager {
     private final AdminAreaProtectionPlugin plugin;
@@ -363,9 +355,25 @@ public class LanguageManager {
     
     /**
      * Gets current time formatted for messages
+     * Uses configurable format and timezone if specified in config
      */
     private String getCurrentTimeFormatted() {
-        return new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
+        try {
+            String timeFormat = config.getString("timeFormat", "HH:mm:ss");
+            String timezone = config.getString("timezone", "");
+            
+            java.text.SimpleDateFormat dateFormat = new java.text.SimpleDateFormat(timeFormat);
+            
+            // Set timezone if specified
+            if (!timezone.isEmpty()) {
+                dateFormat.setTimeZone(java.util.TimeZone.getTimeZone(timezone));
+            }
+            
+            return dateFormat.format(new java.util.Date());
+        } catch (Exception e) {
+            // Fallback to basic format if any error occurs
+            return new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
+        }
     }
 
     private String getString(String path) {

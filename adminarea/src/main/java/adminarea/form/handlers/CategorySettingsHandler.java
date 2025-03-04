@@ -16,6 +16,7 @@ import cn.nukkit.form.window.FormWindowCustom;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -85,69 +86,47 @@ public class CategorySettingsHandler extends BaseFormHandler {
         Area area = getEditingArea(player);
         if (area == null) return;
 
-        // Get category from form ID
-        PermissionToggle.Category category = getCategoryFromFormId(
-            plugin.getFormIdMap().get(player.getName()).getFormId()
-        );
-
-        if (plugin.isDebugMode()) {
-            plugin.debug("Processing " + category + " toggles for area " + area.getName());
+        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
+        if (toggles == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+            return;
         }
 
-        // Create list to track changes
-        List<String> changedToggles = new ArrayList<>();
-
+        // Process toggle responses
+        Map<String, Boolean> toggleChanges = new HashMap<>();
+        
         // Skip label element (index 0)
-        // Process each toggle from index 1 onwards
-        int elementIndex = 1;
-        for (PermissionToggle toggle : PermissionToggle.getTogglesByCategory().get(category)) {
+        for (int i = 0; i < toggles.size(); i++) {
             try {
-                String permissionNode = toggle.getPermissionNode();
-                if (!permissionNode.startsWith("gui.permissions.toggles.")) {
-                    permissionNode = "gui.permissions.toggles." + permissionNode;
-                }
-
-                // Get current state
+                PermissionToggle toggle = toggles.get(i);
+                String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
                 boolean currentValue = area.getToggleState(permissionNode);
-
-                // Get response for this toggle
-                Object rawResponse = response.getResponse(elementIndex++);
+                
+                Object rawResponse = response.getResponse(i + 1);
                 if (rawResponse == null) continue;
-
-                // Convert response to boolean
-                boolean newValue;
+                
+                boolean newValue = false;
                 if (rawResponse instanceof Boolean) {
                     newValue = (Boolean) rawResponse;
                 } else {
                     continue;
                 }
-
-                // Only update if value changed
+                
+                // Only track changes, don't apply yet
                 if (currentValue != newValue) {
-                    area.setToggleState(permissionNode, newValue);
-                    changedToggles.add(permissionNode);
+                    toggleChanges.put(permissionNode, newValue);
                 }
-
             } catch (Exception e) {
-                plugin.getLogger().error("Error processing toggle " + toggle.getPermissionNode(), e);
+                plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode(), e);
             }
         }
-
-        if (!changedToggles.isEmpty()) {
-            // Notify player of changes
-            player.sendMessage(plugin.getLanguageManager().get("messages.toggles.updated", 
-                Map.of("count", String.valueOf(changedToggles.size()))));
-
-            if (plugin.isDebugMode()) {
-                plugin.debug("Updated toggles for area " + area.getName() + ":");
-                for (String toggle : changedToggles) {
-                    plugin.debug("  - " + toggle + ": " + area.getToggleState(toggle));
-                }
-            }
-        }
-
-        // Return to area edit menu
-        plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+        
+        // Use the standardized method to update toggles
+        int changedToggles = updateAreaToggles(area, toggleChanges);
+        
+        // Use the standardized method to update the area and notify the player
+        updateAreaAndNotifyPlayer(player, area, changedToggles, FormIds.EDIT_AREA, category.name().toLowerCase());
     }
 
     private Area getEditingArea(Player player) {

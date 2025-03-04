@@ -31,7 +31,7 @@ public class ExperienceListener implements Listener {
             Position pos = player.getPosition();
             
             // Check if XP drops are allowed in this area
-            if (protectionListener.shouldCancel(pos, player, "allowXPDrop")) {
+            if (protectionListener.handleProtection(pos, player, "allowXPDrop")) {
                 // Calculate and save the player's total XP for respawn
                 int totalExp = calculateTotalExperience(player.getExperienceLevel(), player.getExperience());
                 

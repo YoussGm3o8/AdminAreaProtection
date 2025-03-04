@@ -10,43 +10,42 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.List;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.HashMap;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 public class PermissionChecker {
-    private final AdminAreaProtectionPlugin plugin;
-    private final Cache<String, Boolean> permissionCache;
-    private static final int CACHE_SIZE = 5000; // Increased for better hit rate
-    private static final long CACHE_EXPIRY = TimeUnit.MINUTES.toMillis(2); // Reduced for more frequent updates
-    private final Map<String, Long> lastPermissionCheck = new ConcurrentHashMap<>();
-    private static final long CHECK_INTERVAL = 50; // Reduced to 50ms for more responsive updates
-    
-    // Permission prefixes - defined once to avoid string concatenation
     private static final String GUI_PERMISSIONS_PREFIX = "gui.permissions.toggles.";
     private static final String BYPASS_PREFIX = "adminarea.bypass.";
     private static final String ADMIN_PERMISSION = "adminarea.admin";
     
-    // Cache statistics
+    private final AdminAreaProtectionPlugin plugin;
+    private final Cache<String, Boolean> permissionCache;
+    private final Map<String, Long> lastPermissionCheck;
+    private static final long CHECK_INTERVAL = 200;
     private final Timer permissionCheckTimer;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     
+    private final Map<String, Map<String, Map<String, Boolean>>> areaGroupPermissions = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Map<String, Boolean>>> areaTrackPermissions = new ConcurrentHashMap<>();
+
     public PermissionChecker(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
         this.permissionCache = Caffeine.newBuilder()
-            .maximumSize(CACHE_SIZE)
-            .expireAfterWrite(CACHE_EXPIRY, TimeUnit.MILLISECONDS)
-            .recordStats() // Enable statistics for monitoring
+            .maximumSize(5000)
+            .expireAfterWrite(2, TimeUnit.MINUTES)
+            .recordStats()
             .build();
-            
-        // Initialize metrics using the registry from PerformanceMonitor
+        this.lastPermissionCheck = new ConcurrentHashMap<>();
+        
         MeterRegistry registry = plugin.getPerformanceMonitor().getRegistry();
         this.permissionCheckTimer = Timer.builder("permission_check_time")
             .description("Time taken to check permissions")
@@ -169,8 +168,16 @@ public class PermissionChecker {
      * Check player-specific permissions
      */
     private boolean checkPlayerSpecificPermissions(Player player, Area area, String normalizedPermission, String cacheKey) {
-        Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
-        Map<String, Boolean> playerPerms = playerPermissions.get(player.getName());
+        // Get player permissions directly from the PermissionOverrideManager to ensure we have the latest data
+        Map<String, Boolean> playerPerms;
+        try {
+            playerPerms = plugin.getPermissionOverrideManager().getPlayerPermissions(area.getName(), player.getName());
+        } catch (Exception e) {
+            // If there's an error, fall back to the area's cached permissions
+            plugin.getLogger().error("Error getting player permissions from database, falling back to cached permissions", e);
+            Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
+            playerPerms = playerPermissions.get(player.getName());
+        }
         
         if (plugin.isDebugMode()) {
             plugin.debug("[PermissionChecker] Player permissions map: " + 
@@ -184,7 +191,7 @@ public class PermissionChecker {
                 plugin.debug("[PermissionChecker] DECISION: " + playerAllowed + " - storing in cache and returning");
             }
             permissionCache.put(cacheKey, playerAllowed);
-            return true;
+            return playerAllowed;
         }
         
         return false;
@@ -194,7 +201,21 @@ public class PermissionChecker {
      * Check group-based permissions
      */
     private boolean checkGroupPermissions(Player player, Area area, String normalizedPermission, String cacheKey) {
-        Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+        // Get group permissions directly from the PermissionOverrideManager to ensure we have the latest data
+        Map<String, Map<String, Boolean>> groupPermissions;
+        try {
+            groupPermissions = plugin.getPermissionOverrideManager().getAllGroupPermissions(area.getName());
+            if (groupPermissions == null) {
+                groupPermissions = new HashMap<>();
+            }
+        } catch (Exception e) {
+            // If there's an error, fall back to the area's cached permissions
+            plugin.getLogger().error("Error getting group permissions from database, falling back to cached permissions", e);
+            groupPermissions = area.getGroupPermissions();
+            if (groupPermissions == null) {
+                groupPermissions = new HashMap<>();
+            }
+        }
         
         if (plugin.isDebugMode()) {
             plugin.debug("[PermissionChecker] Checking group permissions. Groups: " + 
@@ -204,6 +225,10 @@ public class PermissionChecker {
         // If LuckPerms is available, use it to get player groups in priority order
         if (plugin.isLuckPermsEnabled()) {
             String primaryGroup = plugin.getPrimaryGroup(player);
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Player " + player.getName() + " primary group: " + primaryGroup);
+            }
+            
             if (primaryGroup != null && groupPermissions.containsKey(primaryGroup)) {
                 Map<String, Boolean> groupPerms = groupPermissions.get(primaryGroup);
                 if (groupPerms.containsKey(normalizedPermission)) {
@@ -213,9 +238,39 @@ public class PermissionChecker {
                                    normalizedPermission + " in group " + primaryGroup + ": " + groupAllowed);
                     }
                     permissionCache.put(cacheKey, groupAllowed);
-                    return true;
+                    return groupAllowed;
+                }
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Primary group " + primaryGroup + " does not have permission: " + normalizedPermission);
                 }
             }
+            
+            // Check inherited groups in order of inheritance
+            List<String> inheritedGroups = plugin.getGroupInheritance(primaryGroup);
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Inherited groups for " + primaryGroup + ": " + 
+                           (inheritedGroups != null ? inheritedGroups : "none"));
+            }
+            
+            if (inheritedGroups != null && !inheritedGroups.isEmpty()) {
+                for (String groupName : inheritedGroups) {
+                    if (groupPermissions.containsKey(groupName)) {
+                        Map<String, Boolean> groupPerms = groupPermissions.get(groupName);
+                        if (groupPerms.containsKey(normalizedPermission)) {
+                            boolean groupAllowed = groupPerms.get(normalizedPermission);
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("[PermissionChecker] Found inherited group permission for " + 
+                                           normalizedPermission + " in group " + groupName + ": " + groupAllowed);
+                            }
+                            permissionCache.put(cacheKey, groupAllowed);
+                            return groupAllowed;
+                        }
+                    }
+                }
+            }
+        } else if (plugin.isDebugMode()) {
+            plugin.debug("[PermissionChecker] LuckPerms is not enabled, skipping LuckPerms group checks");
         }
         
         // Standard permission check by checking each group the player has permission for
@@ -235,7 +290,7 @@ public class PermissionChecker {
                         plugin.debug("[PermissionChecker] DECISION: " + groupAllowed + " - storing in cache and returning");
                     }
                     permissionCache.put(cacheKey, groupAllowed);
-                    return true;
+                    return groupAllowed;
                 }
             }
         }
@@ -248,11 +303,26 @@ public class PermissionChecker {
      */
     private boolean checkTrackPermissions(Player player, Area area, String normalizedPermission, String cacheKey) {
         if (!plugin.isLuckPermsEnabled()) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] LuckPerms not enabled, skipping track permission checks");
+            }
             return false;
         }
         
-        Map<String, Map<String, Boolean>> trackPermissions = area.getTrackPermissions();
+        // Get track permissions directly from the PermissionOverrideManager to ensure we have the latest data
+        Map<String, Map<String, Boolean>> trackPermissions;
+        try {
+            trackPermissions = plugin.getPermissionOverrideManager().getAllTrackPermissions(area.getName());
+        } catch (Exception e) {
+            // If there's an error, fall back to the area's cached permissions
+            plugin.getLogger().error("Error getting track permissions from database, falling back to cached permissions", e);
+            trackPermissions = area.getTrackPermissions();
+        }
+        
         if (trackPermissions == null || trackPermissions.isEmpty()) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] No track permissions defined for area " + area.getName());
+            }
             return false;
         }
         
@@ -263,8 +333,19 @@ public class PermissionChecker {
         for (Map.Entry<String, Map<String, Boolean>> entry : trackPermissions.entrySet()) {
             String trackName = entry.getKey();
             
-            if (plugin.isPlayerInTrack(player, trackName)) {
+            boolean isInTrack = plugin.isPlayerInTrack(player, trackName);
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Checking if player " + player.getName() + 
+                            " is in track " + trackName + ": " + isInTrack);
+            }
+            
+            if (isInTrack) {
                 Map<String, Boolean> trackPerms = entry.getValue();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Player is in track " + trackName + 
+                                ", checking for permission: " + normalizedPermission);
+                }
                 
                 if (trackPerms.containsKey(normalizedPermission)) {
                     boolean trackAllowed = trackPerms.get(normalizedPermission);
@@ -274,7 +355,10 @@ public class PermissionChecker {
                         plugin.debug("[PermissionChecker] DECISION: " + trackAllowed + " - storing in cache and returning");
                     }
                     permissionCache.put(cacheKey, trackAllowed);
-                    return true;
+                    return trackAllowed;
+                } else if (plugin.isDebugMode()) {
+                    plugin.debug("[PermissionChecker] Track " + trackName + 
+                                " does not have permission: " + normalizedPermission);
                 }
             }
         }
@@ -348,21 +432,32 @@ public class PermissionChecker {
     
     /**
      * Invalidates the permission cache for a specific player
-     *
-     * @param playerName The name of the player
      */
     public void invalidatePlayerCache(String playerName) {
         if (playerName == null || playerName.isEmpty()) {
             return;
         }
-
+        
         if (plugin.isDebugMode()) {
             plugin.debug("Invalidating permission cache for player: " + playerName);
         }
-
-        // Batch removals for better performance
-        lastPermissionCheck.keySet().removeIf(key -> key.endsWith(":" + playerName));
-        permissionCache.asMap().keySet().removeIf(key -> key.endsWith(":" + playerName));
+        
+        // Find and remove all cache entries for this player
+        Set<String> keysToRemove = new HashSet<>();
+        for (String key : permissionCache.asMap().keySet()) {
+            if (key.endsWith(":" + playerName)) {
+                keysToRemove.add(key);
+            }
+        }
+        
+        for (String key : keysToRemove) {
+            permissionCache.invalidate(key);
+            lastPermissionCheck.remove(key);
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Invalidated " + keysToRemove.size() + " cache entries for player: " + playerName);
+        }
     }
     
     /**
@@ -372,8 +467,9 @@ public class PermissionChecker {
         if (plugin.isDebugMode()) {
             plugin.debug("Invalidating entire permission cache");
         }
-        lastPermissionCheck.clear();
+        
         permissionCache.invalidateAll();
+        lastPermissionCheck.clear();
     }
     
     /**
@@ -392,21 +488,37 @@ public class PermissionChecker {
         }
     }
 
+    /**
+     * Check if player has bypass permissions
+     */
     private boolean checkBypassPermissions(Player player, Area area, String permission) {
-        // Check area bypass
-        if (player.hasPermission(BYPASS_PREFIX + area.getName())) {
-            logDebug("Player has area bypass permission: " + BYPASS_PREFIX + area.getName());
+        // Check for specific bypass permission
+        String bypassPermission = BYPASS_PREFIX + permission;
+        if (player.hasPermission(bypassPermission)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Player has bypass permission: " + bypassPermission);
+            }
             return true;
         }
-
-        // Check action bypass
-        String permWithoutPrefix = permission.startsWith(GUI_PERMISSIONS_PREFIX) ?
-            permission.substring(GUI_PERMISSIONS_PREFIX.length()) : permission;
-        if (player.hasPermission(BYPASS_PREFIX + permWithoutPrefix)) {
-            logDebug("Player has action bypass permission: " + BYPASS_PREFIX + permWithoutPrefix);
+        
+        // Check for area-specific bypass permission
+        String areaBypassPermission = BYPASS_PREFIX + area.getName() + "." + permission;
+        if (player.hasPermission(areaBypassPermission)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Player has area-specific bypass permission: " + areaBypassPermission);
+            }
             return true;
         }
-
+        
+        // Check for wildcard bypass permission
+        String wildcardBypassPermission = BYPASS_PREFIX + "*";
+        if (player.hasPermission(wildcardBypassPermission)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[PermissionChecker] Player has wildcard bypass permission: " + wildcardBypassPermission);
+            }
+            return true;
+        }
+        
         return false;
     }
 
@@ -468,10 +580,17 @@ public class PermissionChecker {
         // Quick bypass check first
         if (player != null) {
             // Check for admin permission
-            // if (player.hasPermission(ADMIN_PERMISSION)) {
-            //     logDebug("Player has admin permission: " + ADMIN_PERMISSION);
-            //     return true;
-            // }
+            if (player.hasPermission(ADMIN_PERMISSION)) {
+                logDebug("Player has admin permission: " + ADMIN_PERMISSION);
+                return true;
+            }
+            
+            // Check for specific bypass permission for this action
+            String bypassPermission = BYPASS_PREFIX + permission;
+            if (player.hasPermission(bypassPermission)) {
+                logDebug("Player has bypass permission: " + bypassPermission);
+                return true;
+            }
             
             // Only check for bypass permissions if player is in bypass mode
             if (plugin.isBypassing(player.getName())) {
@@ -481,28 +600,133 @@ public class PermissionChecker {
                 }
             }
             
-            // Check player-specific permissions
-            if (checkPlayerSpecificPermissions(player, area, permission, 
-                buildCacheKey(area, player, permission))) {
-                return true;
+            String cacheKey = buildCacheKey(area, player, permission);
+            
+            try {
+                // First, ensure we have the most up-to-date data for this area
+                // This is important because the area permissions might have been modified
+                boolean shouldRefreshPlayerPerms = plugin.getPermissionOverrideManager().hasUpdatedPlayerPermissions(area.getName(), player.getName());
+                boolean shouldRefreshGroupPerms = plugin.getPermissionOverrideManager().hasUpdatedGroupPermissions(area.getName());
+                boolean shouldRefreshTrackPerms = plugin.getPermissionOverrideManager().hasUpdatedTrackPermissions(area.getName());
+                
+                if (shouldRefreshPlayerPerms || shouldRefreshGroupPerms || shouldRefreshTrackPerms) {
+                    // Invalidate the cache for this key since we have updated data
+                    permissionCache.invalidate(cacheKey);
+                    logDebug("Refreshing permissions data for " + area.getName() + " due to updates");
+                }
+                
+                // IMPORTANT: Follow the permission hierarchy in order:
+                // 1. Player-specific permissions (highest priority)
+                logDebug("Checking player-specific permissions for " + player.getName());
+                if (checkPlayerSpecificPermissions(player, area, permission, cacheKey)) {
+                    return true;
+                }
+                
+                // 2. Group permissions (medium priority)
+                // Important: we need to check both primary group and all inherited groups
+                logDebug("Checking group permissions for " + player.getName());
+                if (checkGroupPermissions(player, area, permission, cacheKey)) {
+                    return true;
+                }
+                
+                // 3. Track permissions (lower priority)
+                logDebug("Checking track permissions for " + player.getName());
+                if (checkTrackPermissions(player, area, permission, cacheKey)) {
+                    return true;
+                }
+            } catch (Exception e) {
+                // Log the error but continue with area toggle check
+                plugin.getLogger().error("Error checking permissions from permission_overrides database", e);
+                logDebug("Error checking permissions, falling back to area toggle check: " + e.getMessage());
             }
             
-            // Check group permissions
-            if (checkGroupPermissions(player, area, permission, 
-                buildCacheKey(area, player, permission))) {
-                return true;
-            }
-            
-            // Check track permissions
-            if (checkTrackPermissions(player, area, permission, 
-                buildCacheKey(area, player, permission))) {
-                return true;
-            }
+            // 4. Finally, check area toggle states (lowest priority)
+            logDebug("Checking area toggle states for " + permission);
         }
 
         // Get the toggle state directly from the area as fallback
         boolean toggleState = area.getToggleState(permission);
         logDebug("Using toggle state: " + toggleState + " for permission: " + permission);
+        
+        // Store the result in the cache
+        String cacheKey = buildCacheKey(area, player, permission);
+        permissionCache.put(cacheKey, toggleState);
+        
         return toggleState;
+    }
+
+    public boolean hasPermission(String areaName, String groupName, String permission) {
+        Map<String, Map<String, Boolean>> groupPermissions = areaGroupPermissions.get(areaName);
+        
+        // Add null check before accessing groupPermissions
+        if (groupPermissions == null) {
+            return false;
+        }
+        
+        Map<String, Boolean> permissions = groupPermissions.get(groupName);
+        return permissions != null && permissions.getOrDefault(permission, true);
+    }
+
+    public boolean hasPermissionInTrack(String areaName, String trackName, String permission) {
+        Map<String, Map<String, Boolean>> groupPermissions = areaGroupPermissions.get(areaName);
+        
+        // Add null check before accessing groupPermissions
+        if (groupPermissions == null) {
+            return false;
+        }
+
+        // Get track permissions and check them
+        Map<String, Boolean> trackPerms = areaTrackPermissions
+            .getOrDefault(areaName, Collections.emptyMap())
+            .getOrDefault(trackName, Collections.emptyMap());
+            
+        return trackPerms.getOrDefault(permission, true);
+    }
+
+    public boolean checkPlayerPermission(String areaName, String playerName, String permission) {
+        Map<String, Map<String, Boolean>> groupPermissions = areaGroupPermissions.get(areaName);
+        
+        // Return false if no permissions exist
+        if (groupPermissions == null) {
+            return false;
+        }
+
+        // Get player's permissions
+        Map<String, Boolean> playerPerms = groupPermissions.get(playerName);
+        if (playerPerms == null) {
+            return false;
+        }
+
+        // Return permission value or false if not found
+        return playerPerms.getOrDefault(permission, false);
+    }
+
+    // Add safe getters/setters for area permissions
+    public Map<String, Boolean> getAreaGroupPermissions(String areaName, String groupName) {
+        Map<String, Map<String, Boolean>> groupPermissions = areaGroupPermissions.getOrDefault(areaName, new HashMap<>());
+        return groupPermissions.getOrDefault(groupName, Collections.emptyMap());
+    }
+
+    public void setAreaGroupPermissions(String areaName, String groupName, Map<String, Boolean> permissions) {
+        areaGroupPermissions.computeIfAbsent(areaName, k -> new ConcurrentHashMap<>())
+                          .put(groupName, new HashMap<>(permissions));
+    }
+
+    public Map<String, Boolean> getAreaTrackPermissions(String areaName, String track) {
+        Map<String, Map<String, Boolean>> trackPermissions = areaTrackPermissions.getOrDefault(areaName, new HashMap<>());
+        return trackPermissions.getOrDefault(track, Collections.emptyMap());
+    }
+
+    public void setAreaTrackPermissions(String areaName, String track, Map<String, Boolean> permissions) {
+        areaTrackPermissions.computeIfAbsent(areaName, k -> new ConcurrentHashMap<>())
+                          .put(track, new HashMap<>(permissions));
+    }
+
+    // Methods for clearing caches and permissions
+    public void clearCaches() {
+        permissionCache.invalidateAll();
+        lastPermissionCheck.clear();
+        areaGroupPermissions.clear();
+        areaTrackPermissions.clear();
     }
 }

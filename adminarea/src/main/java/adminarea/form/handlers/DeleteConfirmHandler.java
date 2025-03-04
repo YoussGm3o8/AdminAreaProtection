@@ -90,7 +90,7 @@ public class DeleteConfirmHandler extends BaseFormHandler {
                 plugin.getConfigManager().save();
                 
                 // Invalidate permission cache for this area
-                plugin.getOverrideManager().getPermissionChecker().invalidateCache(areaName);
+                plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(areaName);
                 
                 // Show success message with area name and world
                 Map<String, String> placeholders = Map.of(

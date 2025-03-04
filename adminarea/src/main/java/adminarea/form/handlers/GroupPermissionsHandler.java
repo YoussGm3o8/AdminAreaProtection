@@ -183,6 +183,33 @@ public class GroupPermissionsHandler extends BaseFormHandler {
             plugin.getServer().getPluginManager().callEvent(event);
 
             if (!event.isCancelled()) {
+                // IMPORTANT: Explicitly save group permissions to the permission database first
+                try {
+                    plugin.getPermissionOverrideManager().setGroupPermissions(
+                        updatedArea.getName(), 
+                        groupName, 
+                        newPerms
+                    );
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Explicitly saved group permissions for " + groupName);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to explicitly save group permissions", e);
+                    throw e;
+                }
+                
+                // Save area to database
+                try {
+                    plugin.getDatabaseManager().saveArea(updatedArea);
+                    
+                    // Force synchronize permissions to ensure they're saved
+                    plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to save area to database", e);
+                    throw e;
+                }
+                
                 // Update area in plugin
                 plugin.updateArea(updatedArea);
                 player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupUpdated",

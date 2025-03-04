@@ -70,7 +70,7 @@ public class ItemListener implements Listener {
             
             // Check permission using the permission checker
             boolean shouldCancel = area != null && 
-                !plugin.getOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemDrop");
+                !plugin.getPermissionOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemDrop");
             
             // Cache result
             itemActionCache.put(cacheKey, shouldCancel);
@@ -120,7 +120,7 @@ public class ItemListener implements Listener {
                 
                 // Check permission using the permission checker
                 boolean shouldCancel = area != null && 
-                    !plugin.getOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemPickup");
+                    !plugin.getPermissionOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemPickup");
                 
                 // Cache result
                 itemActionCache.put(cacheKey, shouldCancel);

@@ -6,12 +6,10 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.management.*;
 import java.util.concurrent.*;
 import java.util.Map;
-import java.util.logging.Level;
 import java.util.function.Consumer;
 import java.nio.file.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import com.sun.management.GarbageCollectionNotificationInfo;
 
 /**
  * Comprehensive performance monitoring system for the AdminAreaProtection plugin.

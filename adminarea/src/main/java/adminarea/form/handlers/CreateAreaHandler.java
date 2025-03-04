@@ -5,9 +5,7 @@ import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.form.validation.FormValidator;
-import adminarea.form.validation.ValidationResult;
-import adminarea.util.ValidationUtils;
+import adminarea.util.AreaValidationUtils;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
@@ -21,8 +19,6 @@ import adminarea.permissions.PermissionToggle;
 import java.util.List;
 import java.util.Map;
 import org.json.JSONObject;
-import cn.nukkit.level.Position;
-import java.util.HashMap;
 import adminarea.area.AreaDTO;
 
 public class CreateAreaHandler extends BaseFormHandler {
@@ -39,9 +35,13 @@ public class CreateAreaHandler extends BaseFormHandler {
     private static final int POS2_Z_INDEX = 11;
     private static final int ENTER_MESSAGE_INDEX = 12;
     private static final int LEAVE_MESSAGE_INDEX = 13;
+    private static final int TOGGLE_START_INDEX = 15;
+
+    private final AreaValidationUtils areaValidationUtils;
 
     public CreateAreaHandler(AdminAreaProtectionPlugin plugin) {
         super(plugin);
+        this.areaValidationUtils = new AreaValidationUtils(plugin);
     }
 
     @Override
@@ -58,65 +58,43 @@ public class CreateAreaHandler extends BaseFormHandler {
 
         try {
             // Get basic info
-            String name = response.getInputResponse(1);
-            int priority = Integer.parseInt(response.getInputResponse(2));
-            boolean showTitle = response.getToggleResponse(3);
-            boolean isGlobal = response.getToggleResponse(4);
-
-            // Validate area name doesn't already exist
-            if (plugin.hasArea(name)) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.area.exists", 
-                    Map.of("area", name)));
-                // Reopen form to let them try again
-                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
-                return;
-            }
-
-            // Check if a global area already exists for this world when trying to create a global area
-            if (isGlobal) {
-                String worldName = player.getLevel().getName();
-                Area existingGlobalArea = plugin.getAreaManager().getGlobalAreaForWorld(worldName);
-                if (existingGlobalArea != null) {
-                    player.sendMessage(plugin.getLanguageManager().get("messages.area.globalExists", 
-                        Map.of("world", worldName, "area", existingGlobalArea.getName())));
-                    // Reopen form to let them try again
-                    plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
-                    return;
-                }
-            }
-
-            // Initialize coordinates
-            int x1, x2, y1, y2, z1, z2;
-
-            // Handle coordinates if not global
-            if (!isGlobal) {
-                // Get coordinates (indices 6-11)
-                x1 = Integer.parseInt(response.getInputResponse(6));
-                y1 = Integer.parseInt(response.getInputResponse(7));
-                z1 = Integer.parseInt(response.getInputResponse(8));
-                x2 = Integer.parseInt(response.getInputResponse(9));
-                y2 = Integer.parseInt(response.getInputResponse(10));
-                z2 = Integer.parseInt(response.getInputResponse(11));
-            } else {
-                // Set global coordinates
-                x1 = -29000000;
-                x2 = 29000000;
-                y1 = 0;
-                y2 = 255;
-                z1 = -29000000;
-                z2 = 29000000;
-            }
+            String name = response.getInputResponse(NAME_INDEX);
+            int priority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+            boolean showTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
+            boolean isGlobal = response.getToggleResponse(PROTECT_WORLD_INDEX);
+            String worldName = player.getLevel().getName();
 
             // Get enter/leave messages if show title is enabled
             String enterMsg = "", leaveMsg = "";
             if (showTitle) {
-                enterMsg = response.getInputResponse(12);
-                leaveMsg = response.getInputResponse(13);
+                enterMsg = response.getInputResponse(ENTER_MESSAGE_INDEX);
+                leaveMsg = response.getInputResponse(LEAVE_MESSAGE_INDEX);
                 if (enterMsg == null) enterMsg = "";
                 if (leaveMsg == null) leaveMsg = "";
                 
-                // Save title configuration to config.yml
-                saveAreaTitles(name, enterMsg, leaveMsg);
+                // Validate message lengths
+                if (!areaValidationUtils.validateMessages(enterMsg, leaveMsg, player, FormIds.CREATE_AREA)) {
+                    return;
+                }
+            }
+
+            // Extract and validate coordinates
+            int[] coords;
+            try {
+                coords = areaValidationUtils.extractCoordinatesFromForm(response, POS1_X_INDEX, isGlobal);
+            } catch (IllegalArgumentException e) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.area.selection.invalid", 
+                    Map.of("error", e.getMessage())));
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                return;
+            }
+            
+            int x1 = coords[0], x2 = coords[1], y1 = coords[2], y2 = coords[3], z1 = coords[4], z2 = coords[5];
+
+            // Validate area creation parameters (name, global status, overlap, size)
+            if (!areaValidationUtils.validateAreaCreation(
+                    name, x1, x2, y1, y2, z1, z2, worldName, isGlobal, player, FormIds.CREATE_AREA, null)) {
+                return;
             }
 
             // Initialize settings from DTO
@@ -124,66 +102,26 @@ public class CreateAreaHandler extends BaseFormHandler {
                 .name(name)
                 .priority(priority)
                 .showTitle(showTitle)
-                .world(player.getLevel().getName())
+                .world(worldName)
                 .coordinates(x1, x2, y1, y2, z1, z2)
                 .enterMessage(enterMsg)
                 .leaveMessage(leaveMsg)
                 .build()
                 .toDTO();
             
-            // Create new settings object for toggles
-            JSONObject settings = new JSONObject();
-
-            // Track number of changes
-            int changedSettings = 0;
-
-            // Process permission toggles
-            int toggleIndex = 15; // Start after the protection settings label
-            for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
-                // Skip category label
-                toggleIndex++;
-                
-                List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
-                if (toggles != null) {
-                    for (PermissionToggle toggle : toggles) {
-                        try {
-                            String permissionNode = toggle.getPermissionNode();
-                            // Get toggle response at current index
-                            Object rawResponse = response.getResponse(toggleIndex);
-                            if (rawResponse instanceof Boolean) {
-                                boolean toggleValue = (Boolean) rawResponse;
-                                settings.put(permissionNode, toggleValue);
-                                changedSettings++;
-                                if (plugin.isDebugMode()) {
-                                    plugin.debug("Set toggle " + permissionNode + " to " + toggleValue);
-                                }
-                            } else {
-                                // Use default value if response is invalid
-                                settings.put(permissionNode, toggle.getDefaultValue());
-                                if (plugin.isDebugMode()) {
-                                    plugin.debug("Using default value for " + permissionNode + ": " + toggle.getDefaultValue());
-                                }
-                            }
-                            toggleIndex++; // Move to next toggle position
-                        } catch (Exception e) {
-                            plugin.getLogger().debug("Error processing toggle " + toggle.getPermissionNode() + ": " + e.getMessage());
-                            settings.put(toggle.getPermissionNode(), toggle.getDefaultValue());
-                            toggleIndex++; // Still need to move to next position even on error
-                        }
-                    }
-                }
-            }
-
-            // Validate toggle dependencies and conflicts
+            // Process permission toggles using centralized validation
+            int[] changedSettings = new int[1]; // Use array to pass by reference
+            JSONObject settings;
+            
             try {
-                ValidationUtils.validateToggleDependencies(settings);
-                ValidationUtils.validateToggleConflicts(settings);
+                settings = areaValidationUtils.validateAndCreateToggleSettings(
+                    response, TOGGLE_START_INDEX, changedSettings);
             } catch (IllegalArgumentException e) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidToggles") + ": " + e.getMessage());
                 return;
             }
 
-            // Create area with new settings
+            // Create area with validated settings
             Area area = AreaBuilder.fromDTO(currentDTO)
                 .settings(settings)
                 .build();
@@ -191,15 +129,16 @@ public class CreateAreaHandler extends BaseFormHandler {
             if (plugin.isDebugMode()) {
                 plugin.debug("Created area " + area.getName() + ":");
                 plugin.debug("  Settings: " + settings.toString());
-                plugin.debug("  Changed settings count: " + changedSettings);
-                plugin.debug("  Player permissions from DTO: " + area.toDTO().playerPermissions());
-                plugin.debug("  Player permissions in area: " + area.getPlayerPermissions());
-                plugin.debug("  Group permissions in area: " + area.getGroupPermissions());
-                plugin.debug("  Track permissions in area: " + area.getTrackPermissions());
+                plugin.debug("  Changed settings count: " + changedSettings[0]);
                 plugin.debug("  Toggle states: " + settings.toString());
             }
             
-            // Successfully created area
+            // Save title configuration if enabled
+            if (showTitle) {
+                areaValidationUtils.configureAreaTitles(name, enterMsg, leaveMsg);
+            }
+            
+            // Save the area
             plugin.saveArea(area);
             
             player.sendMessage(plugin.getLanguageManager().get("messages.area.created",
@@ -219,38 +158,6 @@ public class CreateAreaHandler extends BaseFormHandler {
             plugin.getLogger().error("Error handling form response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.errorProcessingInput"));
             cleanup(player);
-        }
-    }
-
-    /**
-     * Saves area title information to config.yml
-     * 
-     * @param areaName The area name
-     * @param enterMessage The enter message
-     * @param leaveMessage The leave message
-     */
-    private void saveAreaTitles(String areaName, String enterMessage, String leaveMessage) {
-        // Create base path for area titles
-        String basePath = "areaTitles." + areaName;
-        
-        // Set default title values
-        plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + areaName);
-        plugin.getConfigManager().set(basePath + ".enter.subtitle", enterMessage.isEmpty() ? "§eEnjoy your stay!" : enterMessage);
-        plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
-        plugin.getConfigManager().set(basePath + ".enter.stay", 40);
-        plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
-        
-        plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + areaName);
-        plugin.getConfigManager().set(basePath + ".leave.subtitle", leaveMessage.isEmpty() ? "§eThank you for visiting!" : leaveMessage);
-        plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
-        plugin.getConfigManager().set(basePath + ".leave.stay", 40);
-        plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
-        
-        // Save the config
-        plugin.getConfigManager().save();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Saved title config for area " + areaName);
         }
     }
 

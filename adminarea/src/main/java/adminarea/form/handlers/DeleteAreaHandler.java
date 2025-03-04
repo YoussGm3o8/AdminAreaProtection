@@ -2,8 +2,6 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.form.IFormHandler;
-import adminarea.constants.AdminAreaConstants;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import cn.nukkit.Player;
@@ -54,7 +52,7 @@ public class DeleteAreaHandler extends BaseFormHandler {
                 if (area.toDTO().bounds().isGlobal()) {
                     buttonText += "\n§3(Global Area - " + area.getWorld() + ")";
                 } else {
-                    buttonText += "\n§7(World: " + area.getWorld() + ")";
+                    buttonText += "\n§8(World: " + area.getWorld() + ")";
                 }
                 form.addButton(new ElementButton(buttonText));
             }
@@ -143,7 +141,17 @@ public class DeleteAreaHandler extends BaseFormHandler {
             plugin.getConfigManager().save();
             
             // Invalidate permission cache for this area
-            plugin.getOverrideManager().getPermissionChecker().invalidateCache(areaName);
+            plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(areaName);
+            
+            // Explicitly delete all permissions for this area from the permission database
+            try {
+                plugin.getPermissionOverrideManager().deleteAreaPermissions(areaName);
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Explicitly deleted all permissions for area: " + areaName);
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to delete permissions for area: " + areaName, e);
+            }
             
             // Clean up form tracking data for this area
             plugin.getFormIdMap().remove(player.getName() + "_editing");

@@ -672,11 +672,11 @@ public class PermissionToggle implements AutoCloseable {
         TOGGLE_MAP.put(Category.BUILDING, Arrays.asList(
             new PermissionToggle("Allow Building", PERM_BUILD, false, Category.BUILDING),
             new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING),
-            new PermissionToggle("Allow Interaction", PERM_INTERACT, false, Category.BUILDING),
-            new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING),
+            new PermissionToggle("Allow Interaction", PERM_INTERACT, true, Category.BUILDING),
+            new PermissionToggle("Allow Container Access", "allowContainer", true, Category.BUILDING),
             new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING),
             new PermissionToggle("Allow Armor Stand Usage", "allowArmorStand", false, Category.BUILDING),
-            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", true, Category.BUILDING),
+            new PermissionToggle("Allow Hanging Break", "allowHangingBreak", false, Category.BUILDING),
             new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING)
         ));
         

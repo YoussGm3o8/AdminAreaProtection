@@ -22,6 +22,13 @@
         <appender-ref ref="FILE"/>
     </root>
 
+    <!-- Debug logging configuration -->
+    <logger name="adminarea" level="DEBUG"/>
+    <logger name="adminarea.util" level="DEBUG"/>
+    <logger name="adminarea.area" level="DEBUG"/>
+    <logger name="adminarea.listeners" level="DEBUG"/>
+    <logger name="adminarea.managers" level="DEBUG"/>
+
     <!-- HikariCP logging configuration -->
     <logger name="com.zaxxer.hikari.pool.PoolBase" level="ERROR"/>
     <logger name="com.zaxxer.hikari.pool.HikariPool" level="ERROR"/>

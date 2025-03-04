@@ -6,12 +6,12 @@ import cn.nukkit.Player;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.EventPriority;
 import cn.nukkit.event.Listener;
-import cn.nukkit.event.player.PlayerItemConsumeEvent;
-import cn.nukkit.event.player.PlayerMoveEvent;
-import cn.nukkit.event.player.PlayerJoinEvent;
-import cn.nukkit.event.player.PlayerQuitEvent;
+import cn.nukkit.event.player.*;
+import cn.nukkit.event.player.PlayerDeathEvent;
+import cn.nukkit.event.player.PlayerRespawnEvent;
 import cn.nukkit.item.Item;
 import cn.nukkit.item.ItemPotion;
+import cn.nukkit.level.Position;
 import cn.nukkit.potion.Effect;
 import cn.nukkit.scheduler.TaskHandler;
 import io.micrometer.core.instrument.Timer;
@@ -20,10 +20,12 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Listener for handling potion effect-related events in protected areas.
+ * Listener for handling potion effects and experience in protected areas.
+ * This class merges functionality from the former PlayerEffectListener and ExperienceListener.
  */
 public class PlayerEffectListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
+    private final ProtectionListener protectionListener;
     
     // Map of potion damage values to permission nodes
     private static final Map<Integer, String> POTION_PERMISSIONS = new HashMap<>();
@@ -36,6 +38,9 @@ public class PlayerEffectListener implements Listener {
     
     // Map to track active effects on players - stores effect key to amplifier
     private final Map<String, Map<String, Integer>> playerEffects = new ConcurrentHashMap<>();
+    
+    // Map to save player experience for respawning - from ExperienceListener
+    private final Map<String, Integer> savedPlayerExperience = new HashMap<>();
     
     // Task handler for effect application
     private TaskHandler effectTask;
@@ -130,8 +135,9 @@ public class PlayerEffectListener implements Listener {
         EFFECT_IDS.put("allowPotionLevitation", Effect.LEVITATION);
     }
 
-    public PlayerEffectListener(AdminAreaProtectionPlugin plugin) {
+    public PlayerEffectListener(AdminAreaProtectionPlugin plugin, ProtectionListener protectionListener) {
         this.plugin = plugin;
+        this.protectionListener = protectionListener;
         startEffectTask();
     }
     
@@ -140,6 +146,11 @@ public class PlayerEffectListener implements Listener {
      */
     private void startEffectTask() {
         try {
+            // Stop existing task if running
+            if (effectTask != null && !effectTask.isCancelled()) {
+                effectTask.cancel();
+            }
+            
             // Run every 2 seconds (40 ticks) instead of 5 seconds for more responsive effects
             effectTask = plugin.getServer().getScheduler().scheduleRepeatingTask(plugin, this::applyAreaEffects, 40);
             
@@ -265,9 +276,7 @@ public class PlayerEffectListener implements Listener {
      * @param area The area to get the effects from
      */
     private void applyAreaEffectsToPlayer(Player player, Area area) {
-        if (player == null || area == null) {
-            return;
-        }
+        if (player == null || area == null) return;
 
         String playerName = player.getName();
         String areaName = area.getName();
@@ -280,113 +289,41 @@ public class PlayerEffectListener implements Listener {
         Map<String, Integer> activeEffects = playerEffects.computeIfAbsent(playerName, k -> new HashMap<>());
         boolean effectsUpdated = false;
 
-        for (String effectKey : EFFECT_IDS.keySet()) {
-            try {
-                // Create the full permission node path
-                String fullPermNode = "gui.permissions.toggles." + effectKey;
+        // Process each possible effect
+        for (Map.Entry<String, Integer> entry : EFFECT_IDS.entrySet()) {
+            String effectKey = entry.getKey();
+            int effectId = entry.getValue();
+            
+            // Check if this effect is enabled for the area
+            boolean isEnabled = area.getToggleState(effectKey);
+            // Get effect strength from area settings (default to 0 if not set)
+            int configuredAmplifier = Math.min(area.getSettingInt(effectKey + "Strength", 0), MAX_EFFECT_STRENGTH);
+            
+            if (isEnabled && configuredAmplifier > 0) {
+                // Create the effect with infinite duration and no particles
+                Effect effect = Effect.getEffect(effectId)
+                    .setAmplifier(configuredAmplifier - 1) // Amplifier is 0-based
+                    .setDuration(Integer.MAX_VALUE)
+                    .setVisible(false); // Disable particles
                 
-                // Get the strength using the settingInt method (1-10 scale)
-                int strength = area.getSettingInt(fullPermNode + "Strength", 0);
-                
+                // Apply the effect
+                player.addEffect(effect);
+                activeEffects.put(effectKey, configuredAmplifier);
+                effectsUpdated = true;
+
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Checking effect " + effectKey + " for player " + playerName + 
-                        " in area " + areaName + ", strength=" + strength);
+                    plugin.debug("Applied effect " + effectKey + " with amplifier " + configuredAmplifier + " to " + playerName);
                 }
-                
-                // Apply effect if strength > 0
-                if (strength > 0) {
-                    // Cap strength at maximum defined value
-                    if (strength > MAX_EFFECT_STRENGTH) {
-                        strength = MAX_EFFECT_STRENGTH;
-                    }
-
-                    // Get the potion effect ID
-                    int effectId = EFFECT_IDS.get(effectKey);
-                    
-                    // Calculate amplifier (strength - 1, capped at 0-9)
-                    // This makes strength 1 = amplifier 0, strength 10 = amplifier 9
-                    int amplifier = Math.max(0, Math.min(MAX_EFFECT_STRENGTH - 1, strength - 1));
-                    
-                    // Check if effect is already active with same strength
-                    Integer currentAmplifier = activeEffects.get(effectKey);
-                    if (currentAmplifier != null && currentAmplifier == amplifier) {
-                        // Effect already active with same strength, skip
-                        continue;
-                    }
-
-                    // Create and apply the effect
-                    Effect effect = Effect.getEffect(effectId);
-                    effect.setAmplifier(amplifier);
-                    effect.setDuration(Integer.MAX_VALUE);
-                    effect.setVisible(true);
-                    player.addEffect(effect);
-                    
-                    // Track the effect for this player
-                    activeEffects.put(effectKey, amplifier);
+            } else {
+                // Remove effect if it was previously active
+                if (activeEffects.containsKey(effectKey)) {
+                    player.removeEffect(effectId);
+                    activeEffects.remove(effectKey);
                     effectsUpdated = true;
-                    
+
                     if (plugin.isDebugMode()) {
-                        plugin.debug("Applied effect " + getEffectName(effectId) + " with strength " + strength + 
-                            " (amplifier " + amplifier + ") to player " + playerName + " in area " + areaName);
+                        plugin.debug("Removed effect " + effectKey + " from " + playerName);
                     }
-                    
-                    // Get the effect display name with roman numeral
-                    String effectDisplayName = getEffectName(effectId) + " " + getRomanNumeralFromAmplifier(amplifier);
-                    
-                    // Inform the player
-                    String message;
-                    if (currentAmplifier == null) {
-                        // New effect
-                        message = plugin.getLanguageManager().get(
-                            "potionEffect.applied",
-                            Map.of(
-                                "effect", effectDisplayName,
-                                "strength", String.valueOf(strength),
-                                "area", areaName
-                            )
-                        );
-                    } else {
-                        // Updated effect
-                        message = plugin.getLanguageManager().get(
-                            "messages.effect.updated",
-                            Map.of(
-                                "effect", effectDisplayName,
-                                "strength", String.valueOf(strength),
-                                "area", areaName
-                            )
-                        );
-                    }
-                    player.sendMessage(message);
-                } else if (strength == 0) {
-                    // If strength is explicitly 0, remove the effect if it's active
-                    Integer currentAmplifier = activeEffects.get(effectKey);
-                    if (currentAmplifier != null) {
-                        // Effect is currently active, remove it
-                        int effectId = EFFECT_IDS.get(effectKey);
-                        player.removeEffect(effectId);
-                        activeEffects.remove(effectKey);
-                        effectsUpdated = true;
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Removed effect " + getEffectName(effectId) + 
-                                " from player " + playerName + " in area " + areaName + 
-                                " because strength is now 0");
-                        }
-                        
-                        // Inform player
-                        player.sendMessage(plugin.getLanguageManager().get(
-                            "potionEffect.removed",
-                            Map.of(
-                                "effect", getEffectName(effectId),
-                                "area", areaName
-                            )
-                        ));
-                    }
-                }
-            } catch (Exception e) {
-                plugin.getLogger().error("Error applying effect " + effectKey + " to player " + playerName, e);
-                if (plugin.isDebugMode()) {
-                    e.printStackTrace();
                 }
             }
         }
@@ -684,5 +621,145 @@ public class PlayerEffectListener implements Listener {
             case 10 -> "X";
             default -> String.valueOf(level);
         };
+    }
+
+    //
+    // Experience-related functionality (merged from ExperienceListener)
+    //
+    
+    /**
+     * Handle player death to preserve experience in protected areas
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Player player = event.getEntity();
+            Position pos = player.getPosition();
+            
+            // Check if XP drops are allowed in this area
+            if (protectionListener.handleProtection(pos, player, "allowXPDrop")) {
+                // Calculate and save the player's total XP for respawn
+                int totalExp = calculateTotalExperience(player.getExperienceLevel(), player.getExperience());
+                
+                savedPlayerExperience.put(player.getName(), totalExp);
+                
+                // Force keep XP instead of dropping it
+                event.setKeepExperience(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Saved " + totalExp + " XP for player " + player.getName() + 
+                        " to be restored on respawn");
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "xp_drop_check");
+        }
+    }
+    
+    /**
+     * Restore saved XP when player respawns
+     */
+    @EventHandler(priority = EventPriority.NORMAL)
+    public void onPlayerRespawn(PlayerRespawnEvent event) {
+        Player player = event.getPlayer();
+        String playerName = player.getName();
+        
+        // Check if we have saved XP for this player
+        if (savedPlayerExperience.containsKey(playerName)) {
+            // Get the saved XP value
+            int savedExp = savedPlayerExperience.remove(playerName);
+            
+            // Schedule XP restoration with a longer delay to ensure player is fully spawned
+            // This avoids potential race conditions with the vanilla respawn handler
+            plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
+                // Make sure player is still online
+                if (player.isOnline()) {
+                    // Reset first to avoid conflicts with any XP already given
+                    player.setExperience(0, 0);
+                    
+                    // Set the player's XP directly using our accurate method
+                    setPlayerTotalExperience(player, savedExp);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Successfully restored " + savedExp + " XP for player " + playerName);
+                    }
+                }
+            }, 10); // Wait 10 ticks (0.5 seconds) to ensure player is fully spawned
+        }
+    }
+    
+    /**
+     * Calculate the total experience based on level and progress
+     * 
+     * @param level The experience level
+     * @param progress The progress to the next level (0.0-1.0)
+     * @return The total experience points
+     */
+    private int calculateTotalExperience(int level, float progress) {
+        int totalXp = 0;
+        
+        // XP for complete levels - using more accurate Nukkit formula
+        for (int i = 0; i < level; i++) {
+            totalXp += getExpToLevel(i);
+        }
+        
+        // Add partial level progress
+        int currentLevelXp = getExpToLevel(level);
+        totalXp += Math.round(currentLevelXp * progress);
+        
+        return totalXp;
+    }
+    
+    /**
+     * Set a player's total experience points
+     * 
+     * @param player The player
+     * @param totalExp The total experience points
+     */
+    private void setPlayerTotalExperience(Player player, int totalExp) {
+        // Reset the player's XP first
+        player.setExperience(0, 0);
+        
+        // Calculate and set level and progress
+        int level = 0;
+        int remainingExp = totalExp;
+        
+        // Find the highest completed level
+        while (remainingExp >= getExpToLevel(level)) {
+            remainingExp -= getExpToLevel(level);
+            level++;
+        }
+        
+        // Calculate progress to next level
+        float progress = 0;
+        int expToNextLevel = getExpToLevel(level);
+        if (expToNextLevel > 0) {
+            progress = (float)remainingExp / expToNextLevel;
+        }
+        
+        // Set the XP directly
+        player.setExperience(Math.round(progress * 100), level);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Set player " + player.getName() + " XP to level " + level + 
+                       " with progress " + progress + " (total XP: " + totalExp + ")");
+        }
+    }
+    
+    /**
+     * Get the experience required to reach the next level
+     * 
+     * @param level The current level
+     * @return The experience required
+     */
+    private int getExpToLevel(int level) {
+        if (level >= 30) {
+            return 112 + (level - 30) * 9;
+        } else if (level >= 15) {
+            return 37 + (level - 15) * 5;
+        } else {
+            return 7 + level * 2;
+        }
     }
 }

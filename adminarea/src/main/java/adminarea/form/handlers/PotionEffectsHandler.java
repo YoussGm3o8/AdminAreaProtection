@@ -2,13 +2,10 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
-import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementLabel;
-import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.form.element.ElementSlider;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
@@ -114,11 +111,11 @@ public class PotionEffectsHandler extends BaseFormHandler {
                     description = "Applies " + toggle.displayName + " effect to players in this area with configurable strength";
                 }
                 
-                // Add slider for effect strength (0-255)
+                // Add slider for effect strength (0-10)
                 int currentStrength = area.getPotionEffectStrength(strengthNode);
                 form.addElement(new ElementSlider(
                     "§e" + toggle.displayName + "\n§8" + description,
-                    0, 255, 1, currentStrength
+                    0, 10, 1, currentStrength
                 ));
             }
             
@@ -137,19 +134,10 @@ public class PotionEffectsHandler extends BaseFormHandler {
             Area area = getEditingArea(player);
             if (area == null) return;
 
-            // Track changes
-            int changedSettings = 0;
-
-            // Debug log the response data
-            if (plugin.isDebugMode()) {
-                plugin.debug("Processing potion effects settings form response:");
-                plugin.debug("Number of responses: " + response.getResponses().size());
-                for (int i = 0; i < response.getResponses().size(); i++) {
-                    plugin.debug("Response " + i + ": " + response.getResponse(i));
-                }
-            }
-
             // Skip header labels (index 0 and 1)
+            // Create a map to store all potion effect changes
+            Map<String, Integer> effectStrengths = new HashMap<>();
+            
             // Process each slider starting at index 2 (one per effect)
             for (int i = 0; i < POTION_TOGGLES.size(); i++) {
                 try {
@@ -157,157 +145,57 @@ public class PotionEffectsHandler extends BaseFormHandler {
                     String permissionNode = normalizePermissionNode(toggle.permissionNode);
                     String strengthNode = permissionNode + "Strength";
                     
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Processing effect: " + toggle.displayName + 
-                                    " with permission node: " + permissionNode +
-                                    " and strength node: " + strengthNode);
-                    }
-                    
                     // Calculate index for slider (2 + index of effect)
                     int sliderIndex = 2 + i;
                     
                     // Get current strength value from area
                     int currentStrengthValue = area.getPotionEffectStrength(strengthNode);
                     
-                    // Get strength response
-                    Object rawStrengthResponse = response.getResponse(sliderIndex);
-                    if (rawStrengthResponse == null) {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Null raw response for strength " + strengthNode + " at index " + sliderIndex);
-                        }
-                        continue;
-                    }
+                    // Get and validate strength value from response
+                    int strengthValue = 0;
+                    Object rawResponse = response.getResponse(sliderIndex);
                     
-                    // Convert strength response to integer
-                    int strengthValue;
-                    if (rawStrengthResponse instanceof Number) {
-                        strengthValue = ((Number) rawStrengthResponse).intValue();
-                    } else if (rawStrengthResponse instanceof String) {
-                        try {
-                            strengthValue = Integer.parseInt((String) rawStrengthResponse);
-                        } catch (NumberFormatException e) {
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("Invalid string format for strength " + strengthNode + 
-                                    ": " + rawStrengthResponse);
+                    if (rawResponse != null) {
+                        if (rawResponse instanceof Number) {
+                            strengthValue = ((Number) rawResponse).intValue();
+                        } else {
+                            try {
+                                strengthValue = Integer.parseInt(rawResponse.toString());
+                            } catch (NumberFormatException e) {
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("Invalid strength value: " + rawResponse);
+                                }
+                                continue;
                             }
-                            continue;
                         }
-                    } else {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Invalid response type for strength " + strengthNode + 
-                                ": " + rawStrengthResponse.getClass().getName());
-                        }
-                        continue;
                     }
                     
                     // Ensure strength is within valid range
-                    strengthValue = Math.max(0, Math.min(255, strengthValue));
+                    strengthValue = Math.max(0, Math.min(10, strengthValue));
                     
-                    // Only count as changed if strength is different
-                    boolean strengthChanged = currentStrengthValue != strengthValue;
-                    
-                    // Add debug logging to track state changes
-                    if (strengthChanged) {
-                        changedSettings++;
+                    // Only track changes, don't apply yet
+                    if (currentStrengthValue != strengthValue) {
+                        // Add to the effects map
+                        effectStrengths.put(strengthNode, strengthValue);
                         
-                        // Store the strength value using the setPotionEffectStrength method
-                        area.setPotionEffectStrength(strengthNode, strengthValue);
-                        
-                        // If strength > 0, also ensure the toggle is enabled (for backwards compatibility)
-                        if (strengthValue > 0) {
-                            area.setToggleState(permissionNode, true);
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("Setting toggle state for " + permissionNode + " to TRUE");
-                            }
-                        } else {
-                            area.setToggleState(permissionNode, false);
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("Setting toggle state for " + permissionNode + " to FALSE");
-                            }
-                        }
+                        // Also handle the associated permission toggle
+                        effectStrengths.put(permissionNode, strengthValue > 0 ? 1 : 0);
                         
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Updated strength: " + strengthNode + " = " + strengthValue);
-                            plugin.debug("Updated toggle: " + permissionNode + " = " + (strengthValue > 0));
-                            plugin.debug("Updated strength " + strengthNode + " from " + 
+                            plugin.debug("Will update strength " + strengthNode + " from " + 
                                 currentStrengthValue + " to " + strengthValue);
                         }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().error("Error processing effect " + POTION_TOGGLES.get(i).permissionNode + ": " + e.getMessage());
-                    if (plugin.isDebugMode()) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-
-            // Save changes - first make sure toggle states are synchronized
-            if (changedSettings > 0) {
-                // Explicitly synchronize toggle states before recreation
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Before synchronization - toggle states: " + area.toDTO().toggleStates());
-                    plugin.debug("Before synchronization - potion effects: " + area.toDTO().potionEffects());
-                }
-                
-                area = area.synchronizeToggleStates();
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("After synchronization - toggle states: " + area.toDTO().toggleStates());
-                    plugin.debug("After synchronization - settings: " + area.toDTO().settings());
-                    plugin.debug("After synchronization - potion effects: " + area.toDTO().potionEffects());
-                }
-                
-                // Now recreate the area with the updated toggle states and potion effects
-                area = plugin.getAreaManager().recreateArea(area);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Recreated area with " + changedSettings + " effect changes for area " + area.getName());
-                    plugin.debug("Final toggle states: " + area.toDTO().toggleStates());
-                    plugin.debug("Final settings: " + area.toDTO().settings());
-                    plugin.debug("Final potion effects: " + area.toDTO().potionEffects());
-                    
-                    // Double-check if the changes were saved
-                    try {
-                        Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
-                        if (freshArea != null) {
-                            plugin.debug("Verification from database:");
-                            plugin.debug("  Toggle states from DB: " + freshArea.toDTO().toggleStates());
-                            plugin.debug("  Settings from DB: " + freshArea.toDTO().settings());
-                            plugin.debug("  Potion effects from DB: " + freshArea.toDTO().potionEffects());
-                        }
-                    } catch (Exception e) {
-                        plugin.debug("Error verifying area from database: " + e.getMessage());
-                    }
-                }
-                
-                // Log area potion effects for debugging
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Area " + area.getName() + " potion effects after recreation:");
-                    for (ToggleDefinition toggle : POTION_TOGGLES) {
-                        String permissionNode = normalizePermissionNode(toggle.permissionNode);
-                        String strengthNode = permissionNode + "Strength";
-                        int strength = area.getPotionEffectStrength(strengthNode);
-                        boolean toggleState = area.getToggleState(permissionNode);
-                        plugin.debug("  - " + toggle.displayName + ": strength=" + strength + ", toggle=" + toggleState);
-                    }
+                    plugin.getLogger().error("Error processing effect " + POTION_TOGGLES.get(i).permissionNode, e);
                 }
             }
             
-            // Show success message with change count
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
-                Map.of(
-                    "area", area.getName(),
-                    "count", String.valueOf(changedSettings)
-                )));
-
-            // Return to edit menu
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+            // Use the standardized method to update potion effects and notify the player
+            updatePotionEffectsAndNotifyPlayer(player, area, effectStrengths, FormIds.EDIT_AREA);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling potion effects settings", e);
-            if (plugin.isDebugMode()) {
-                e.printStackTrace();
-            }
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             plugin.getGuiManager().openMainMenu(player);
         }
@@ -343,4 +231,4 @@ public class PotionEffectsHandler extends BaseFormHandler {
         // Add prefix for simple permission names
         return "gui.permissions.toggles." + permission;
     }
-} 
+}

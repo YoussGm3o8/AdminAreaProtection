@@ -6,19 +6,23 @@ import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.LuckPermsTrackChangeEvent;
+import adminarea.form.handlers.BaseFormHandler;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementButton;
 import cn.nukkit.form.element.ElementDropdown;
+import cn.nukkit.form.element.ElementLabel;
 import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowCustom;
 import cn.nukkit.form.window.FormWindowSimple;
+import net.luckperms.api.track.Track;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class LuckPermsSettingsHandler extends BaseFormHandler {
     private static final String TRACK_DATA_KEY = "_track";
@@ -53,49 +57,96 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
         FormTrackingData groupData = plugin.getFormIdMap().get(player.getName() + GROUP_DATA_KEY);
 
         if (trackData == null) {
-            // Show track selection form
-            FormWindowSimple form = new FormWindowSimple(
-                "Select Track - " + area.getName(),
-                "Choose a track to edit permissions for, or select Global Track Settings:"
+            // Show track selection form with detailed descriptions
+            FormWindowCustom form = new FormWindowCustom(
+                plugin.getLanguageManager().get("gui.luckperms.title.main")
             );
 
-            form.addButton(new ElementButton("Global Track Settings"));
+            // Add informative label at top of form
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.luckperms.header.tracks")));
             
-            plugin.getLuckPermsApi().getTrackManager().getLoadedTracks().forEach(track -> {
-                form.addButton(new ElementButton(track.getName()));
-            });
-
-            return form;
-        } else if (groupData == null) {
-            // Show group selection form for the selected track
-            String trackName = trackData.getFormId();
+            // Get all available tracks plus a "Custom" option
+            List<String> trackOptions = new ArrayList<>();
+            trackOptions.add(plugin.getLanguageManager().get("gui.luckperms.labels.selectTrack")); // Default option
             
-            if ("global".equals(trackName)) {
-                return createGlobalTrackSettingsForm(area);
+            if (plugin.isLuckPermsEnabled()) {
+                List<String> trackNames = plugin.getLuckPermsApi().getTrackManager().getLoadedTracks().stream()
+                    .map(Track::getName)
+                    .sorted(String.CASE_INSENSITIVE_ORDER)
+                    .collect(Collectors.toList());
+                
+                if (trackNames.isEmpty()) {
+                    form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.luckperms.labels.noTracks")));
+                    return form;
+                }
+                
+                trackOptions.addAll(trackNames);
+            } else {
+                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.noLuckPerms"));
+                return null;
             }
             
-            FormWindowSimple form = new FormWindowSimple(
-                "Select Group - " + trackName,
-                "Choose a group from the track to edit permissions for:"
-            );
-
-            List<String> trackGroups = plugin.getGroupsByTrack(trackName);
-            for (String group : trackGroups) {
-                form.addButton(new ElementButton(group));
+            // Add dropdown for track selection
+            form.addElement(new ElementDropdown(
+                plugin.getLanguageManager().get("gui.luckperms.labels.selectTrack"),
+                trackOptions
+            ));
+            
+            // Show existing track permissions for reference
+            StringBuilder trackInfo = new StringBuilder(plugin.getLanguageManager().get("gui.luckperms.header.permissions") + "\n");
+            Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
+            
+            if (trackPerms.isEmpty()) {
+                trackInfo.append(plugin.getLanguageManager().get("gui.luckperms.messages.noPermissionsSelected"));
+            } else {
+                for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
+                    trackInfo.append("\n§f").append(entry.getKey()).append("§7: ");
+                    Map<String, Boolean> perms = entry.getValue();
+                    if (perms.isEmpty()) {
+                        trackInfo.append(plugin.getLanguageManager().get("gui.luckperms.messages.noPermissionsSelected"));
+                    } else {
+                        trackInfo.append(perms.size()).append(" permissions configured");
+                    }
+                }
             }
-
+            
+            form.addElement(new ElementLabel(trackInfo.toString()));
+            
             return form;
         } else {
-            // Show permission editing form for selected group
-            return createGroupPermissionForm(area, groupData.getFormId());
+            // Show permission editing form for selected track
+            return createTrackPermissionForm(area, trackData.getFormId());
         }
     }
 
-    private FormWindowCustom createGlobalTrackSettingsForm(Area area) {
-        FormWindowCustom form = new FormWindowCustom("Global Track Settings - " + area.getName());
+    private FormWindowCustom createTrackPermissionForm(Area area, String trackName) {
+        FormWindowCustom form = new FormWindowCustom(
+            plugin.getLanguageManager().get("gui.luckperms.title.track", Map.of("track", trackName))
+        );
+        
+        // Add track info at top of form
+        List<String> groups = plugin.getGroupsByTrack(trackName);
+        StringBuilder groupList = new StringBuilder();
+        for (String group : groups) {
+            groupList.append("\n- §f").append(group);
+        }
+        
+        form.addElement(new ElementLabel(
+            plugin.getLanguageManager().get("gui.luckperms.header.permissions", 
+                Map.of("target", trackName, "groups", groupList.toString()))
+        ));
+
+        // Add group selection dropdown
+        List<String> groupOptions = new ArrayList<>();
+        groupOptions.add(plugin.getLanguageManager().get("gui.luckperms.labels.allGroups")); // Option to apply to all groups
+        groupOptions.addAll(groups); // Add individual groups
+        form.addElement(new ElementDropdown(
+            plugin.getLanguageManager().get("gui.luckperms.labels.selectGroups"),
+            groupOptions
+        ));
         
         // Add toggles for relevant permissions
-        Map<String, Boolean> currentPerms = area.getTrackPermissions("global");
+        Map<String, Boolean> currentPerms = area.getTrackPermissions().getOrDefault(trackName, new HashMap<>());
         
         for (PermissionToggle toggle : PermissionToggle.getPlayerToggles()) {
             boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), area.getToggleState(toggle.getPermissionNode()));
@@ -103,75 +154,6 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
         }
 
         return form;
-    }
-
-    private FormWindowCustom createGroupPermissionForm(Area area, String groupName) {
-        FormWindowCustom form = new FormWindowCustom("Edit " + groupName + " Permissions");
-
-        Map<String, Boolean> currentPerms = area.getGroupPermissions(groupName);
-        
-        // Add toggles for player-relevant permissions
-        for (PermissionToggle toggle : PermissionToggle.getPlayerToggles()) {
-            boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), area.getToggleState(toggle.getPermissionNode()));
-            form.addElement(new ElementToggle(toggle.getDisplayName(), currentValue));
-        }
-
-        return form;
-    }
-
-    @Override
-    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        if (response == null) {
-            handleCancel(player);
-            return;
-        }
-
-        FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        if (areaData == null) return;
-
-        Area area = plugin.getArea(areaData.getFormId());
-        if (area == null) return;
-
-        FormTrackingData trackData = plugin.getFormIdMap().get(player.getName() + TRACK_DATA_KEY);
-        
-        if (trackData == null) {
-            // Handle track selection
-            String selectedTrack = response.getClickedButtonId() == 0 ? 
-                "global" : 
-                plugin.getLuckPermsApi().getTrackManager().getLoadedTracks()
-                    .stream()
-                    .skip(response.getClickedButtonId() - 1)
-                    .findFirst()
-                    .map(track -> track.getName())
-                    .orElse(null);
-
-            if (selectedTrack == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidTrack"));
-                return;
-            }
-
-            plugin.getFormIdMap().put(
-                player.getName() + TRACK_DATA_KEY,
-                new FormTrackingData(selectedTrack, System.currentTimeMillis())
-            );
-        } else {
-            // Handle group selection
-            String trackName = trackData.getFormId();
-            List<String> trackGroups = plugin.getGroupsByTrack(trackName);
-            
-            if (response.getClickedButtonId() >= 0 && response.getClickedButtonId() < trackGroups.size()) {
-                String selectedGroup = trackGroups.get(response.getClickedButtonId());
-                plugin.getFormIdMap().put(
-                    player.getName() + GROUP_DATA_KEY,
-                    new FormTrackingData(selectedGroup, System.currentTimeMillis())
-                );
-            } else {
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidGroup"));
-                return;
-            }
-        }
-
-        plugin.getGuiManager().openFormById(player, FormIds.LUCKPERMS_SETTINGS, area);
     }
 
     @Override
@@ -184,70 +166,180 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
         try {
             FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
             FormTrackingData trackData = plugin.getFormIdMap().get(player.getName() + TRACK_DATA_KEY);
-            FormTrackingData groupData = plugin.getFormIdMap().get(player.getName() + GROUP_DATA_KEY);
 
-            if (areaData == null || trackData == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.invalidSession"));
+            if (areaData == null) {
+                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.invalidSession"));
                 return;
             }
 
             Area area = plugin.getArea(areaData.getFormId());
             if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
                 return;
             }
 
             // Get current DTO
             AreaDTO currentDTO = area.toDTO();
             
-            // Process permissions
-            Map<String, Boolean> newPerms = new HashMap<>();
-            int index = 0;
-            for (PermissionToggle toggle : PermissionToggle.getPlayerToggles()) {
-                Boolean value = response.getToggleResponse(index);
-                newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
-                index++;
-            }
-
-            Area updatedArea;
-            if ("global".equals(trackData.getFormId())) {
-                // Update global track permissions
-                Map<String, Map<String, Boolean>> trackPerms = new HashMap<>(currentDTO.trackPermissions());
-                trackPerms.put("global", newPerms);
-                
-                updatedArea = AreaBuilder.fromDTO(currentDTO)
-                    .trackPermissions(trackPerms)
-                    .build();
-                    
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.trackPermissionsApplied"));
-            } else if (groupData != null) {
-                // Update specific group permissions
-                String groupName = groupData.getFormId();
-                Map<String, Map<String, Boolean>> groupPerms = new HashMap<>(currentDTO.groupPermissions());
-                Map<String, Boolean> oldPerms = groupPerms.getOrDefault(groupName, new HashMap<>());
-                groupPerms.put(groupName, newPerms);
-                
-                updatedArea = AreaBuilder.fromDTO(currentDTO)
-                    .groupPermissions(groupPerms)
-                    .build();
-
-                // Fire event
-                LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, newPerms);
-                plugin.getServer().getPluginManager().callEvent(event);
-
-                if (event.isCancelled()) {
+            // If we're selecting a track (no track data yet)
+            if (trackData == null) {
+                int selectedIndex = response.getDropdownResponse(1).getElementID();
+                if (selectedIndex == 0) {
+                    // User didn't select a valid track
+                    player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.noTrackSelected"));
                     return;
                 }
                 
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.groupPermissionsUpdated",
-                    Map.of("group", groupName, "area", area.getName())));
-            } else {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+                List<String> trackNames = new ArrayList<>();
+                if (plugin.isLuckPermsEnabled()) {
+                    trackNames = plugin.getLuckPermsApi().getTrackManager().getLoadedTracks().stream()
+                        .map(Track::getName)
+                        .sorted(String.CASE_INSENSITIVE_ORDER)
+                        .collect(Collectors.toList());
+                }
+                
+                if (selectedIndex - 1 < trackNames.size()) {
+                    String selectedTrack = trackNames.get(selectedIndex - 1);
+                    plugin.getFormIdMap().put(
+                        player.getName() + TRACK_DATA_KEY,
+                        new FormTrackingData(selectedTrack, System.currentTimeMillis())
+                    );
+                    plugin.getGuiManager().openFormById(player, FormIds.LUCKPERMS_SETTINGS, area);
+                } else {
+                    player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.invalidTrack"));
+                }
                 return;
             }
+            
+            // Process permissions for track
+            Map<String, Boolean> newPerms = new HashMap<>();
+            int startIndex = 2; // Skip header and dropdown
+            
+            for (int i = 0; i < PermissionToggle.getPlayerToggles().length; i++) {
+                PermissionToggle toggle = PermissionToggle.getPlayerToggles()[i];
+                Boolean value = response.getToggleResponse(startIndex + i);
+                newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
+            }
 
-            // Update area in plugin
+            // Update track permissions
+            String trackName = trackData.getFormId();
+            Map<String, Map<String, Boolean>> trackPerms = new HashMap<>(currentDTO.trackPermissions());
+            Map<String, Boolean> oldPerms = trackPerms.getOrDefault(trackName, new HashMap<>());
+            trackPerms.put(trackName, newPerms);
+            
+            // Create updated area
+            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
+                .trackPermissions(trackPerms)
+                .build();
+            
+            // Get selected group option
+            int selectedGroupIndex = response.getDropdownResponse(1).getElementID();
+            List<String> trackGroups = plugin.getGroupsByTrack(trackName);
+            List<String> groupsToUpdate = new ArrayList<>();
+            
+            if (selectedGroupIndex == 0) {
+                // "All Groups" selected - update all groups in track
+                groupsToUpdate.addAll(trackGroups);
+            } else if (selectedGroupIndex <= trackGroups.size()) {
+                // Single group selected
+                groupsToUpdate.add(trackGroups.get(selectedGroupIndex - 1));
+            }
+            
+            // Update group permissions
+            if (!groupsToUpdate.isEmpty()) {
+                Map<String, Map<String, Boolean>> groupPerms = new HashMap<>(currentDTO.groupPermissions());
+                
+                for (String group : groupsToUpdate) {
+                    Map<String, Boolean> currentGroupPerms = groupPerms.getOrDefault(group, new HashMap<>());
+                    Map<String, Boolean> mergedPerms = new HashMap<>(newPerms);
+                    
+                    // Add any existing group permissions that aren't in the track permissions
+                    for (Map.Entry<String, Boolean> entry : currentGroupPerms.entrySet()) {
+                        if (!mergedPerms.containsKey(entry.getKey())) {
+                            mergedPerms.put(entry.getKey(), entry.getValue());
+                        }
+                    }
+                    
+                    groupPerms.put(group, mergedPerms);
+                }
+                
+                // Update the area with merged group permissions
+                updatedArea = AreaBuilder.fromDTO(updatedArea.toDTO())
+                    .groupPermissions(groupPerms)
+                    .build();
+            }
+            
+            // Fire event
+            LuckPermsTrackChangeEvent event = new LuckPermsTrackChangeEvent(
+                area, trackName, "track_permission_update", oldPerms.getOrDefault("adminarea.enter", false), newPerms.getOrDefault("adminarea.enter", false));
+            plugin.getServer().getPluginManager().callEvent(event);
+            
+            // IMPORTANT: Explicitly save track permissions to the permission database first
+            try {
+                plugin.getPermissionOverrideManager().setTrackPermissions(
+                    updatedArea.getName(), 
+                    trackName, 
+                    newPerms
+                );
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Explicitly saved track permissions for " + trackName);
+                }
+                
+                // If we're updating group permissions too, save those explicitly
+                if (!groupsToUpdate.isEmpty()) {
+                    Map<String, Map<String, Boolean>> groupPerms = updatedArea.getGroupPermissions();
+                    for (String group : groupsToUpdate) {
+                        Map<String, Boolean> groupPermMap = groupPerms.get(group);
+                        if (groupPermMap != null) {
+                            plugin.getPermissionOverrideManager().setGroupPermissions(
+                                updatedArea.getName(),
+                                group,
+                                groupPermMap
+                            );
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Explicitly saved group permissions for " + group + " from track update");
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to explicitly save track/group permissions", e);
+                throw e;
+            }
+            
+            // Save area to database
+            try {
+                plugin.getDatabaseManager().saveArea(updatedArea);
+                
+                // Force synchronize permissions to ensure they're saved
+                plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to save area to database", e);
+                throw e;
+            }
+            
+            // Update in plugin
             plugin.updateArea(updatedArea);
+            
+            // Notify player of updated permissions
+            if (groupsToUpdate.size() > 1) {
+                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.trackUpdated",
+                    Map.of(
+                        "track", trackName,
+                        "area", area.getName(),
+                        "count", String.valueOf(groupsToUpdate.size())
+                    )
+                ));
+            } else if (groupsToUpdate.size() == 1) {
+                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.groupUpdated",
+                    Map.of(
+                        "group", groupsToUpdate.get(0),
+                        "area", area.getName()
+                    )
+                ));
+            }
 
             // Clear selection data and return to edit menu
             plugin.getFormIdMap().remove(player.getName() + TRACK_DATA_KEY);
@@ -256,9 +348,15 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling LuckPerms settings response", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.updateFailed",
+                Map.of("error", e.getMessage())));
             handleCancel(player);
         }
+    }
+
+    @Override
+    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
+        throw new UnsupportedOperationException("LuckPerms settings form does not use simple responses");
     }
 
     @Override

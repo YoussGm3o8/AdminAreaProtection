@@ -1,10 +1,8 @@
 package adminarea.managers;
 
 import adminarea.AdminAreaProtectionPlugin;
-import adminarea.listeners.EnderPearlListener;
 import adminarea.listeners.EntityListener;
 import adminarea.listeners.EnvironmentListener;
-import adminarea.listeners.ExperienceListener;
 import adminarea.listeners.ItemListener;
 import adminarea.listeners.PlayerEffectListener;
 import adminarea.listeners.ProtectionListener;
@@ -27,8 +25,6 @@ public class ListenerManager {
     // Individual listeners
     private VehicleListener vehicleListener;
     private PlayerEffectListener playerEffectListener;
-    private EnderPearlListener enderPearlListener;
-    private ExperienceListener experienceListener;
     private ItemListener itemListener;
     private EnvironmentListener environmentListener;
     private EntityListener entityListener;
@@ -58,14 +54,8 @@ public class ListenerManager {
             vehicleListener = new VehicleListener(plugin, protectionListener);
             listeners.add(vehicleListener);
             
-            playerEffectListener = new PlayerEffectListener(plugin);
+            playerEffectListener = new PlayerEffectListener(plugin, protectionListener);
             listeners.add(playerEffectListener);
-            
-            enderPearlListener = new EnderPearlListener(plugin, protectionListener);
-            listeners.add(enderPearlListener);
-            
-            experienceListener = new ExperienceListener(plugin, protectionListener);
-            listeners.add(experienceListener);
             
             itemListener = new ItemListener(plugin, protectionListener);
             listeners.add(itemListener);
@@ -75,6 +65,10 @@ public class ListenerManager {
             
             entityListener = new EntityListener(plugin, protectionListener);
             listeners.add(entityListener);
+            
+            // Set the entity listener reference in the protection listener
+            // to connect the breeding checks
+            protectionListener.setEntityListener(entityListener);
             
             wandListener = new WandListener(plugin);
             listeners.add(wandListener);
@@ -187,6 +181,15 @@ public class ListenerManager {
      */
     public PlayerEffectListener getPlayerEffectListener() {
         return playerEffectListener;
+    }
+    
+    /**
+     * Gets the item listener
+     * 
+     * @return The item listener
+     */
+    public ItemListener getItemListener() {
+        return itemListener;
     }
     
     /**

@@ -28,7 +28,7 @@ public class VehicleListener implements Listener {
             for (Entity entity : vehicle.getLevel().getNearbyEntities(vehicle.getBoundingBox().grow(1, 1, 1))) {
                 if (entity instanceof Player player) {
                     Position pos = vehicle.getPosition();
-                    if (protectionListener.shouldCancel(pos, player, "allowVehiclePlace")) {
+                    if (protectionListener.handleProtection(pos, player, "allowVehiclePlace")) {
                         event.setCancelled(true);
                         protectionListener.sendProtectionMessage(player, "messages.protection.vehiclePlace");
                         break;
@@ -47,7 +47,7 @@ public class VehicleListener implements Listener {
             Entity attacker = event.getAttacker();
             if (attacker instanceof Player player) {
                 Position pos = event.getVehicle().getPosition();
-                if (protectionListener.shouldCancel(pos, player, "allowVehicleBreak")) {
+                if (protectionListener.handleProtection(pos, player, "allowVehicleBreak")) {
                     event.setCancelled(true);
                     protectionListener.sendProtectionMessage(player, "messages.protection.vehicleBreak");
                 }
@@ -63,7 +63,7 @@ public class VehicleListener implements Listener {
         try {
             if (event.getEntity() instanceof Player player) {
                 Position pos = event.getVehicle().getPosition();
-                if (protectionListener.shouldCancel(pos, player, "allowVehicleEnter")) {
+                if (protectionListener.handleProtection(pos, player, "allowVehicleEnter")) {
                     event.setCancelled(true);
                     protectionListener.sendProtectionMessage(player, "messages.protection.vehicleEnter");
                 }

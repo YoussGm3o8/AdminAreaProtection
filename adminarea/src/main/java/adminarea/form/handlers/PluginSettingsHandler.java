@@ -136,7 +136,10 @@ public class PluginSettingsHandler extends BaseFormHandler {
             validateNumericInputs(response);
 
             // General Settings
-            plugin.setDebugMode(response.getToggleResponse(1));
+            boolean debugEnabled = response.getToggleResponse(1);
+            plugin.getConfigManager().set("debug", debugEnabled); // This will save to config and update plugin state
+            plugin.setDebugMode(debugEnabled); // Ensure plugin state is updated
+
             plugin.getConfigManager().set("debugStackTraces", response.getToggleResponse(2));
             plugin.getConfigManager().set("enableMessages", response.getToggleResponse(3));
             // Removed allowRegularAreaCreation toggle

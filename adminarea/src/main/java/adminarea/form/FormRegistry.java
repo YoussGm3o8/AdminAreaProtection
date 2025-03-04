@@ -1,11 +1,8 @@
 package adminarea.form;
 
-import java.util.HashMap;
-import java.util.Map;
-
 import adminarea.AdminAreaProtectionPlugin;
-import adminarea.constants.FormIds;
 import adminarea.form.handlers.*;
+import java.util.*;
 
 public class FormRegistry {
     private final AdminAreaProtectionPlugin plugin;

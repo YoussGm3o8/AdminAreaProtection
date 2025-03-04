@@ -16,9 +16,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 import java.sql.Statement;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -41,20 +43,49 @@ public class DatabaseManager {
     }
 
     private HikariDataSource initializeDataSource() {
+        // Explicitly load the SQLite JDBC driver
+        try {
+            Class.forName("org.sqlite.JDBC");
+            if (plugin.isDebugMode()) {
+                plugin.debug("Successfully loaded SQLite JDBC driver");
+            }
+        } catch (ClassNotFoundException e) {
+            logger.error("Failed to load SQLite JDBC driver", e);
+            throw new RuntimeException("SQLite JDBC driver not found", e);
+        }
+        
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:" + plugin.getDataFolder() + "/areas.db");
-        config.setMaximumPoolSize(20);  // Increased from 10 to handle more concurrent requests
-        config.setMinimumIdle(10);      // Increased to keep more connections ready
-        config.setIdleTimeout(600000);  // 10 minutes - increased to keep connections longer
-        config.setMaxLifetime(1800000); // 30 minutes - increased for longer sessions
-        config.setConnectionTimeout(5000); // 5 seconds - reduced to fail faster if there's an issue
+        String jdbcUrl = "jdbc:sqlite:" + plugin.getDataFolder() + "/areas.db";
+        config.setJdbcUrl(jdbcUrl);
+        config.setMaximumPoolSize(30);       // Increased from 20 to handle more connections
+        config.setMinimumIdle(5);            // Decreased to avoid too many idle connections
+        config.setIdleTimeout(600000);       // 10 minutes
+        config.setMaxLifetime(1800000);      // 30 minutes
+        config.setConnectionTimeout(30000);  // 30 seconds - increased for heavy operations
         config.setConnectionTestQuery("SELECT 1");
-
+        
+        // Configure connection retry
+        config.setInitializationFailTimeout(10000);  // Wait 10 seconds for pool to initialize
+        
+        // SQLite specific optimizations
+        config.addDataSourceProperty("journal_mode", "WAL");    // Use Write-Ahead Logging
+        config.addDataSourceProperty("synchronous", "NORMAL");  // Balance between safety and performance
+        config.addDataSourceProperty("cache_size", "2000");     // Increase cache size
+        
         // Only enable HikariCP debug logging if plugin debug mode is on
         if (!plugin.isDebugMode()) {
-            //config.addDataSourceProperty("logger", "none");
-            //config.setPoolName("HikariPool-AdminArea");
-            //LoggerFactory.getLogger("com.zaxxer.hikari").warn("Disabling HikariCP logging");
+            config.setLeakDetectionThreshold(60000); // 1 minute for leak detection
+        }
+        
+        // Test the connection before returning the data source
+        try {
+            DriverManager.getConnection(jdbcUrl).close();
+            if (plugin.isDebugMode()) {
+                plugin.debug("Successfully tested database connection");
+            }
+        } catch (SQLException e) {
+            logger.error("Failed to test database connection", e);
+            // Continue anyway, as HikariCP might still be able to establish a connection
         }
 
         return new HikariDataSource(config);
@@ -146,6 +177,9 @@ public class DatabaseManager {
                             }
                         }
                     }
+                    
+                    // Migrate permission data to permission_overrides database and remove unused columns
+                    migratePermissionsToOverrideDatabase(conn, stmt);
 
                     conn.commit();
                 } catch (SQLException e) {
@@ -159,6 +193,152 @@ public class DatabaseManager {
         }
     }
 
+    /**
+     * Migrates permission data from the areas table to the permission_overrides database
+     * and removes unused permission columns from the areas table.
+     * 
+     * @param conn The database connection
+     * @param stmt The statement to use for executing SQL
+     * @throws SQLException If there's an error during migration
+     */
+    private void migratePermissionsToOverrideDatabase(Connection conn, Statement stmt) throws SQLException {
+        // Check if we need to migrate permissions
+        List<String> columnsToCheck = Arrays.asList(
+            "group_permissions", "player_permissions", "track_permissions"
+        );
+        
+        boolean needsMigration = false;
+        for (String column : columnsToCheck) {
+            try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", column)) {
+                if (rs.next()) {
+                    needsMigration = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!needsMigration) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("No permission columns to migrate");
+            }
+            return;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Starting permission migration to permission_overrides database");
+        }
+        
+        // Get all areas with permission data
+        try (ResultSet areas = stmt.executeQuery(
+                "SELECT name, group_permissions, player_permissions, track_permissions FROM areas")) {
+            
+            while (areas.next()) {
+                String areaName = areas.getString("name");
+                
+                // Migrate group permissions
+                String groupPermsJson = areas.getString("group_permissions");
+                if (groupPermsJson != null && !groupPermsJson.isEmpty() && !groupPermsJson.equals("{}")) {
+                    Map<String, Map<String, Boolean>> groupPerms = parseJsonToMap(groupPermsJson);
+                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
+                        try {
+                            plugin.getPermissionOverrideManager().setGroupPermissions(areaName, entry.getKey(), entry.getValue());
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  Migrated group permissions for " + entry.getKey() + " in area " + areaName);
+                            }
+                        } catch (DatabaseException e) {
+                            plugin.getLogger().error("Failed to migrate group permissions for " + entry.getKey() + " in area " + areaName, e);
+                        }
+                    }
+                }
+                
+                // Migrate player permissions
+                String playerPermsJson = areas.getString("player_permissions");
+                if (playerPermsJson != null && !playerPermsJson.isEmpty() && !playerPermsJson.equals("{}")) {
+                    Map<String, Map<String, Boolean>> playerPerms = parseJsonToMap(playerPermsJson);
+                    for (Map.Entry<String, Map<String, Boolean>> entry : playerPerms.entrySet()) {
+                        try {
+                            plugin.getPermissionOverrideManager().setPlayerPermissions(areaName, entry.getKey(), entry.getValue());
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  Migrated player permissions for " + entry.getKey() + " in area " + areaName);
+                            }
+                        } catch (DatabaseException e) {
+                            plugin.getLogger().error("Failed to migrate player permissions for " + entry.getKey() + " in area " + areaName, e);
+                        }
+                    }
+                }
+                
+                // Migrate track permissions
+                String trackPermsJson = areas.getString("track_permissions");
+                if (trackPermsJson != null && !trackPermsJson.isEmpty() && !trackPermsJson.equals("{}")) {
+                    Map<String, Map<String, Boolean>> trackPerms = parseJsonToMap(trackPermsJson);
+                    for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
+                        try {
+                            plugin.getPermissionOverrideManager().setTrackPermissions(areaName, entry.getKey(), entry.getValue());
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  Migrated track permissions for " + entry.getKey() + " in area " + areaName);
+                            }
+                        } catch (DatabaseException e) {
+                            plugin.getLogger().error("Failed to migrate track permissions for " + entry.getKey() + " in area " + areaName, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Create a new table without the permission columns
+        if (plugin.isDebugMode()) {
+            plugin.debug("Creating new areas table without permission columns");
+        }
+        
+        // Create a temporary table without the permission columns
+        stmt.executeUpdate("""
+            CREATE TABLE areas_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                world TEXT,
+                x_min INTEGER,
+                x_max INTEGER,
+                y_min INTEGER,
+                y_max INTEGER,
+                z_min INTEGER,
+                z_max INTEGER,
+                priority INTEGER,
+                show_title BOOLEAN,
+                enter_message TEXT,
+                leave_message TEXT,
+                toggle_states TEXT DEFAULT '{}',
+                default_toggle_states TEXT DEFAULT '{}',
+                inherited_toggle_states TEXT DEFAULT '{}',
+                potion_effects TEXT DEFAULT '{}'
+            )
+        """);
+        
+        // Copy data to the new table
+        stmt.executeUpdate("""
+            INSERT INTO areas_new (
+                name, world, x_min, x_max, y_min, y_max, z_min, z_max,
+                priority, show_title, enter_message, leave_message,
+                toggle_states, default_toggle_states, inherited_toggle_states, potion_effects
+            )
+            SELECT
+                name, world, x_min, x_max, y_min, y_max, z_min, z_max,
+                priority, show_title, enter_message, leave_message,
+                toggle_states, default_toggle_states, inherited_toggle_states, potion_effects
+            FROM areas
+        """);
+        
+        // Drop the old table and rename the new one
+        stmt.executeUpdate("DROP TABLE areas");
+        stmt.executeUpdate("ALTER TABLE areas_new RENAME TO areas");
+        
+        // Create index on the name column
+        stmt.executeUpdate("CREATE INDEX IF NOT EXISTS idx_areas_name ON areas(name)");
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Permission migration complete - unused columns removed from areas table");
+        }
+    }
+
     public void saveArea(Area area) throws DatabaseException {
         if (plugin.isDebugMode()) {
             plugin.debug("Saving area to database: " + area.getName());
@@ -169,9 +349,9 @@ public class DatabaseManager {
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(
                 "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
-                "priority, show_title, group_permissions, inherited_permissions, enter_message, leave_message, " +
-                "toggle_states, default_toggle_states, inherited_toggle_states, track_permissions, player_permissions, potion_effects) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "priority, show_title, enter_message, leave_message, " +
+                "toggle_states, default_toggle_states, inherited_toggle_states, potion_effects) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
              )) {
 
             AreaDTO dto = area.toDTO();
@@ -185,14 +365,10 @@ public class DatabaseManager {
             stmt.setInt(8, dto.bounds().zMax());
             stmt.setInt(9, dto.priority());
             stmt.setBoolean(10, dto.showTitle());
-
-            // Convert maps to JSON strings
-            stmt.setString(11, new JSONObject(dto.groupPermissions()).toString());
-            stmt.setString(12, new JSONObject(dto.inheritedPermissions()).toString());
             
             // Store enter/leave messages
-            stmt.setString(13, dto.enterMessage());
-            stmt.setString(14, dto.leaveMessage());
+            stmt.setString(11, dto.enterMessage());
+            stmt.setString(12, dto.leaveMessage());
             
             // Save toggle states JSON - ensure it's not an empty object if there are actual toggle states
             String toggleStatesJson = dto.toggleStates().toString();
@@ -221,12 +397,10 @@ public class DatabaseManager {
                     plugin.debug("  Rebuilt toggle states: " + toggleStatesJson);
                 }
             }
-            stmt.setString(15, toggleStatesJson);
+            stmt.setString(13, toggleStatesJson);
             
-            stmt.setString(16, dto.defaultToggleStates().toString());
-            stmt.setString(17, dto.inheritedToggleStates().toString());
-            stmt.setString(18, new JSONObject(dto.trackPermissions()).toString());
-            stmt.setString(19, new JSONObject(dto.playerPermissions()).toString());
+            stmt.setString(14, dto.defaultToggleStates().toString());
+            stmt.setString(15, dto.inheritedToggleStates().toString());
             
             // Save potion effects JSON - ensure it's not empty if there are actual potion effects
             String potionEffectsJson = dto.potionEffects().toString();
@@ -249,26 +423,35 @@ public class DatabaseManager {
                     }
                 }
             }
-            stmt.setString(20, potionEffectsJson);
+            stmt.setString(16, potionEffectsJson);
 
-            stmt.executeUpdate();
+            // Execute the update
+            int rowsAffected = stmt.executeUpdate();
             
             if (plugin.isDebugMode()) {
-                // Verify what was actually saved by reading it back
-                try {
-                    Area freshArea = loadArea(area.getName());
-                    if (freshArea != null) {
-                        plugin.debug("  Verified saved area from database:");
-                        plugin.debug("  Toggle states in DB: " + freshArea.toDTO().toggleStates());
-                        plugin.debug("  Potion effects in DB: " + freshArea.toDTO().potionEffects());
-                    }
-                } catch (Exception e) {
-                    plugin.debug("  Failed to verify saved area: " + e.getMessage());
-                }
+                plugin.debug("  Database update complete - rows affected: " + rowsAffected);
             }
-
+            
+            // Ensure permissions are saved to the permission_overrides database
+            try {
+                // Synchronize permissions to the permission_overrides database
+                plugin.getPermissionOverrideManager().synchronizeOnSave(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Synchronized permissions to permission_overrides database");
+                }
+            } catch (DatabaseException e) {
+                plugin.getLogger().error("Failed to synchronize permissions to permission_overrides database", e);
+            }
+            
+            // Update area cache
+            areaCache.put(area.getName(), area);
+            
+            // Ensure area title is in config
+            ensureAreaTitlesConfig(dto);
+            
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to save area: " + area.getName(), e);
+            throw new DatabaseException("Failed to save area to database", e);
         }
     }
 
@@ -305,30 +488,144 @@ public class DatabaseManager {
     public void updateArea(Area area) throws DatabaseException {
         if (plugin.isDebugMode()) {
             plugin.debug("Updating area in database: " + area.getName());
-            plugin.debug("Toggle states being saved: " + area.toDTO().toggleStates());
         }
         
-        // Force area to clear its caches before saving
-        area.clearCaches();
-        
-        // Save to database
-        saveArea(area);
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Area updated in database successfully");
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(
+                "UPDATE areas SET world = ?, x_min = ?, x_max = ?, y_min = ?, y_max = ?, z_min = ?, z_max = ?, " +
+                "priority = ?, show_title = ?, enter_message = ?, leave_message = ?, " +
+                "toggle_states = ?, default_toggle_states = ?, inherited_toggle_states = ?, potion_effects = ? " +
+                "WHERE name = ?"
+             )) {
+
+            AreaDTO dto = area.toDTO();
+            stmt.setString(1, dto.world());
+            stmt.setInt(2, dto.bounds().xMin());
+            stmt.setInt(3, dto.bounds().xMax());
+            stmt.setInt(4, dto.bounds().yMin());
+            stmt.setInt(5, dto.bounds().yMax());
+            stmt.setInt(6, dto.bounds().zMin());
+            stmt.setInt(7, dto.bounds().zMax());
+            stmt.setInt(8, dto.priority());
+            stmt.setBoolean(9, dto.showTitle());
+            stmt.setString(10, dto.enterMessage());
+            stmt.setString(11, dto.leaveMessage());
+            stmt.setString(12, dto.toggleStates().toString());
+            stmt.setString(13, dto.defaultToggleStates().toString());
+            stmt.setString(14, dto.inheritedToggleStates().toString());
+            stmt.setString(15, dto.potionEffects().toString());
+            stmt.setString(16, dto.name());
+
+            int rowsAffected = stmt.executeUpdate();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Database update complete - rows affected: " + rowsAffected);
+            }
+            
+            // Ensure permissions are saved to the permission_overrides database
+            try {
+                // Synchronize permissions to the permission_overrides database
+                plugin.getPermissionOverrideManager().synchronizeOnSave(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Synchronized permissions to permission_overrides database");
+                }
+            } catch (DatabaseException e) {
+                plugin.getLogger().error("Failed to synchronize permissions to permission_overrides database", e);
+            }
+            
+            // Clear area cache
+            invalidateAreaCache(area.getName());
+            
+            // Clear permission checker cache for this area
+            if (plugin.getPermissionOverrideManager() != null && 
+                plugin.getPermissionOverrideManager().getPermissionChecker() != null) {
+                plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(area.getName());
+            }
+            
+        } catch (SQLException e) {
+            throw new DatabaseException("Failed to update area in database", e);
         }
     }
 
+    /**
+     * Invalidates all caches related to an area
+     * This ensures changes are immediately visible to all systems
+     * 
+     * @param areaName The name of the area whose caches should be invalidated
+     */
+    private void invalidateAllAreaCaches(String areaName) {
+        // Clear DatabaseManager's own cache
+        areaCache.invalidate(areaName);
+        
+        // Clear PermissionChecker cache for this area
+        if (plugin.getPermissionOverrideManager() != null && 
+            plugin.getPermissionOverrideManager().getPermissionChecker() != null) {
+            plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(areaName);
+        }
+        
+        // Clear location cache in AreaManager if available
+        if (plugin.getAreaManager() != null) {
+            plugin.getAreaManager().invalidateAreaCache(areaName);
+        }
+        
+        // Clear listener caches if available
+        if (plugin.getListenerManager() != null) {
+            plugin.getListenerManager().reload();
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Invalidated all caches for area: " + areaName);
+        }
+    }
+
+    /**
+     * Invalidates the cache for a specific area
+     * This is a public method that delegates to invalidateAllAreaCaches
+     * 
+     * @param areaName The name of the area whose cache should be invalidated
+     */
+    public void invalidateAreaCache(String areaName) {
+        invalidateAllAreaCaches(areaName);
+    }
+
     public void deleteArea(String name) throws DatabaseException {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Deleting area from database: " + name);
+        }
+        
         try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement("DELETE FROM areas WHERE name = ?")) {
-            ps.setString(1, name);
-            ps.executeUpdate();
+             PreparedStatement stmt = conn.prepareStatement("DELETE FROM areas WHERE name = ?")) {
             
-            // Remove from cache
-            areaCache.invalidate(name);
+            stmt.setString(1, name);
+            int rowsAffected = stmt.executeUpdate();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Database delete complete - rows affected: " + rowsAffected);
+            }
+            
+            // Delete permissions from permission_overrides database
+            try {
+                plugin.getPermissionOverrideManager().deleteAreaPermissions(name);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Deleted permissions from permission_overrides database");
+                }
+            } catch (DatabaseException e) {
+                plugin.getLogger().error("Failed to delete permissions from permission_overrides database", e);
+            }
+            
+            // Clear area cache
+            invalidateAreaCache(name);
+            
+            // Clear permission checker cache for this area
+            if (plugin.getPermissionOverrideManager() != null && 
+                plugin.getPermissionOverrideManager().getPermissionChecker() != null) {
+                plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(name);
+            }
+            
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to delete area: " + name, e);
+            throw new DatabaseException("Failed to delete area from database", e);
         }
     }
 
@@ -372,24 +669,6 @@ public class DatabaseManager {
             plugin.debug("  Loaded potion effects from DB: " + potionEffects.toString());
         }
         
-        // Get raw player permissions JSON
-        String playerPermsJson = rs.getString("player_permissions");
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Raw player permissions from DB: " + playerPermsJson);
-        }
-
-        // Parse permissions
-        Map<String, Map<String, Boolean>> groupPerms = parseJsonToMap(rs.getString("group_permissions"));
-        Map<String, Map<String, Boolean>> inheritedPerms = parseJsonToMap(rs.getString("inherited_permissions"));
-        Map<String, Map<String, Boolean>> trackPerms = parseJsonToMap(rs.getString("track_permissions"));
-        Map<String, Map<String, Boolean>> playerPerms = parseJsonToMap(playerPermsJson);
-
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Parsed player permissions: " + playerPerms);
-            plugin.debug("  Player permissions for YoussGm3o8: " + 
-                (playerPerms.containsKey("YoussGm3o8") ? playerPerms.get("YoussGm3o8") : "none"));
-        }
-
         // Get bounds
         AreaDTO.Bounds bounds = new AreaDTO.Bounds(
             rs.getInt("x_min"),
@@ -406,7 +685,7 @@ public class DatabaseManager {
             permissionsMap.put(key, toggleStates.getBoolean(key));
         }
 
-        // Create DTO
+        // Create DTO with empty permission maps (will be loaded from permission_overrides database)
         AreaDTO dto = new AreaDTO(
             areaName,
             rs.getString("world"),
@@ -414,25 +693,44 @@ public class DatabaseManager {
             rs.getInt("priority"),
             rs.getBoolean("show_title"),
             toggleStates,
-            groupPerms,
-            inheritedPerms,
+            new HashMap<>(), // Empty group permissions
+            new HashMap<>(), // Empty inherited permissions
             toggleStates,
             defaultToggleStates,
             inheritedToggleStates,
             AreaDTO.Permissions.fromMap(permissionsMap),
             rs.getString("enter_message"),
             rs.getString("leave_message"),
-            trackPerms,
-            playerPerms,
+            new HashMap<>(), // Empty track permissions
+            new HashMap<>(), // Empty player permissions
             potionEffects
         );
 
-        if (plugin.isDebugMode()) {
-            plugin.debug("Successfully loaded area " + areaName);
-            plugin.debug("  Final player permissions in DTO: " + dto.playerPermissions());
+        // Build the area
+        Area area = AreaBuilder.fromDTO(dto).build();
+        
+        // Check if PermissionOverrideManager is initialized
+        if (plugin.getPermissionOverrideManager() != null) {
+            plugin.getPermissionOverrideManager().synchronizeOnLoad(area);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Loaded permissions from permission_overrides database");
+                plugin.debug("  Player permissions: " + area.getPlayerPermissions());
+                plugin.debug("  Group permissions: " + area.getGroupPermissions());
+                plugin.debug("  Track permissions: " + area.getTrackPermissions());
+            }
+        } else {
+            // PermissionOverrideManager not initialized yet, log a debug message
+            if (plugin.isDebugMode()) {
+                plugin.debug("  PermissionOverrideManager not initialized yet, permissions will be loaded later");
+            }
         }
 
-        return AreaBuilder.fromDTO(dto).build();
+        if (plugin.isDebugMode()) {
+            plugin.debug("Successfully loaded area " + areaName);
+        }
+
+        return area;
     }
 
     @SuppressWarnings("unchecked")
@@ -495,8 +793,43 @@ public class DatabaseManager {
         return result;
     }
 
+    /**
+     * Get a database connection with retry logic
+     * @return A valid database connection
+     * @throws SQLException if connection cannot be established after retries
+     */
     public Connection getConnection() throws SQLException {
-        return dataSource.getConnection();
+        SQLException lastException = null;
+        int maxRetries = 3;
+        int retryDelayMs = 500;
+        
+        for (int attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                return dataSource.getConnection();
+            } catch (SQLException e) {
+                lastException = e;
+                logger.warn("Database connection attempt " + (attempt + 1) + " failed: " + e.getMessage());
+                
+                // Only retry transient connection exceptions
+                if (e instanceof SQLTransientConnectionException) {
+                    try {
+                        Thread.sleep(retryDelayMs * (attempt + 1));
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e; // Don't retry if interrupted
+                    }
+                } else {
+                    throw e; // Don't retry for non-transient exceptions
+                }
+            }
+        }
+        
+        // If we got here, all retries failed
+        if (lastException != null) {
+            throw lastException;
+        } else {
+            throw new SQLException("Failed to get database connection after " + maxRetries + " attempts");
+        }
     }
 
     public void close() {
@@ -567,9 +900,66 @@ public class DatabaseManager {
                     plugin.debug("  New toggle states: " + toggleStates.toString());
                 }
             }
+            
+            // Important: Invalidate the cache and reload the area to apply changes
+            areaCache.invalidate(areaName);
+            
+            // Reload the area from database
+            Area reloadedArea = loadArea(areaName);
+            if (reloadedArea != null) {
+                // Apply the new toggle state to the area object
+                reloadedArea.setToggleState(permission, value instanceof Boolean ? (Boolean)value : Boolean.valueOf(value.toString()));
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Reloaded area with updated toggles");
+                    plugin.debug("  Verified toggle value for " + permission + ": " + reloadedArea.getToggleState(permission));
+                }
+            }
 
         } catch (SQLException e) {
             throw new DatabaseException("Failed to update toggle state", e);
+        }
+    }
+    
+    /**
+     * Updates all toggle states for an area in a single database operation
+     * @param areaName The name of the area to update
+     * @param toggleStates JSONObject containing all toggle states
+     * @throws DatabaseException If there's an error accessing the database
+     */
+    public void updateAllAreaToggleStates(String areaName, JSONObject toggleStates) throws DatabaseException {
+        try (Connection conn = getConnection()) {
+            // First check if area exists
+            boolean areaExists = false;
+            try (PreparedStatement checkStmt = conn.prepareStatement("SELECT 1 FROM areas WHERE name = ?")) {
+                checkStmt.setString(1, areaName);
+                try (ResultSet rs = checkStmt.executeQuery()) {
+                    areaExists = rs.next();
+                }
+            }
+            
+            if (!areaExists) {
+                throw new DatabaseException("Area not found: " + areaName);
+            }
+
+            // Update database with new toggle states - only update toggle_states column
+            try (PreparedStatement stmt = conn.prepareStatement(
+                "UPDATE areas SET toggle_states = ? WHERE name = ?")) {
+                stmt.setString(1, toggleStates.toString());
+                stmt.setString(2, areaName);
+                stmt.executeUpdate();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Updated all toggle states in database for area " + areaName);
+                    plugin.debug("  New toggle states: " + toggleStates.toString());
+                }
+            }
+            
+            // Important: Invalidate the cache
+            areaCache.invalidate(areaName);
+
+        } catch (SQLException e) {
+            throw new DatabaseException("Failed to update toggle states", e);
         }
     }
 }

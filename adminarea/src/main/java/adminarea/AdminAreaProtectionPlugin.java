@@ -34,7 +34,7 @@ import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
 import adminarea.managers.LanguageManager;
 import adminarea.managers.ListenerManager;
-import adminarea.permissions.OverrideManager;  // Updated import path
+import adminarea.permissions.PermissionOverrideManager;
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
 import adminarea.constants.FormIds;
@@ -51,7 +51,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     private static AdminAreaProtectionPlugin instance;
     // Add this field with other managers
-    private OverrideManager overrideManager;
+    private PermissionOverrideManager permissionOverrideManager;
     private DatabaseManager dbManager;
     private AreaCommand areaCommand;
     private final HashMap<String, Position[]> playerPositions = new HashMap<>(); // Store player positions
@@ -92,6 +92,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             instance = this;
             performanceMonitor = new PerformanceMonitor(this);
             Timer.Sample startupTimer = performanceMonitor.startTimer();
+            
+            // Initialize debug mode once at startup
+            this.debugMode = getConfig().getBoolean("debug", false);
+            if (this.debugMode) {
+                getLogger().info("Debug mode enabled from config");
+                debug("Plugin version: " + getDescription().getVersion());
+                debug("Server version: " + getServer().getVersion());
+            }
             
             try {
                 // Initialize config manager first
@@ -134,6 +142,10 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     
                 // Replace direct config access with config manager
                 reloadConfigValues();
+
+                // Initialize MonsterHandler early to detect MobPlugin availability
+                adminarea.entity.MonsterHandler.initialize(this);
+                getLogger().info("Monster handler initialized");
     
                 // Initialize language manager earlier in startup sequence
                 languageManager = new LanguageManager(this);
@@ -159,20 +171,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     getServer().getPluginManager().disablePlugin(this);
                     return;
                 }
-    
-                // Initialize OverrideManager
-                Timer.Sample overrideInitTimer = performanceMonitor.startTimer();
-                try {
-                    overrideManager = new OverrideManager(this);
-                    performanceMonitor.stopTimer(overrideInitTimer, "override_manager_init");
-                    getLogger().info("Override manager initialized successfully");
-                } catch (Exception e) {
-                    performanceMonitor.stopTimer(overrideInitTimer, "override_manager_init_failed");
-                    getLogger().error("Failed to initialize override manager", e);
-                    getServer().getPluginManager().disablePlugin(this);
-                    return;
-                }
-    
+
                 Timer.Sample areaInitTimer = performanceMonitor.startTimer();
                 areaManager = new AreaManager(this);
                 try {
@@ -181,13 +180,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         areaManager.addArea(area);
                     }
                     
-                    // Normalize toggle states for all areas to ensure consistent format
-                    if (configManager.getBoolean("normalize_toggle_states", true)) {
-                        getLogger().info("Normalizing toggle states for all areas...");
-                        areaManager.normalizeAllAreaToggleStates();
-                        getLogger().info("Toggle states normalized successfully.");
-                    }
-                    
+                    // Note: we'll normalize toggle states later, after all components are initialized
                     performanceMonitor.stopTimer(areaInitTimer, "area_manager_init");
                     getLogger().info("Loaded " + loadedAreas.size() + " areas from database");
                 } catch (DatabaseException e) {
@@ -215,6 +208,50 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 wandListener = new WandListener(this); // Initialize WandListener
     
                 validationUtils = new ValidationUtils();
+
+                // Initialize LuckPerms integration before PermissionOverrideManager
+                if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
+                    try {
+                        luckPermsApi = LuckPermsProvider.get();
+                        luckPermsCache = new LuckPermsCache(this, luckPermsApi);
+                        
+                        // Register listener for LuckPerms changes
+                        luckPermsApi.getEventBus().subscribe(this, 
+                            net.luckperms.api.event.group.GroupDataRecalculateEvent.class, 
+                            event -> luckPermsCache.refreshCache());
+                        luckPermsApi.getEventBus().subscribe(this,
+                            net.luckperms.api.event.group.GroupLoadEvent.class,
+                            event -> luckPermsCache.refreshCache());
+                            
+                        getLogger().info("LuckPerms integration enabled successfully");
+                    } catch (Exception e) {
+                        getLogger().error("Failed to initialize LuckPerms integration", e);
+                    }
+                } else {
+                    getLogger().info("LuckPerms not found. Proceeding without it.");
+                }
+
+                // Initialize PermissionOverrideManager
+                permissionOverrideManager = new PermissionOverrideManager(this);
+                
+                // Now that PermissionOverrideManager is initialized, load permissions for all areas
+                try {
+                    getLogger().info("Loading permissions for all areas...");
+                    List<Area> allAreas = areaManager.getAllAreas();
+                    for (Area area : allAreas) {
+                        try {
+                            permissionOverrideManager.synchronizeOnLoad(area);
+                            if (isDebugMode()) {
+                                debug("Loaded permissions for area: " + area.getName());
+                            }
+                        } catch (Exception e) {
+                            getLogger().error("Failed to load permissions for area: " + area.getName(), e);
+                        }
+                    }
+                    getLogger().info("Permissions loaded for " + areaManager.getAllAreas().size() + " areas");
+                } catch (Exception e) {
+                    getLogger().error("Failed to load permissions for areas", e);
+                }
     
                 // Register events and commands
                 getServer().getPluginManager().registerEvents(this, this);
@@ -237,6 +274,13 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init_failed");
                     getLogger().error("Failed to initialize listener manager", e);
                 }
+                
+                // Now that all managers are initialized, normalize toggle states
+                if (configManager.getBoolean("normalize_toggle_states", true)) {
+                    getLogger().info("Normalizing toggle states for all areas...");
+                    areaManager.normalizeAllAreaToggleStates();
+                    getLogger().info("Toggle states normalized successfully.");
+                }
 
                 // Initialize AreaCommand
                 areaCommand = new AreaCommand(this);
@@ -244,28 +288,6 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 // Register the command
                 getServer().getCommandMap().register("area", areaCommand);
                 getLogger().info("Area command registered.");
-    
-                // Initialize LuckPerms integration
-                if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
-                    try {
-                        luckPermsApi = LuckPermsProvider.get();
-                        luckPermsCache = new LuckPermsCache(this, luckPermsApi);
-                        
-                        // Register listener for LuckPerms changes
-                        luckPermsApi.getEventBus().subscribe(this, 
-                            net.luckperms.api.event.group.GroupDataRecalculateEvent.class, 
-                            event -> luckPermsCache.refreshCache());
-                        luckPermsApi.getEventBus().subscribe(this,
-                            net.luckperms.api.event.group.GroupLoadEvent.class,
-                            event -> luckPermsCache.refreshCache());
-                            
-                        getLogger().info("LuckPerms integration enabled successfully");
-                    } catch (Exception e) {
-                        getLogger().error("Failed to initialize LuckPerms integration", e);
-                    }
-                } else {
-                    getLogger().info("LuckPerms not found. Proceeding without it.");
-                }
     
                 performanceMonitor.stopTimer(startupTimer, "plugin_startup");
                 getLogger().info("AdminAreaProtectionPlugin enabled successfully.");
@@ -292,11 +314,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          * Reloads configuration values from disk and updates cached settings.
          */
         public void reloadConfigValues() {
-            // Make debug mode update first
-            debugMode = configManager.getBoolean("debug", false);
-            if (debugMode) {
-                getLogger().info("Debug mode reloaded: enabled");
+            // Update debug mode when config is reloaded 
+            boolean wasDebug = this.debugMode;
+            this.debugMode = getConfig().getBoolean("debug", false);
+            
+            if (wasDebug != this.debugMode) {
+                getLogger().info("Debug mode " + (this.debugMode ? "enabled" : "disabled"));
             }
+            
             enableMessages = configManager.isEnabled("enableMessages");
             
             // Refresh all protection caches
@@ -407,18 +432,6 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 if (luckPermsCache != null) {
                     // If cleanup method exists, call it, otherwise simply null out the reference
                     // luckPermsCache.cleanup();
-                }
-                
-                // Clean up override manager
-                if (overrideManager != null) {
-                    Timer.Sample overrideCloseTimer = performanceMonitor.startTimer();
-                    try {
-                        overrideManager.close();
-                        performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close");
-                    } catch (Exception e) {
-                        performanceMonitor.stopTimer(overrideCloseTimer, "override_manager_close_failed");
-                        getLogger().error("Error closing override manager", e);
-                    }
                 }
             
                 // Save areas before shutting down DB
@@ -593,37 +606,33 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         }
     
         public void saveArea(Area area) {
-            if (area == null) return;
+            if (area == null) {
+                getLogger().error("Cannot save null area");
+                return;
+            }
             
+            if (isDebugMode()) {
+                debug("Saving area: " + area.getName());
+                debug("  World: " + area.getWorld());
+                debug("  Priority: " + area.getPriority());
+                debug("  Toggle states count: " + area.getToggleStates().size());
+            }
+
             try {
-                if (isDebugMode()) {
-                    debug("Saving area: " + area.getName());
-                    debug("Current areas in memory: " + areaManager.getAllAreas().size());
-                }
-
-                // Verify area doesn't already exist before saving
-                if (hasArea(area.getName())) {
-                    if (isDebugMode()) {
-                        debug("Area " + area.getName() + " already exists, updating instead of creating new");
-                    }
-                    updateArea(area);
-                    return;
-                }
-
-                // Save to database first
+                // First save the area without applying toggle states
                 dbManager.saveArea(area);
                 
-                // Then add to area manager
+                // Then add to area manager, which will apply default toggle states if needed
                 areaManager.addArea(area);
-
+                
+                // Ensure toggle states are saved in a single batch operation
+                area.saveToggleStates();
+                
                 if (isDebugMode()) {
-                    debug("Area saved successfully: " + area.getName());
-                    debug("Total areas after save: " + areaManager.getAllAreas().size());
+                    debug("  Area saved successfully");
                 }
-
-            } catch (DatabaseException e) {
+            } catch (Exception e) {
                 getLogger().error("Failed to save area: " + area.getName(), e);
-                throw new RuntimeException("Could not save area", e);
             }
         }
     
@@ -653,23 +662,43 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             return wandListener;
         }
 
+        /**
+         * Set debug mode and update config
+         */
         public void setDebugMode(boolean enabled) {
+            if (this.debugMode == enabled) return;
+            
             this.debugMode = enabled;
-            getLogger().info("Debug mode " + (enabled ? "enabled" : "disabled"));
+            getConfig().set("debug", enabled);
+            getConfig().save();
+            
+            if (enabled) {
+                getLogger().info("Debug mode enabled");
+                debug("Plugin version: " + getDescription().getVersion());
+                debug("Server version: " + getServer().getVersion());
+            } else {
+                getLogger().info("Debug mode disabled");
+            }
         }
 
+        /**
+         * Check if debug mode is enabled
+         */
         public boolean isDebugMode() {
             return debugMode;
         }
 
-        public LanguageManager getLanguageManager() {
-            return languageManager;
-        }
-
+        /**
+         * Send a debug message if debug mode is enabled
+         */
         public void debug(String message) {
             if (debugMode) {
-                getLogger().info("[Debug] " + message); // Change to info instead of debug
+                getLogger().debug("[Debug] " + message);
             }
+        }
+
+        public LanguageManager getLanguageManager() {
+            return languageManager;
         }
 
         public boolean isLuckPermsEnabled() {
@@ -684,14 +713,6 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         public List<String> getGroupInheritance(String groupName) {
             if (!isLuckPermsEnabled()) return Collections.emptyList();
             return luckPermsCache.getInheritanceChain(groupName);
-        }
-
-        /**
-         * Gets the plugin's override manager.
-         * @return The OverrideManager instance
-         */
-        public OverrideManager getOverrideManager() {
-            return overrideManager;
         }
 
         /**
@@ -772,6 +793,27 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          */
         public ListenerManager getListenerManager() {
             return listenerManager;
+        }
+
+        public PermissionOverrideManager getPermissionOverrideManager() {
+            // If permissionOverrideManager is null and we're in the middle of initialization,
+            // create it on-demand to avoid NPEs
+            if (permissionOverrideManager == null) {
+                getLogger().warning("PermissionOverrideManager was accessed before initialization. Creating it now.");
+                try {
+                    permissionOverrideManager = new PermissionOverrideManager(this);
+                } catch (Exception e) {
+                    getLogger().error("Failed to initialize PermissionOverrideManager on-demand", e);
+                }
+            }
+            return permissionOverrideManager;
+        }
+        
+        /**
+         * Alias for getPermissionOverrideManager() for backward compatibility.
+         */
+        public PermissionOverrideManager getOverrideManager() {
+            return getPermissionOverrideManager(); // Use the main method to ensure consistency
         }
 
 }

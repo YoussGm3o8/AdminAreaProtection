@@ -40,25 +40,6 @@ public class ConfigManager {
         defaults.put("cacheExpiry", 5); // minutes
         defaults.put("undoHistorySize", 10);
         defaults.put("selectionCooldown", 250); // milliseconds
-        
-        // Messages section
-        defaults.put("messages.blockBreak", "§cYou cannot break blocks in {area}.");
-        defaults.put("messages.blockPlace", "§cYou cannot place blocks in {area}.");
-        defaults.put("messages.pvp", "§cPVP is disabled in {area}.");
-        defaults.put("messages.interact", "§cYou cannot interact with that in {area}.");
-        defaults.put("messages.container", "§cYou cannot access containers in {area}.");
-        defaults.put("messages.command", "§cYou cannot use that command in {area}.");
-        defaults.put("messages.noPermission", "§cYou don't have permission for that.");
-        defaults.put("messages.areaCreated", "§aArea {area} created successfully.");
-        defaults.put("messages.areaDeleted", "§aArea {area} deleted successfully.");
-        defaults.put("messages.areaUpdated", "§aArea {area} updated successfully.");
-        defaults.put("messages.area.exists", "§cAn area with the name {area} already exists.");
-        defaults.put("messages.area.globalExists", "§cA global area already exists for world {world}: {area}");
-        defaults.put("messages.selectionCleared", "§aSelection points cleared.");
-        defaults.put("messages.selectionComplete", "§aBoth positions set! Use /area create to create your area.");
-        defaults.put("messages.wandGiven", "§eYou have received the Area Wand!");
-        defaults.put("messages.bypassEnabled", "§aBypass mode enabled.");
-        defaults.put("messages.bypassDisabled", "§aBypass mode disabled.");
 
         // Title configurations with default fadeIn=20, stay=40, fadeOut=20
         Map<String, Object> titleConfig = new HashMap<>();
@@ -91,59 +72,6 @@ public class ConfigManager {
         defaults.put("areaSettings.description.mergeBehavior", 
             "When true, overlapping areas use AND logic (most restrictive). " +
             "When false, uses OR logic (least restrictive).");
-
-        // Default permissions configuration
-        Map<String, Object> defaultPerms = new HashMap<>();
-        defaultPerms.put("allowBuild", false);
-        defaultPerms.put("allowBreak", false);
-        defaultPerms.put("allowInteract", false);
-        defaultPerms.put("allowContainer", false);
-        defaultPerms.put("allowItemFrame", false);
-        defaultPerms.put("allowPvP", false);
-        defaultPerms.put("allowMobSpawn", true);
-        defaultPerms.put("allowRedstone", true);
-        
-        defaults.put("defaultPermissions", defaultPerms);
-
-        // Permission templates
-        Map<String, Object> templates = new HashMap<>();
-        
-        // PvP arena template
-        Map<String, Object> pvpTemplate = new HashMap<>();
-        pvpTemplate.put("allowPvP", true);
-        pvpTemplate.put("allowBuild", false);
-        pvpTemplate.put("allowBreak", false);
-        pvpTemplate.put("allowMobSpawn", false);
-        templates.put("pvp_arena", pvpTemplate);
-
-        // Creative building template  
-        Map<String, Object> creativeTemplate = new HashMap<>();
-        creativeTemplate.put("allowBuild", true);
-        creativeTemplate.put("allowBreak", true);
-        creativeTemplate.put("allowInteract", true);
-        creativeTemplate.put("allowContainer", true);
-        templates.put("creative_zone", creativeTemplate);
-
-        // Safe spawn template
-        Map<String, Object> spawnTemplate = new HashMap<>();
-        spawnTemplate.put("allowBuild", false);
-        spawnTemplate.put("allowBreak", false);
-        spawnTemplate.put("allowPvP", false);
-        spawnTemplate.put("allowMobSpawn", false);
-        templates.put("safe_spawn", spawnTemplate);
-
-        defaults.put("permissionTemplates", templates);
-
-        // Template descriptions
-        Map<String, String> templateDescs = new HashMap<>();
-        templateDescs.put("pvp_arena", "PvP enabled, building disabled");
-        templateDescs.put("creative_zone", "Full building permissions");
-        templateDescs.put("safe_spawn", "Safe spawn area with no PvP/mobs");
-        defaults.put("templateDescriptions", templateDescs);
-
-        // Debug settings
-        defaults.put("debug", false);
-        defaults.put("debugStackTraces", false);
     }
 
     public void load() {
@@ -154,26 +82,12 @@ public class ConfigManager {
 
         config = new Config(configFile, Config.YAML);
         
+        // Load debug mode first before any other operations
+        boolean debugMode = config.getBoolean("debug", false);
+        plugin.setDebugMode(debugMode);
+        
         // Migrate old config format if needed
         migrateOldConfig();
-        
-        // Convert YAML maps to JSONObjects where needed
-        if (config.exists("defaultToggleStates")) {
-            Map<String, Object> defaultToggles = config.getSection("defaultToggleStates").getAllMap();
-            defaults.put("defaultToggleStates", convertMapToJson(defaultToggles));
-        }
-        
-        if (config.exists("inheritedToggles")) {
-            Map<String, Object> inherited = config.getSection("inheritedToggles").getAllMap();
-            defaults.put("inheritedToggles", convertMapToJson(inherited));
-        }
-
-        // Ensure debug mode is properly saved to config
-        if (!config.exists("debug")) {
-            config.set("debug", false);
-            config.save();
-        }
-
         validate();
     }
 
@@ -183,7 +97,14 @@ public class ConfigManager {
     }
 
     public void save() {
-        config.save();
+        try {
+            config.save();
+            if (plugin.isDebugMode()) {
+                plugin.debug("Configuration saved successfully");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to save configuration", e);
+        }
     }
 
     private void validate() {
@@ -333,6 +254,12 @@ public class ConfigManager {
     // Add debug mode checker
     public boolean isDebugEnabled() {
         return config.getBoolean("debug", false);
+    }
+
+    public void setDebug(boolean enabled) {
+        config.set("debug", enabled);
+        save();
+        plugin.setDebugMode(enabled);
     }
  
     public Config getConfig() {
@@ -508,12 +435,38 @@ public class ConfigManager {
     }
 
     /**
-     * Gets a boolean config value with default fallback
+     * Sets a configuration value and saves the config.
+     * @param path The configuration path
+     * @param value The value to set
+     */
+    public void set(String path, Object value) {
+        if (path == null) return;
+        
+        try {
+            config.set(path, value);
+            
+            // Save immediately to ensure changes are persisted
+            save();
+            
+            // If this is the debug setting, update plugin's debug mode
+            if (path.equals("debug")) {
+                plugin.setDebugMode(value instanceof Boolean ? (Boolean)value : false);
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Updated config value " + path + " to: " + value);
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to save config value: " + path, e);
+        }
+    }
+
+    /**
+     * Gets a boolean value from config with default fallback
      */
     public boolean getBoolean(String path, boolean defaultValue) {
         if (!config.exists(path)) {
-            config.set(path, defaultValue);
-            config.save();
+            set(path, defaultValue);
             return defaultValue;
         }
         return config.getBoolean(path);
@@ -539,38 +492,6 @@ public class ConfigManager {
 
     public String getTemplateDescription(String templateName) {
         return config.getString("templateDescriptions." + templateName, "No description available");
-    }
-
-    /**
-     * Sets a configuration value and optionally saves the config.
-     * @param path The configuration path
-     * @param value The value to set
-     */
-    public void set(String path, Object value) {
-        if (path == null) return;
-        
-        try {
-            config.set(path, value);
-            // Save immediately to ensure changes are persisted
-            config.save();
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Updated config value " + path + " to: " + value);
-            }
-        } catch (Exception e) {
-            plugin.getLogger().error("Failed to save config value: " + path, e);
-        }
-    }
-
-    /**
-     * Gets an integer value from config with default fallback
-     */
-    public int getInt(String path, int defaultValue) {
-        if (!config.exists(path)) {
-            set(path, defaultValue);
-            return defaultValue;
-        }
-        return config.getInt(path);
     }
 
     /**
@@ -621,5 +542,16 @@ public class ConfigManager {
      */
     public boolean exists(String path) {
         return config.exists(path);
+    }
+
+    /**
+     * Gets an integer value from config with default fallback
+     */
+    public int getInt(String path, int defaultValue) {
+        if (!config.exists(path)) {
+            set(path, defaultValue);
+            return defaultValue;
+        }
+        return config.getInt(path);
     }
 }

@@ -1,8 +1,6 @@
 package adminarea.listeners;
 
 import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.github.benmanes.caffeine.cache.Cache;

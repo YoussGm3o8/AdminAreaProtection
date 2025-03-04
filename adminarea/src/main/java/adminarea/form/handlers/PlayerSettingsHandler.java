@@ -14,8 +14,6 @@ import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowCustom;
-import cn.nukkit.form.window.FormWindowSimple;
-
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -160,22 +158,57 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                         int resetIndex = Integer.parseInt(resetIndexData.getFormId());
                         boolean resetAll = response.getToggleResponse(resetIndex);
                         if (resetAll) {
-                            // Create new area with cleared player permissions
-                            Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
-                                .playerPermissions(new HashMap<>())
-                                .build();
-
-                            // Update area in plugin
-                            plugin.updateArea(updatedArea);
-                            
-                            player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsReset",
-                                Map.of("area", area.getName())));
+                            try {
+                                // Delete all player permissions from the database
+                                // Fix: We need to get all player permissions and delete them one by one
+                                Map<String, Map<String, Boolean>> allPlayerPerms = area.getPlayerPermissions();
+                                if (!allPlayerPerms.isEmpty()) {
+                                    for (String playerName : allPlayerPerms.keySet()) {
+                                        plugin.getPermissionOverrideManager().deletePlayerPermissions(area.getName(), playerName);
+                                        
+                                        if (plugin.isDebugMode()) {
+                                            plugin.debug("Deleted permissions for player " + playerName + " in area: " + area.getName());
+                                        }
+                                    }
+                                }
+                                
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("Deleted all player permissions for area: " + area.getName() + " from permission_overrides database");
+                                }
+                                
+                                // Create new area with cleared player permissions
+                                Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
+                                    .playerPermissions(new HashMap<>())
+                                    .build();
+                                
+                                // Force clear caches in the area
+                                updatedArea.clearCaches();
+                                
+                                // Save the area to database to ensure changes are persisted
+                                plugin.getDatabaseManager().saveArea(updatedArea);
+                                
+                                // Update area in plugin
+                                plugin.updateArea(updatedArea);
+                                
+                                // Verify the permissions were cleared
+                                if (plugin.isDebugMode()) {
+                                    Area verifyArea = plugin.getArea(area.getName());
+                                    plugin.debug("Verification - player permissions after reset: " + 
+                                        (verifyArea != null ? verifyArea.getPlayerPermissions().size() : "null"));
+                                }
+                                
+                                player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsReset",
+                                    Map.of("area", area.getName())));
+                            } catch (Exception e) {
+                                plugin.getLogger().error("Failed to reset player permissions", e);
+                                player.sendMessage(plugin.getLanguageManager().get("messages.error.failedToResetPermissions"));
+                            }
 
                             // Clean up form data
                             plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
                             
                             // Return to edit menu
-                            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+                            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
                             return;
                         }
                     } catch (NumberFormatException e) {
@@ -235,6 +268,7 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             int index = 1; // Skip the header label
             for (PermissionToggle toggle : PermissionToggle.getPlayerToggles()) {
                 Boolean value = response.getToggleResponse(index);
+                // Don't add the gui.permissions.toggles prefix for player permissions
                 newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
                 index++;
             }
@@ -278,7 +312,79 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             try {
                 // IMPORTANT: Clear permission caches before updating
                 updatedArea.clearCaches();
-                plugin.updateArea(updatedArea);
+                
+                // Force clear all caches in area manager
+                plugin.getAreaManager().invalidateAreaCache(area.getName());
+                
+                // Create a new DTO with updated permissions to ensure they're preserved
+                AreaDTO updatedDTO = new AreaDTO(
+                    updatedArea.getName(),
+                    updatedArea.getWorld(),
+                    updatedArea.toDTO().bounds(),
+                    updatedArea.getPriority(),
+                    updatedArea.toDTO().showTitle(),
+                    updatedArea.toDTO().toggleStates(), // Keep original toggle states
+                    updatedArea.toDTO().groupPermissions(),
+                    updatedArea.toDTO().inheritedPermissions(),
+                    updatedArea.toDTO().toggleStates(),
+                    updatedArea.toDTO().defaultToggleStates(),
+                    updatedArea.toDTO().inheritedToggleStates(),
+                    updatedArea.toDTO().permissions(),
+                    updatedArea.toDTO().enterMessage(),
+                    updatedArea.toDTO().leaveMessage(),
+                    updatedArea.toDTO().trackPermissions(),
+                    playerPerms, // Use our explicitly created playerPerms map
+                    updatedArea.toDTO().potionEffects()
+                );
+                
+                // Create final area with guaranteed player permissions
+                Area finalArea = AreaBuilder.fromDTO(updatedDTO).build();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Final area before saving:");
+                    plugin.debug("Player permissions in DTO: " + finalArea.toDTO().playerPermissions());
+                    plugin.debug("Direct player permissions: " + finalArea.getPlayerPermissions());
+                    plugin.debug("Toggle states: " + finalArea.toDTO().toggleStates());
+                }
+
+                // IMPORTANT: Explicitly save player permissions to the permission database first
+                try {
+                    plugin.getPermissionOverrideManager().setPlayerPermissions(
+                        finalArea.getName(), 
+                        targetPlayer, 
+                        newPerms
+                    );
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Explicitly saved player permissions for " + targetPlayer);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to explicitly save player permissions", e);
+                    throw e;
+                }
+
+                // Update in database first
+                try {
+                    plugin.getDatabaseManager().saveArea(finalArea);
+                    
+                    // Force synchronize permissions to ensure they're saved
+                    plugin.getPermissionOverrideManager().synchronizeFromArea(finalArea);
+                    
+                    // Verify the save
+                    Area verifyArea = plugin.getDatabaseManager().loadArea(area.getName());
+                    if (verifyArea != null && plugin.isDebugMode()) {
+                        plugin.debug("Database save verification:");
+                        plugin.debug("Saved player permissions: " + verifyArea.getPlayerPermissions());
+                        plugin.debug("Expected player permissions: " + playerPerms);
+                        plugin.debug("Toggle states after save: " + verifyArea.toDTO().toggleStates());
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to save area to database", e);
+                    throw e;
+                }
+                
+                // Then update in plugin
+                plugin.updateArea(finalArea);
                 
                 if (plugin.isDebugMode()) {
                     // Verify the update worked by retrieving the area again
@@ -322,4 +428,4 @@ public class PlayerSettingsHandler extends BaseFormHandler {
         plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
         plugin.getGuiManager().openMainMenu(player);
     }
-} 
+}

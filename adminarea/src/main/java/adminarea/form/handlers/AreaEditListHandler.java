@@ -4,7 +4,6 @@ import java.util.List;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.constants.AdminAreaConstants;
 import adminarea.constants.FormIds;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementButton;
@@ -53,7 +52,7 @@ public class AreaEditListHandler extends BaseFormHandler {
                 if (area.toDTO().bounds().isGlobal()) {
                     buttonText += "\n§3(Global Area - " + area.getWorld() + ")";
                 } else {
-                    buttonText += "\n§7(World: " + area.getWorld() + ")";
+                    buttonText += "\n§8(World: " + area.getWorld() + ")";
                 }
                 form.addButton(new ElementButton(buttonText));
             }

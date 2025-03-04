@@ -28,7 +28,7 @@ public class EnderPearlListener implements Listener {
         // Check if player is trying to use ender pearl
         if (item != null && item.getId() == Item.ENDER_PEARL) {
             // Check if ender pearls are allowed at player's position
-            if (protectionListener.shouldCancel(player.getPosition(), player, "allowEnderPearl")) {
+            if (protectionListener.handleProtection(player.getPosition(), player, "allowEnderPearl")) {
                 event.setCancelled(true);
                 protectionListener.sendProtectionMessage(player, "messages.protection.enderPearl");
             }
@@ -46,7 +46,7 @@ public class EnderPearlListener implements Listener {
         }
 
         // Check if ender pearls are allowed at landing position
-        if (protectionListener.shouldCancel(event.getEntity().getPosition(), player, "allowEnderPearl")) {
+        if (protectionListener.handleProtection(event.getEntity().getPosition(), player, "allowEnderPearl")) {
             // Cancel the upcoming teleport by sending player back
             player.teleport(player.getPosition());
             protectionListener.sendProtectionMessage(player, "messages.protection.enderPearl");

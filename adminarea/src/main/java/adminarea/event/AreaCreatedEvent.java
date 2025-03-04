@@ -1,4 +1,4 @@
-package adminarea.events;
+package adminarea.event;
 
 import adminarea.area.Area;
 import cn.nukkit.event.HandlerList;
@@ -6,12 +6,12 @@ import cn.nukkit.event.Cancellable;
 import cn.nukkit.event.plugin.PluginEvent;
 import cn.nukkit.plugin.Plugin;
 
-public class AreaDeletedEvent extends PluginEvent implements Cancellable {
+public class AreaCreatedEvent extends PluginEvent implements Cancellable {
     private static final HandlerList handlers = new HandlerList();
     private final Area area;
     private boolean cancelled = false;
 
-    public AreaDeletedEvent(Plugin plugin, Area area) {
+    public AreaCreatedEvent(Plugin plugin, Area area) {
         super(plugin);
         this.area = area;
     }

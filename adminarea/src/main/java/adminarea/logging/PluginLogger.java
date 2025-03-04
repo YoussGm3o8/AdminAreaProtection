@@ -20,7 +20,6 @@ public class PluginLogger implements Logger {
     private final AdminAreaProtectionPlugin plugin;
     private final File logFile;
     private final SimpleDateFormat dateFormat;
-    private boolean debugMode = false;
     private final ConcurrentLinkedQueue<LogEntry> logQueue;
     private final Map<String, AtomicInteger> errorCounts;
     private static final int MAX_QUEUE_SIZE = 1000;
@@ -51,26 +50,24 @@ public class PluginLogger implements Logger {
     }
 
     public void setDebugMode(boolean enabled) {
-        this.debugMode = enabled;
+        plugin.setDebugMode(enabled);
         info("Debug mode " + (enabled ? "enabled" : "disabled"));
     }
 
     public boolean isDebugMode() {
-        return debugMode;
+        return plugin.isDebugMode();
     }
 
     @Override
     public void debug(String message) {
-        if (debugMode) {
-            log("DEBUG", message);
-        }
+        // Remove redundant debug mode check since plugin.debug() already handles it
+        log("DEBUG", message);
     }
 
     @Override
     public void debug(String message, Throwable t) {
-        if (debugMode) {
-            log("DEBUG", message + (t != null ? ": " + t.getMessage() : ""));
-        }
+        // Remove redundant debug mode check since plugin.debug() already handles it
+        log("DEBUG", message + (t != null ? ": " + t.getMessage() : ""));
     }
 
     @Override
@@ -157,7 +154,7 @@ public class PluginLogger implements Logger {
         log("ERROR", errorMsg);
 
         // Log stack trace if available
-        if (error != null && debugMode) {
+        if (error != null && plugin.isDebugMode()) {
             debug("Stack trace for error: " + message);
             for (StackTraceElement element : error.getStackTrace()) {
                 debug("    " + element.toString());
@@ -170,11 +167,15 @@ public class PluginLogger implements Logger {
         logQueue.offer(entry);
 
         // Log to console with appropriate color
-        String coloredMessage = colorize(level, String.format("[%s] %s", level, message));
+        String coloredMessage = colorize(level, String.format("[%s] %s", plugin.getName(), message));
         System.out.println(coloredMessage);
 
+        // Force flush debug messages immediately for real-time debugging
+        if (level.equals("DEBUG")) {
+            flushLogs();
+        }
         // Auto-flush if queue gets too large
-        if (logQueue.size() >= MAX_QUEUE_SIZE) {
+        else if (logQueue.size() >= MAX_QUEUE_SIZE) {
             flushLogs();
         }
     }

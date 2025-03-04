@@ -1,4 +1,4 @@
-package adminarea.events;
+package adminarea.event;
 
 import adminarea.area.Area;
 import cn.nukkit.event.HandlerList;

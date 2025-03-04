@@ -612,8 +612,19 @@ public class AreaCommand extends Command {
             newState = !plugin.isDebugMode();
         }
 
-        plugin.setDebugMode(newState);
+        // Set debug mode in plugin and save to config
+        plugin.getConfigManager().set("debug", newState);
+        
+        // Send confirmation message
         player.sendMessage(plugin.getLanguageManager().get("messages.debug." + (newState ? "enabled" : "disabled")));
+        
+        if (newState) {
+            // Log initial debug info
+            plugin.debug("Debug mode enabled by " + player.getName());
+            plugin.debug("Server version: " + plugin.getServer().getVersion());
+            plugin.debug("Plugin version: " + plugin.getDescription().getVersion());
+        }
+        
         return true;
     }
 

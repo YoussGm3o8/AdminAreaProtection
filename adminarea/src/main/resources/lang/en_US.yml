@@ -10,12 +10,12 @@ messages:
   # Area related messages
   area:
     notFound: "{prefix}§cArea '{area}' not found."
-    exists: "§cAn area with the name {area} already exists."
-    globalExists: "§cA global area already exists for world {world}: {area}"
-    created: "§aArea §e{area}§a created successfully in world §7{world}§a at priority §e{priority}"
-    deleted: "§aArea §e{area}§a deleted successfully. World: §7{world}"
+    exists: "{prefix}§cAn area with the name {area} already exists."
+    globalExists: "{prefix}§cA global area already exists for world {world}: {area}"
+    created: "{prefix}§aArea §e{area}§a created successfully in world §7{world}§a at priority §e{priority}"
+    deleted: "{prefix}§aArea §e{area}§a deleted successfully. World: §7{world}"
     updated: "{prefix}§aArea §e{area}§a updated successfully. Changed {count} settings."
-    copied: "§aArea §e{area}§a copied successfully."
+    copied: "{prefix}§aArea §e{area}§a copied successfully."
     list:
       empty: "{prefix}§cNo protected areas found."
       header: "§2Protected Areas:"
@@ -103,7 +103,11 @@ messages:
     potionEffect: "{prefix}§c{effect} potion effect is not allowed in {area}"
     monsterTarget: "{prefix}§cMonsters in this area cannot target players"
     denied: "{prefix}§cThis area is protected"
-
+    enderPearl: "{prefix}§cEnderpearls are not allowed in {area}"
+    bucket: "{prefix}§cYou cannot use buckets in {area}"
+    door: "{prefix}§cYou cannot open doors in {area}"
+    noCreativeFlight: "{prefix}§cYou cannot fly in {area} with creative flight, add a permission to the player to allow it"
+    noFlight: "{prefix}§cYou cannot fly in {area}"
   commands:
     playerOnly: "{prefix}§cThis command can only be used in-game"
     usage: "§eUsage: /area <create|edit|delete|list|wand>"
@@ -169,8 +173,41 @@ messages:
     groupPermissionsUpdated: "§aGroup permissions updated successfully"
     permissionsUpdated: "§aPermissions updated successfully"
     permissionsReset: "§aPermissions reset successfully"
+    playerPermissionsReset: "§aPlayer permissions reset successfully"
     permissionsListEmpty: "§cNo permissions found"
-    
+    noChanges: "{prefix}§eNo settings were changed"
+    trackAndGroupPermissionsUpdated: "{prefix}§aUpdated permissions for track '{track}' in area '{area}', affecting {groupCount} groups"
+    trackAndSingleGroupPermissionsUpdated: "{prefix}§aUpdated permissions for track '{track}' in area '{area}', affecting group '{group}'"
+    trackPermissionsUpdated: "{prefix}§aUpdated track permissions for '{track}' in area '{area}'"
+    selectTrack: "{prefix}§cPlease select a track"
+    permissionUpdateCancelled: "{prefix}§cPermission update was cancelled by another plugin"
+    invalidSession: "{prefix}§cYour form session has expired. Please try again."
+    error:
+      generic: "{prefix}§cAn error occurred. Please try doing /area reset or report this to the developer."
+      stateReset: "{prefix}§aForm state has been reset. You can now open forms again."
+      failedToUpdatePermissions: "{prefix}§cFailed to update permissions. Please try again or contact an administrator."
+      noAreaSelected: "{prefix}§cNo area is currently selected for editing."
+      areaNotFound: "{prefix}§cThe selected area could not be found."
+      playerNotFound: "{prefix}§cThe specified player could not be found."
+      invalidPermission: "{prefix}§cInvalid permission toggle: {toggle}"
+      
+  # Player permission specific messages
+  playerPermissions:
+    updated: "{prefix}§aUpdated permissions for player {player} in area {area}"
+    reset: "{prefix}§aReset all permissions for player {player} in area {area}"
+    removed: "{prefix}§aRemoved all custom permissions for player {player} in area {area}"
+    notFound: "{prefix}§cNo custom permissions found for player {player} in area {area}"
+    list:
+      header: "{prefix}§2Custom permissions for {player} in {area}:"
+      entry: "§7- {permission}: {value}"
+      empty: "{prefix}§7No custom permissions set"
+    error:
+      invalidPlayer: "{prefix}§cInvalid player name"
+      noPermissions: "{prefix}§cNo permissions to update"
+      saveFailed: "{prefix}§cFailed to save player permissions"
+      updateFailed: "{prefix}§cFailed to update player permissions"
+      failedToResetPermissions: "{prefix}§cFailed to reset player permissions. Please try again."
+
   effect:
     applied: "{prefix}§a{effect} effect (level {strength}) applied from area {area}"
     removed: "{prefix}§e{effect} effect from area {area} has worn off"
@@ -179,6 +216,7 @@ messages:
 validation:
   area:
     name:
+      format: "{prefix}§cInvalid area creation, {error}"
       tooShort: "{prefix}§cArea name must be at least {min} characters long"
       tooLong: "{prefix}§cArea name cannot be longer than {max} characters"
       invalidChars: "{prefix}§cArea name can only contain letters, numbers, and underscores"
@@ -378,6 +416,7 @@ gui:
       allowContainer: "Controls whether {player} can access containers"
       allowItemRotation: "Controls whether {player} can interact with item frames"
       allowHangingBreak: "Controls where {player} can take items out of itemframes"
+      allowDoors: "Controls whether {player} can open/close doors"
       allowArmorStand: "Controls whether {player} can interact with armor stands"
       allowRedstone: "Controls whether redstone mechanisms can function"
       allowPistons: "Controls whether pistons can push/pull blocks"
@@ -518,11 +557,40 @@ gui:
       cancel: "§aCancel"
 
   luckperms:
-    title: "Edit {group} Permissions"
-    groupSelect: "Select Group"
-    trackSelect: "Select Track"
-    groupPerms: "Group Permissions"
-    inheritedFrom: "Inherited from: {groups}"
+    title:
+      main: "§6LuckPerms Settings"
+      group: "§6Edit {group} Permissions"
+      track: "§6Edit Track Permissions"
+    header:
+      groups: "§2Configure Group Permissions\n§7Select a group to edit its permissions"
+      tracks: "§2Configure Track Permissions\n§7Select a track to edit permissions for all groups in it"
+      permissions: "§2Configure Permissions\n§7Toggle permissions for {target}"
+    labels:
+      allGroups: "All Groups"
+      selectGroup: "Select Group"
+      selectTrack: "Select Track"
+      selectGroups: "§6Select Groups to Update\n§7Choose which groups to apply these permissions to"
+      noGroups: "§cNo groups available"
+      noTracks: "§cNo tracks available"
+      inheritedFrom: "Inherited from: {groups}"
+    buttons:
+      back: "§8« Back"
+      save: "§aSave Changes"
+      cancel: "§cCancel"
+    messages:
+      noGroupSelected: "§cPlease select a group first"
+      noTrackSelected: "§cPlease select a track first"
+      noPermissionsSelected: "§cNo permissions were selected to update"
+      groupUpdated: "§aUpdated permissions for group {group}"
+      trackUpdated: "§aUpdated permissions for track {track}, affecting {count} groups"
+      error:
+        groupNotFound: "§cGroup {group} not found"
+        trackNotFound: "§cTrack {track} not found"
+        updateFailed: "§cFailed to update permissions: {error}"
+        invalidGroup: "§cInvalid group selected"
+        invalidTrack: "§cInvalid track selected"
+        noLuckPerms: "§cLuckPerms integration is not enabled"
+        noConnection: "§cCould not connect to LuckPerms"
 
   buildingSettings:
     title: "Building Settings: {area}"
@@ -554,12 +622,12 @@ gui:
 
   potionEffectsSettings:
     title: "Potion Effects: {area}"
-    header: "§2Configure Area Beacon Effects\n§8Set which potion effects and their strength (0-255) to apply to players in this area"
+    header: "§2Configure Area Beacon Effects\n§8Set which potion effects and their strength (0-10) to apply to players in this area"
     sections:
       effects: "§2Beacon Effects"
     labels:
       strength: "Effect Strength"
-      strengthPlaceholder: "Enter 0-255 (0 = disabled)"
+      strengthPlaceholder: "Enter 0-10 (0 = disabled)"
       effectDescription: "§7Amplifier: {strength}"
 
   entitySettings:
@@ -589,5 +657,5 @@ potionEffect:
   removed: "{prefix}§e{effect} effect from area {area} has worn off"
   strength:
     set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
-    outOfRange: "{prefix}§cStrength value must be between 0 and 255"
+    outOfRange: "{prefix}§cStrength value must be between 0 and 10"
     invalid: "{prefix}§cInvalid strength value, must be a number"

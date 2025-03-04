@@ -165,21 +165,38 @@ public class AreaManager implements IAreaManager {
                 return;
             }
 
-            // Initialize default toggle states for all available toggles if not set
+            // Initialize default toggle states in a single pass
+            boolean needToSaveToggles = false;
             if (plugin.isDebugMode()) {
                 plugin.debug("Initializing default toggle states for area " + area.getName());
                 plugin.debug("Current toggle states: " + area.toDTO().toggleStates());
             }
 
-            PermissionToggle.getDefaultToggles().forEach(toggle -> {
-                String key = toggle.getPermissionNode();
-                if (!key.startsWith("gui.permissions.toggles.")) {
-                    key = "gui.permissions.toggles." + key;
-                }
-                if (!area.getToggleState(key)) {  // Changed from hasToggleState to getToggleState
+            // Check if toggle states are empty or missing key permissions
+            Map<String, Object> toggleStates = area.getToggleStates();
+            if (toggleStates.isEmpty()) {
+                // Apply defaults for all toggles
+                for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+                    String key = toggle.getPermissionNode();
+                    if (!key.startsWith("gui.permissions.toggles.")) {
+                        key = "gui.permissions.toggles." + key;
+                    }
                     area.setToggleState(key, toggle.getDefaultValue());
+                    needToSaveToggles = true;
                 }
-            });
+            } else {
+                // Check for missing toggles
+                for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+                    String key = toggle.getPermissionNode();
+                    if (!key.startsWith("gui.permissions.toggles.")) {
+                        key = "gui.permissions.toggles." + key;
+                    }
+                    if (!toggleStates.containsKey(key)) {
+                        area.setToggleState(key, toggle.getDefaultValue());
+                        needToSaveToggles = true;
+                    }
+                }
+            }
 
             if (plugin.isDebugMode()) {
                 plugin.debug("Toggle states after initialization: " + area.toDTO().toggleStates());
@@ -215,6 +232,11 @@ public class AreaManager implements IAreaManager {
                           (isGlobal ? " (global, world: " + area.getWorld() + ")" : ""));
                 plugin.debug("Current areas in memory: " + areasByName.size() + 
                           " (global: " + globalAreasByWorld.size() + ", local: " + areas.size() + ")");
+            }
+
+            // Save toggle states in one batch operation if needed
+            if (needToSaveToggles) {
+                area.saveToggleStates();
             }
 
         } finally {
@@ -307,6 +329,16 @@ public class AreaManager implements IAreaManager {
             
             // First update in database
             plugin.getDatabaseManager().updateArea(area);
+            
+            // Ensure permissions are synchronized
+            try {
+                plugin.getPermissionOverrideManager().synchronizeFromArea(area);
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Explicitly synchronized permissions from area to database during update");
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to synchronize permissions during area update", e);
+            }
             
             // Update in memory
             Area oldArea = areasByName.get(area.getName().toLowerCase());
@@ -1154,8 +1186,10 @@ public class AreaManager implements IAreaManager {
      * Call this method during plugin startup to fix inconsistencies
      */
     public void normalizeAllAreaToggleStates() {
+        boolean isInitialization = plugin.getListenerManager() == null;
+        
         if (plugin.isDebugMode()) {
-            plugin.debug("Normalizing toggle states for all areas");
+            plugin.debug("Normalizing toggle states for all areas (initialization: " + isInitialization + ")");
         }
         
         // Process each area
@@ -1167,6 +1201,17 @@ public class AreaManager implements IAreaManager {
                 plugin.getDatabaseManager().saveArea(area);
             } catch (Exception e) {
                 plugin.getLogger().error("Failed to save area " + area.getName() + " after normalizing toggle states", e);
+            }
+            
+            // Invalidate area cache but be careful during initialization phase
+            if (isInitialization) {
+                // During initialization, just invalidate basic caches without trying to access listeners
+                nameCache.invalidate(area.getName().toLowerCase());
+                locationCache.invalidateAll();
+                area.clearCaches();
+            } else {
+                // Full invalidation with listeners during normal operation
+                invalidateAreaCache(area.getName());
             }
         }
         
@@ -1453,5 +1498,218 @@ public class AreaManager implements IAreaManager {
             }
         }
         return keys;
+    }
+
+    public List<Area> getAreasInWorld(String worldName) {
+        return areas.stream()
+            .filter(area -> area.getWorld().equalsIgnoreCase(worldName))
+            .toList();
+    }
+
+    /**
+     * Updates area toggle states without recreating the entire area.
+     * This is more efficient than recreating the area when only toggles need to be updated.
+     * 
+     * @param area The area to update
+     * @param toggleStates Map of toggle states to update
+     * @return The updated area
+     */
+    public Area updateAreaToggleStates(Area area, Map<String, Boolean> toggleStates) {
+        if (area == null || toggleStates == null) {
+            return area;
+        }
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updating toggle states for area: " + area.getName());
+            plugin.debug("  New toggle states: " + toggleStates);
+        }
+
+        // Apply the toggle states directly to the area
+        for (Map.Entry<String, Boolean> entry : toggleStates.entrySet()) {
+            String key = entry.getKey();
+            Boolean value = entry.getValue();
+            
+            // Ensure the key has the correct prefix
+            if (!key.startsWith("gui.permissions.toggles.")) {
+                key = "gui.permissions.toggles." + key;
+            }
+            
+            area.setToggleState(key, value);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Set toggle state: " + key + " = " + value);
+            }
+        }
+        
+        // Update the area in the database
+        try {
+            plugin.getDatabaseManager().updateArea(area);
+            
+            // Force clear all caches to ensure changes take effect immediately
+            area.clearCaches();
+            // Clear any protection and environment caches
+            if (plugin.getListenerManager() != null) {
+                plugin.getListenerManager().reload();
+            }
+            // Clear location cache
+            locationCache.invalidateAll();
+            // Invalidate name cache for this area
+            nameCache.invalidate(area.getName().toLowerCase());
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Toggle states updated successfully for area: " + area.getName());
+                plugin.debug("  Current toggle states: " + area.toDTO().toggleStates());
+                plugin.debug("  All caches invalidated to ensure immediate effect");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update toggle states for area: " + area.getName(), e);
+        }
+        
+        return area;
+    }
+    
+    /**
+     * Updates area potion effect settings without recreating the entire area.
+     * This is more efficient than recreating the area when only potion effects need to be updated.
+     * 
+     * @param area The area to update
+     * @param effectName The name of the potion effect to update
+     * @param strength The strength value (0-255) for the potion effect
+     * @return The updated area
+     */
+    public Area updateAreaPotionEffect(Area area, String effectName, int strength) {
+        if (area == null || effectName == null) {
+            return area;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updating potion effect for area: " + area.getName());
+            plugin.debug("  Effect: " + effectName + ", Strength: " + strength);
+        }
+        
+        // Set the potion effect strength directly
+        area.setPotionEffectStrength(effectName, strength);
+        
+        // Update toggle state to match the potion effect status (enabled if strength > 0)
+        if (!effectName.endsWith("Strength")) {
+            String permissionNode = effectName;
+            if (!permissionNode.startsWith("gui.permissions.toggles.")) {
+                permissionNode = "gui.permissions.toggles." + permissionNode;
+            }
+            
+            // Enable/disable toggle based on strength
+            area.setToggleState(permissionNode, strength > 0);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Updated toggle state: " + permissionNode + " = " + (strength > 0));
+            }
+        }
+        
+        // Update the area in the database
+        try {
+            plugin.getDatabaseManager().updateArea(area);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Potion effect updated successfully for area: " + area.getName());
+                plugin.debug("  Current potion effects: " + area.toDTO().potionEffects());
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update potion effect for area: " + area.getName(), e);
+        }
+        
+        return area;
+    }
+    
+    /**
+     * Updates multiple potion effect settings at once without recreating the entire area.
+     * 
+     * @param area The area to update
+     * @param effectStrengths Map of effect names to strength values
+     * @return The updated area
+     */
+    public Area updateAreaPotionEffects(Area area, Map<String, Integer> effectStrengths) {
+        if (area == null || effectStrengths == null || effectStrengths.isEmpty()) {
+            return area;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Updating multiple potion effects for area: " + area.getName());
+            plugin.debug("  Effects to update: " + effectStrengths.size());
+        }
+        
+        // Apply each potion effect
+        for (Map.Entry<String, Integer> entry : effectStrengths.entrySet()) {
+            String effectName = entry.getKey();
+            int strength = entry.getValue();
+            
+            // Set the potion effect strength directly
+            area.setPotionEffectStrength(effectName, strength);
+            
+            // Update toggle state to match the potion effect status
+            if (!effectName.endsWith("Strength")) {
+                String permissionNode = effectName;
+                if (!permissionNode.startsWith("gui.permissions.toggles.")) {
+                    permissionNode = "gui.permissions.toggles." + permissionNode;
+                }
+                
+                area.setToggleState(permissionNode, strength > 0);
+            }
+        }
+        
+        // Update the area in the database once for all changes
+        try {
+            plugin.getDatabaseManager().updateArea(area);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("All potion effects updated successfully for area: " + area.getName());
+                plugin.debug("  Current potion effects: " + area.toDTO().potionEffects());
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update potion effects for area: " + area.getName(), e);
+        }
+        
+        return area;
+    }
+    
+    /**
+     * Invalidates all caches for the specified area name
+     * This ensures changes to areas (especially toggle states) are immediately applied
+     * 
+     * @param areaName The name of the area whose caches should be invalidated
+     */
+    public void invalidateAreaCache(String areaName) {
+        if (areaName == null || areaName.isEmpty()) {
+            return;
+        }
+
+        if (plugin.isDebugMode()) {
+            plugin.debug("Invalidating caches for area: " + areaName);
+        }
+
+        // Clear caches to ensure fresh data is used
+        locationCache.invalidateAll(); // Clear location cache as it may contain stale area data
+        nameCache.invalidate(areaName.toLowerCase()); // Clear specific area from name cache
+
+        // Get the area to see if it needs special handling
+        Area area = areasByName.get(areaName.toLowerCase());
+        if (area != null) {
+            // Clear the area's internal caches
+            area.clearCaches();
+            
+            // Sometimes a more aggressive approach is needed
+            if (plugin.getConfigManager().getBoolean("cache.aggressiveInvalidation", false)) {
+                area.emergencyClearCaches();
+            }
+            
+            // If it contains toggle states modifications, ensure all systems are notified
+            if (plugin.getListenerManager() != null) {
+                plugin.getListenerManager().reload();
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Skipping listener reload for " + areaName + " because ListenerManager is not initialized yet");
+            }
+            
+            // Re-register area to ensure chunk registrations are up to date
+            registerArea(area);
+        }
     }
 }

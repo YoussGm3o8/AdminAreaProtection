@@ -1,17 +1,14 @@
 package adminarea.listeners;
 
 import adminarea.AdminAreaProtectionPlugin;
-import adminarea.area.Area;
-import adminarea.entity.MonsterHandler;
 import adminarea.event.MonsterTargetEvent;
 import cn.nukkit.Player;
 import cn.nukkit.entity.Entity;
-import cn.nukkit.entity.EntityHuman;
 import cn.nukkit.entity.EntityLiving;
-import cn.nukkit.entity.item.EntityItem;
 import cn.nukkit.entity.mob.EntityMob;
 import cn.nukkit.entity.passive.EntityAnimal;
 import cn.nukkit.entity.passive.EntityWaterAnimal;
+import cn.nukkit.entity.projectile.EntityEnderPearl;
 import cn.nukkit.entity.projectile.EntityProjectile;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.EventPriority;
@@ -88,6 +85,7 @@ public class EntityListener implements Listener {
         
         // Llamas
         breedingFoods.put("EntityLlama", List.of(Item.HAY_BALE));
+        breedingFoods.put("EntityTraderLlama", List.of(Item.HAY_BALE));
         
         // Wolves/Dogs
         breedingFoods.put("EntityWolf", List.of(
@@ -107,6 +105,35 @@ public class EntityListener implements Listener {
         
         // Foxes
         breedingFoods.put("EntityFox", List.of(Item.SWEET_BERRIES));
+        
+        // Additional entities from ProtectionListener
+        // Bees
+        breedingFoods.put("EntityBee", List.of(
+            37,  // Dandelion
+            38,  // Poppy
+            39,  // Blue Orchid
+            40,  // Allium
+            41,  // Azure Bluet
+            42   // Red/White Tulip and other flowers
+        ));
+        
+        // Axolotl
+        breedingFoods.put("EntityAxolotl", List.of(Item.BUCKET));
+        
+        // Goat
+        breedingFoods.put("EntityGoat", List.of(Item.WHEAT));
+        
+        // Strider
+        breedingFoods.put("EntityStrider", List.of(470)); // Warped Fungus
+        
+        // Hoglin
+        breedingFoods.put("EntityHoglin", List.of(473)); // Crimson Fungus
+        
+        // Frog
+        breedingFoods.put("EntityFrog", List.of(349)); // Slimeball
+        
+        // Camel
+        breedingFoods.put("EntityCamel", List.of(Item.CACTUS));
     }
 
     // Optimized shouldCheckProtection with early bailouts and cleaner position extraction
@@ -126,7 +153,7 @@ public class EntityListener implements Listener {
             return false;
         }
         
-        return protectionListener.shouldCancel(pos, player, permission);
+        return protectionListener.handleProtection(pos, player, permission);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -139,7 +166,7 @@ public class EntityListener implements Listener {
             // Handle fall damage if it's enabled/disabled in configuration
             if (event.getCause() == EntityDamageEvent.DamageCause.FALL && victim instanceof Player player) {
                 Position pos = victim.getPosition();
-                if (protectionListener.shouldCancel(pos, player, "cancelFallDamage")) {
+                if (protectionListener.handleProtection(pos, player, "cancelFallDamage")) {
                     event.setCancelled(true);
                     if (plugin.isDebugMode()) {
                         plugin.debug("Cancelled fall damage for player " + player.getName());
@@ -216,7 +243,7 @@ public class EntityListener implements Listener {
             // This is just a backup in case some TNT entities were missed
             if (entityType.equals("EntityPrimedTNT")) {
                 Position pos = event.getPosition();
-                if (protectionListener.shouldCancel(pos, null, "allowTNT")) {
+                if (protectionListener.handleProtection(pos, null, "allowTNT")) {
                     // Cancel the explosion completely
                     event.setCancelled(true);
                     
@@ -241,8 +268,8 @@ public class EntityListener implements Listener {
                 .filter(block -> {
                     Position pos = new Position(block.x, block.y, block.z, block.level);
                     // Check both specific and general explosion permissions
-                    return !protectionListener.shouldCancel(pos, null, specificPermission) && 
-                           !protectionListener.shouldCancel(pos, null, "allowExplosions");
+                    return !protectionListener.handleProtection(pos, null, specificPermission) && 
+                           !protectionListener.handleProtection(pos, null, "allowExplosions");
                 })
                 .toList());
         } finally {
@@ -281,7 +308,7 @@ public class EntityListener implements Listener {
                 // Check for TNT entities and remove them immediately in protected areas
                 String entityType = entity.getClass().getSimpleName();
                 if (entityType.equals("EntityPrimedTNT")) {
-                    if (protectionListener.shouldCancel(pos, null, "allowTNT")) {
+                    if (protectionListener.handleProtection(pos, null, "allowTNT")) {
                         // Remove the TNT entity immediately
                         entity.close();
                         
@@ -316,7 +343,7 @@ public class EntityListener implements Listener {
                     }
 
                     // Check if spawn should be cancelled
-                    if (protectionListener.shouldCancel(pos, null, permission)) {
+                    if (protectionListener.handleProtection(pos, null, permission)) {
                         entity.close();
                         if (plugin.isDebugMode()) {
                             plugin.debug("Cancelled spawn of " + entity.getClass().getSimpleName() + 
@@ -343,30 +370,33 @@ public class EntityListener implements Listener {
                 return;
             }
             
-            // Enhanced breeding check logic
-            if (entity instanceof EntityAnimal animal) {
-                // Get breeding foods for this animal type
-                String entityType = entity.getClass().getSimpleName();
-                List<Integer> validBreedingFoods = breedingFoods.get(entityType);
-                Item heldItem = player.getInventory().getItemInHand();
-                
-                // Check if player is holding a breeding item for this animal type
-                if (validBreedingFoods != null && validBreedingFoods.contains(heldItem.getId())) {
-                    // Check if animal can be bred (not baby and not recently bred)
-                    boolean canBreed = true;
-                    
-                    // Check if animal is a baby (if method exists)
+            // Check if this is a MobPlugin animal
+            if (entity instanceof nukkitcoders.mobplugin.entities.animal.Animal animal) {
+                // Check for taming attempt
+                if (isTamingAttempt(entity, player)) {
+                    // Check if animal is already tamed using MobPlugin's methods
+                    boolean canTame = true;
                     try {
-                        if (animal.getClass().getMethod("isBaby").invoke(animal) == Boolean.TRUE) {
-                            canBreed = false;
+                        if (animal.getClass().getMethod("isTamed").invoke(animal) == Boolean.TRUE) {
+                            canTame = false;
                         }
                     } catch (Exception ignored) {
                         // Method doesn't exist or can't be accessed
                     }
                     
-                    // Check for "love mode" cooldown if that method exists
+                    if (canTame && shouldCheckProtection(entity, player, "allowTaming")) {
+                        event.setCancelled(true);
+                        protectionListener.sendProtectionMessage(player, "messages.protection.taming");
+                        return;
+                    }
+                }
+                
+                // Check for breeding attempt
+                if (isBreedingAttempt(entity, player)) {
+                    // Check if animal can be bred using MobPlugin's methods
+                    boolean canBreed = true;
                     try {
-                        if (animal.getClass().getMethod("inLoveMode").invoke(animal) == Boolean.TRUE) {
+                        if (animal.isBaby() || animal.getClass().getMethod("inLove").invoke(animal) == Boolean.TRUE) {
                             canBreed = false;
                         }
                     } catch (Exception ignored) {
@@ -379,50 +409,22 @@ public class EntityListener implements Listener {
                         return;
                     }
                 }
-            }
-
-            // Check for taming attempts with improved detection
-            if (entity instanceof EntityAnimal) {
-                // Check for taming items specific to this animal type
-                String entityType = entity.getClass().getSimpleName();
-                Item heldItem = player.getInventory().getItemInHand();
-                boolean isTamingItem = false;
-                
-                // Check for common taming scenarios
-                switch (entityType) {
-                    case "EntityWolf":
-                        isTamingItem = heldItem.getId() == Item.BONE;
-                        break;
-                    case "EntityCat":
-                    case "EntityOcelot":
-                        isTamingItem = heldItem.getId() == Item.RAW_FISH || 
-                                      heldItem.getId() == Item.RAW_SALMON;
-                        break;
-                    case "EntityParrot":
-                        isTamingItem = heldItem.getId() == Item.SEEDS || 
-                                      heldItem.getId() == Item.BEETROOT_SEEDS || 
-                                      heldItem.getId() == Item.MELON_SEEDS || 
-                                      heldItem.getId() == Item.PUMPKIN_SEEDS;
-                        break;
-                    case "EntityHorse":
-                    case "EntityDonkey":
-                    case "EntityMule":
-                        // Horses don't require items for taming but have a different taming process
-                        // We'll consider the interaction if the player is not holding a breeding food
-                        List<Integer> breedingFood = breedingFoods.get(entityType);
-                        if (breedingFood != null && !breedingFood.contains(heldItem.getId()) && 
-                            heldItem.getId() != Item.SADDLE && 
-                            heldItem.getId() != Item.IRON_HORSE_ARMOR && 
-                            heldItem.getId() != Item.GOLD_HORSE_ARMOR && 
-                            heldItem.getId() != Item.DIAMOND_HORSE_ARMOR) {
-                            isTamingItem = true;
-                        }
-                        break;
+            } else if (entity instanceof EntityAnimal) {
+                // Fallback for vanilla animals
+                if (isBreedingAttempt(entity, player) && canAnimalBreed((EntityAnimal)entity)) {
+                    if (shouldCheckProtection(entity, player, "allowBreeding")) {
+                        event.setCancelled(true);
+                        protectionListener.sendProtectionMessage(player, "messages.protection.breeding");
+                        return;
+                    }
                 }
                 
-                if (isTamingItem && shouldCheckProtection(entity, player, "allowTaming")) {
-                    event.setCancelled(true);
-                    protectionListener.sendProtectionMessage(player, "messages.protection.taming");
+                // Check for taming attempts with vanilla animals
+                if (isTamingAttempt(entity, player)) {
+                    if (shouldCheckProtection(entity, player, "allowTaming")) {
+                        event.setCancelled(true);
+                        protectionListener.sendProtectionMessage(player, "messages.protection.taming");
+                    }
                 }
             }
         } finally {
@@ -506,8 +508,8 @@ public class EntityListener implements Listener {
             Position pos = player.getPosition();
             
             // Check both cancelFallDamage and allowFlying for fall damage cancellation
-            if (protectionListener.shouldCancel(pos, player, "cancelFallDamage") || 
-                protectionListener.shouldCancel(pos, player, "allowFlying")) {
+            if (protectionListener.handleProtection(pos, player, "cancelFallDamage") || 
+                protectionListener.handleProtection(pos, player, "allowFlying")) {
                 event.setCancelled(true);
                 
                 if (plugin.isDebugMode()) {
@@ -518,5 +520,107 @@ public class EntityListener implements Listener {
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "fall_damage_check");
         }
+    }
+    
+    /**
+     * Handle ender pearl landing - Prevents teleporting into protected areas
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEnderPearlLand(ProjectileHitEvent event) {
+        if (!(event.getEntity() instanceof EntityEnderPearl pearl)) {
+            return;
+        }
+
+        if (!(pearl.shootingEntity instanceof Player player)) {
+            return;
+        }
+
+        // Check if ender pearls are allowed at landing position
+        if (protectionListener.handleProtection(event.getEntity().getPosition(), player, "allowEnderPearl")) {
+            // Cancel the upcoming teleport by sending player back
+            player.teleport(player.getPosition());
+            protectionListener.sendProtectionMessage(player, "messages.protection.enderPearl");
+            
+            // Return the ender pearl to the player's inventory if they're not in creative mode
+            if (player.getGamemode() != 1) { // 1 = Creative Mode
+                Item enderPearl = Item.get(Item.ENDER_PEARL, 0, 1);
+                player.getInventory().addItem(enderPearl);
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Returned ender pearl to " + player.getName() + "'s inventory after preventing teleport");
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if a player is attempting to tame an animal
+     */
+    public boolean isTamingAttempt(Entity entity, Player player) {
+        if (entity == null || player == null) return false;
+        
+        Item heldItem = player.getInventory().getItemInHand();
+        if (heldItem == null) return false;
+        
+        String entityType = entity.getClass().getSimpleName();
+        int itemId = heldItem.getId();
+        
+        return switch (entityType) {
+            case "EntityWolf" -> itemId == Item.BONE;
+            case "EntityCat", "EntityOcelot" -> itemId == Item.RAW_FISH;
+            case "EntityParrot" -> itemId == Item.SEEDS;
+            case "EntityHorse", "EntityDonkey", "EntityMule" -> entity.getPassengers().isEmpty() && (itemId == Item.SADDLE);
+            case "EntityLlama", "EntityTraderLlama" -> entity.getPassengers().isEmpty() && (itemId == Item.CARPET);
+            default -> false;
+        };
+    }
+
+    /**
+     * Public method to check if a player is attempting to breed an entity
+     * This is used by ProtectionListener to avoid duplicating code
+     * 
+     * @param entity The entity being interacted with
+     * @param player The player attempting the breeding
+     * @return true if this is a valid breeding attempt, false otherwise
+     */
+    public boolean isBreedingAttempt(Entity entity, Player player) {
+        if (entity == null || player == null) return false;
+        
+        Item heldItem = player.getInventory().getItemInHand();
+        if (heldItem == null) return false;
+        
+        String entityType = entity.getClass().getSimpleName();
+        List<Integer> validBreedingFoods = breedingFoods.get(entityType);
+        
+        return validBreedingFoods != null && validBreedingFoods.contains(heldItem.getId());
+    }
+    
+    /**
+     * Check if an animal is ready to breed (not a baby and not in love mode)
+     * 
+     * @param animal The animal to check
+     * @return true if the animal can be bred, false otherwise
+     */
+    public boolean canAnimalBreed(EntityAnimal animal) {
+        if (animal == null) return false;
+        
+        // Check if animal is a baby
+        try {
+            if (animal.getClass().getMethod("isBaby").invoke(animal) == Boolean.TRUE) {
+                return false;
+            }
+        } catch (Exception ignored) {
+            // Method doesn't exist or can't be accessed
+        }
+        
+        // Check for "love mode" cooldown
+        try {
+            if (animal.getClass().getMethod("inLoveMode").invoke(animal) == Boolean.TRUE) {
+                return false;
+            }
+        } catch (Exception ignored) {
+            // Method doesn't exist or can't be accessed
+        }
+        
+        return true;
     }
 }
