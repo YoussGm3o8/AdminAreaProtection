@@ -51,32 +51,64 @@ public class CategorySettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.categorySettings.title", 
-            Map.of("category", category.getDisplayName(), "area", area.getName())));
-        
-        // Add header with clear instructions
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.categorySettings.header", 
-            Map.of("category", category.getDisplayName()))));
-        
-        // Get area settings
-        AreaDTO dto = area.toDTO();
-        JSONObject settings = dto.settings();
-
-        // Add toggles for this category
-        List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
-        if (categoryToggles != null) {
-            for (PermissionToggle toggle : categoryToggles) {
-                String description = plugin.getLanguageManager().get(
-                    "gui.permissions.toggles." + toggle.getPermissionNode());
-                form.addElement(new ElementToggle(
-                    plugin.getLanguageManager().get("gui.permissions.toggle.format",
-                        Map.of("name", toggle.getDisplayName(), "description", description)),
-                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
-                ));
+        try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Reloaded area from database for " + category.name().toLowerCase() + " settings form");
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database", e);
             }
+            
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.categorySettings.title", 
+                Map.of("category", category.getDisplayName(), "area", area.getName())));
+            
+            // Add header with clear instructions
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.categorySettings.header", 
+                Map.of("category", category.getDisplayName()))));
+            
+            // Get area toggle states directly from the area object
+            if (plugin.isDebugMode()) {
+                plugin.debug("Creating " + category.name().toLowerCase() + " settings form for area: " + area.getName());
+            }
+
+            // Add toggles for this category
+            List<PermissionToggle> categoryToggles = PermissionToggle.getTogglesByCategory().get(category);
+            if (categoryToggles != null) {
+                for (PermissionToggle toggle : categoryToggles) {
+                    String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
+                    String description = plugin.getLanguageManager().get(
+                        "gui.permissions.toggles." + toggle.getPermissionNode());
+                    
+                    // Get current toggle state with default fallback
+                    boolean currentValue = area.getToggleState(permissionNode);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Toggle " + toggle.getDisplayName() + " (" + permissionNode + ") value: " + currentValue);
+                    }
+                    
+                    form.addElement(new ElementToggle(
+                        plugin.getLanguageManager().get("gui.permissions.toggle.format",
+                            Map.of("name", toggle.getDisplayName(), "description", description)),
+                        currentValue
+                    ));
+                }
+            }
+            
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating " + category.name().toLowerCase() + " settings form", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError",
+                Map.of("error", e.getMessage())));
+            return null;
         }
-        
-        return form;
     }
 
     @Override
@@ -86,39 +118,37 @@ public class CategorySettingsHandler extends BaseFormHandler {
         Area area = getEditingArea(player);
         if (area == null) return;
 
+        Map<String, Boolean> toggleChanges = new HashMap<>();
         List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
+
         if (toggles == null) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
             return;
         }
 
-        // Process toggle responses
-        Map<String, Boolean> toggleChanges = new HashMap<>();
-        
-        // Skip label element (index 0)
-        for (int i = 0; i < toggles.size(); i++) {
-            try {
-                PermissionToggle toggle = toggles.get(i);
-                String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
-                boolean currentValue = area.getToggleState(permissionNode);
-                
-                Object rawResponse = response.getResponse(i + 1);
-                if (rawResponse == null) continue;
-                
-                boolean newValue = false;
-                if (rawResponse instanceof Boolean) {
-                    newValue = (Boolean) rawResponse;
-                } else {
+        // Skip header label element (index 0)
+        int index = 1;
+        for (PermissionToggle toggle : toggles) {
+            String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
+            boolean currentValue = area.getToggleState(permissionNode);
+            
+            // Get response value
+            boolean newValue = false;
+            Object rawValue = response.getResponse(index++);
+            if (rawValue instanceof Boolean) {
+                newValue = (Boolean)rawValue;
+            } else if (rawValue != null) {
+                try {
+                    newValue = Boolean.parseBoolean(rawValue.toString());
+                } catch (Exception e) {
                     continue;
                 }
-                
-                // Only track changes, don't apply yet
-                if (currentValue != newValue) {
-                    toggleChanges.put(permissionNode, newValue);
-                }
-            } catch (Exception e) {
-                plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode(), e);
+            }
+            
+            // Only track changes, don't apply yet
+            if (currentValue != newValue) {
+                toggleChanges.put(permissionNode, newValue);
             }
         }
         

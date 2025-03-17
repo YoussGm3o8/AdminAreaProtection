@@ -4,6 +4,7 @@ import adminarea.AdminAreaProtectionPlugin;
 import adminarea.permissions.PermissionToggle;
 import adminarea.exception.DatabaseException;
 import adminarea.permissions.PermissionOverrideManager;
+import adminarea.permissions.PermissionChecker;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -13,6 +14,10 @@ import cn.nukkit.math.Vector3;
 import cn.nukkit.math.SimpleAxisAlignedBB;
 import cn.nukkit.level.Position;
 import org.json.JSONObject;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Statement;
 
 public final class Area {
     private final AreaDTO dto;
@@ -44,6 +49,12 @@ public final class Area {
     
     // Store potion effects
     private final JSONObject potionEffects;
+    
+    // Thread-local set to track areas being saved to prevent recursion
+    private static final ThreadLocal<Set<String>> savingAreas = ThreadLocal.withInitial(() -> new HashSet<>());
+    
+    // ThreadLocal for tracking permissions operations to prevent area recreation
+    private static final ThreadLocal<Set<String>> permissionOperations = ThreadLocal.withInitial(HashSet::new);
     
     Area(AreaDTO dto) {
         this.dto = dto;
@@ -235,32 +246,92 @@ public final class Area {
         
         // Only add to toggle states if it's a toggle permission
         if (normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            // Check if the value is actually changing
+            boolean currentState = getToggleState(normalizedPermission);
+            if (currentState == state) {
+                // No change needed
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Toggle state for " + normalizedPermission + " already set to " + state + " - no change needed");
+                }
+                return;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Changing toggle " + normalizedPermission + " from " + currentState + " to " + state);
+            }
+            
             // Update cache and storage
             toggleStates.put(normalizedPermission, state);
             toggleStateCache.invalidateAll(); // Clear the entire toggle state cache
             
             // Invalidate all protection caches to ensure changes take effect immediately
-            if (plugin.getListenerManager() != null) {
-                // Invalidate protection listener cache
-                if (plugin.getListenerManager().getProtectionListener() != null) {
-                    plugin.getListenerManager().getProtectionListener().cleanup();
-                }
+            if (plugin.getListenerManager() != null && 
+                plugin.getListenerManager().getProtectionListener() != null) {
+                plugin.getListenerManager().getProtectionListener().cleanup();
                 
-                // Invalidate environment listener cache if available
                 if (plugin.getListenerManager().getEnvironmentListener() != null) {
                     plugin.getListenerManager().getEnvironmentListener().invalidateCache();
                 }
-                
-                // Invalidate item listener cache if available
-                if (plugin.getListenerManager().getItemListener() != null) {
-                    plugin.getListenerManager().getItemListener().clearCache();
-                }
             }
             
-            // Invalidate permission checker cache
-            if (plugin.getPermissionOverrideManager() != null && 
-                plugin.getPermissionOverrideManager().getPermissionChecker() != null) {
-                plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(name);
+            // Special handling for critical toggles
+            if (normalizedPermission.equals("gui.permissions.toggles.allowBlockPlace") || 
+                normalizedPermission.equals("gui.permissions.toggles.allowBlockBreak") ||
+                normalizedPermission.equals("gui.permissions.toggles.allowInteract")) {
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Critical toggle changed - immediately saving to database: " + normalizedPermission + " = " + state);
+                }
+                
+                // Save toggle states to database immediately
+                try {
+                    boolean success = saveToggleStates();
+                    
+                    if (plugin.isDebugMode()) {
+                        if (success) {
+                            plugin.debug("  Successfully saved critical toggle to database");
+                        } else {
+                            plugin.debug("  Failed to save critical toggle to database - using retry mechanism");
+                        }
+                    }
+                    
+                    // If save failed, try updating just this specific toggle
+                    if (!success) {
+                        try {
+                            JSONObject singleToggle = new JSONObject();
+                            singleToggle.put(normalizedPermission, state);
+                            plugin.getDatabaseManager().updateAreaToggleState(name, normalizedPermission, state);
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  Updated critical toggle directly in database as fallback");
+                            }
+                        } catch (Exception singleEx) {
+                            plugin.getLogger().error("Failed single toggle update as fallback", singleEx);
+                        }
+                    }
+                    
+                    // Force reload the area to ensure toggle state is consistent
+                    try {
+                        Area refreshed = plugin.getDatabaseManager().loadArea(name);
+                        if (refreshed != null) {
+                            boolean refreshedState = refreshed.getToggleState(normalizedPermission);
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  Verified toggle state after reload: " + normalizedPermission + " = " + refreshedState);
+                            }
+                            
+                            if (refreshedState != state) {
+                                plugin.getLogger().error("Toggle state mismatch after reload - forcing update");
+                                // Force update directly in database
+                                plugin.getDatabaseManager().updateAreaToggleState(name, normalizedPermission, state);
+                            }
+                        }
+                    } catch (Exception refreshEx) {
+                        plugin.getLogger().error("Failed to refresh area after toggle update", refreshEx);
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to save critical toggle state to database", e);
+                }
             }
         }
     }
@@ -299,18 +370,67 @@ public final class Area {
     /**
      * Save toggle states to database in a single batch operation
      * Call this after multiple toggle states have been set
+     * @return True if saved successfully, false otherwise
      */
-    public void saveToggleStates() {
+    public boolean saveToggleStates() {
+        // Prevent recursion during toggle state saving
+        Set<String> inProgress = savingAreas.get();
+        if (inProgress.contains(name)) {
+            // We're already saving this area in the current call stack
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive save for area " + name);
+            }
+            return true; // Return success to avoid disrupting the parent operation
+        }
+        inProgress.add(name);
+        
         try {
+            // Skip database update if we're in a high-frequency context
+            if (plugin.getRecentSaveTracker().isHighFrequencyContext()) {
+                return true;
+            }
+            
+            // Rate limit database updates
+            long currentTime = System.currentTimeMillis();
+            if (plugin.getRecentSaveTracker().wasRecentlySaved(name, currentTime)) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Skipping save for area " + name + " due to rate limiting");
+                }
+                return true;
+            }
+            
             // Create a copy of the toggle states to send to the database
             JSONObject toggleStatesJson = new JSONObject(toggleStates);
-            plugin.getDatabaseManager().updateAllAreaToggleStates(name, toggleStatesJson);
             
-            if (plugin.isDebugMode()) {
-                plugin.debug("Saved all toggle states to database for area " + name);
+            // Only log if we're in debug mode and not in a high-frequency context
+            boolean shouldLog = plugin.isDebugMode() && !plugin.getRecentSaveTracker().isHighFrequencyContext();
+            
+            if (shouldLog) {
+                plugin.debug("Saving toggle states to database for area " + name);
+            }
+            
+            // Update toggle states in database
+            try {
+                plugin.getDatabaseManager().updateAllAreaToggleStates(name, toggleStatesJson);
+                
+                // Mark as saved for rate limiting
+                plugin.getRecentSaveTracker().markSaved(name, currentTime);
+                
+                if (shouldLog) {
+                    plugin.debug("  Successfully updated toggle states in the database");
+                }
+                
+                return true;
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to update toggle states for area " + name, e);
+                return false;
             }
         } catch (Exception e) {
-            plugin.getLogger().error("Failed to save toggle states to database", e);
+            plugin.getLogger().error("Error saving toggle states for area " + name, e);
+            return false;
+        } finally {
+            // Clean up thread-local to prevent memory leaks
+            inProgress.remove(name);
         }
     }
 
@@ -321,19 +441,74 @@ public final class Area {
         String normalizedPermission = normalizeToggleKey(permission);
         
         // Check cache first
-        Boolean cachedValue = toggleStateCache.getIfPresent(normalizedPermission);
-        if (cachedValue != null) {
-            return cachedValue;
+        Boolean cachedState = toggleStateCache.getIfPresent(normalizedPermission);
+        if (cachedState != null) {
+            return cachedState;
         }
         
-        // Get value from storage
-        Object value = toggleStates.get(normalizedPermission);
-        boolean state = value instanceof Boolean ? (Boolean) value : false;
-        
-        // Cache the result
-        toggleStateCache.put(normalizedPermission, state);
-        
-        return state;
+        try {
+            boolean state;
+            
+            // Check if this is a potion effect permission
+            if (normalizedPermission.startsWith("gui.permissions.toggles.allowPotion") || 
+                normalizedPermission.startsWith("allowPotion")) {
+                
+                // For potion effects, don't use toggleStates but check if there's a strength value
+                // Get the effect name - either with or without the prefix
+                String effectName;
+                if (normalizedPermission.startsWith("gui.permissions.toggles.")) {
+                    effectName = normalizedPermission.replace("gui.permissions.toggles.", "");
+                } else {
+                    effectName = normalizedPermission;
+                }
+                
+                // Get the strength value
+                int strength = getPotionEffectStrength(effectName);
+                
+                // If strength > 0, consider it enabled (true)
+                state = strength > 0;
+                
+                // if (plugin.isDebugMode()) {
+                //     plugin.debug("[Area] Potion effect " + effectName + " has strength " + strength + ", state: " + state);
+                // }
+                
+                // Cache the result
+                toggleStateCache.put(normalizedPermission, state);
+                return state;
+            }
+            
+            // Not a potion effect, continue with normal toggle state handling
+            Object value = toggleStates.get(normalizedPermission);
+            
+            if (value == null) {
+                String permNode = normalizedPermission.replace(GUI_PERMISSIONS_PREFIX, "");
+                PermissionToggle toggle = PermissionToggle.getToggle(permNode);
+                if (toggle != null) {
+                    state = toggle.getDefaultValue();
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("[Area] Using default toggle state for " + permNode + ": " + state);
+                    }
+                } else {
+                    state = true; // Default to true if not found
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("[Area] No toggle found for " + permNode + ", using default state: " + state);
+                    }
+                }
+            } else if (value instanceof Boolean) {
+                state = (Boolean) value;
+            } else if (value instanceof Integer) {
+                state = (Integer) value > 0;
+            } else {
+                state = true; // Default to true for unknown types
+            }
+            
+            // Cache the result
+            toggleStateCache.put(normalizedPermission, state);
+            return state;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error getting toggle state: " + e.getMessage(), e);
+            return true; // Default to true on error (least restrictive)
+        }
     }
 
     /**
@@ -343,12 +518,42 @@ public final class Area {
      * @return The strength value (0-10), or 0 if not set or disabled
      */
     public int getPotionEffectStrength(String effectName) {
+        // Normalization issues can occur here
+        if (plugin.isDebugMode() && effectName.contains("Speed")) {
+            // Only log Speed effect for now as it's the one being tested
+            plugin.debug("[Area] Looking up potion effect strength for: " + effectName);
+        }
+        
         // Normalize permission name to ensure consistent format
         String normalizedKey = normalizeToggleKey(effectName);
         
+        // Remove prefix for direct lookup in potionEffects
+        String effectKey = normalizedKey;
+        if (effectKey.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            effectKey = effectKey.substring(GUI_PERMISSIONS_PREFIX.length());
+        }
+        
         // Check if the effect exists in potionEffects
-        if (potionEffects.has(normalizedKey)) {
-            return potionEffects.optInt(normalizedKey, 0);
+        if (potionEffects.has(effectKey)) {
+            int strength = potionEffects.optInt(effectKey, 0);
+            if (plugin.isDebugMode() && strength > 0 && effectKey.contains("Speed")) {
+                // Only log non-zero values for Speed to reduce spam
+                plugin.debug("[Area] Found in potionEffects: " + effectKey + " = " + strength);
+            }
+            return strength;
+        }
+        
+        // Some effects might be stored with just the name part (e.g., "Speed" instead of "allowPotionSpeed")
+        if (effectKey.startsWith("allowPotion")) {
+            String simpleName = effectKey.substring("allowPotion".length());
+            if (potionEffects.has(simpleName)) {
+                int strength = potionEffects.optInt(simpleName, 0);
+                if (plugin.isDebugMode() && strength > 0 && simpleName.contains("Speed")) {
+                    // Only log non-zero values for Speed to reduce spam
+                    plugin.debug("[Area] Found simplified key: " + simpleName + " = " + strength);
+                }
+                return strength;
+            }
         }
         
         // Fall back to checking toggleStates with "Strength" suffix
@@ -357,9 +562,18 @@ public final class Area {
             
         Object value = toggleStates.get(strengthKey);
         if (value instanceof Integer) {
-            return (Integer) value;
+            int strength = (Integer) value;
+            if (plugin.isDebugMode() && strength > 0 && strengthKey.contains("Speed")) {
+                // Only log non-zero values for Speed to reduce spam
+                plugin.debug("[Area] Found in toggleStates: " + strengthKey + " = " + strength);
+            }
+            return strength;
         }
         
+        // Only log failures for Speed effect to reduce spam
+        if (plugin.isDebugMode() && effectName.contains("Speed")) {
+            plugin.debug("[Area] No strength found for: " + effectName);
+        }
         return 0;
     }
     
@@ -370,28 +584,37 @@ public final class Area {
      * @param strength The strength value (0-10)
      */
     public void setPotionEffectStrength(String effectName, int strength) {
-        // Normalize permission name
-        String normalizedKey = normalizeToggleKey(effectName);
+        // Validation
+        if (effectName == null || effectName.isEmpty()) {
+            return;
+        }
         
-        // Validate and constrain the strength value
+        // Normalize the key (remove the prefix if present)
+        String normalizedKey = effectName;
+        if (effectName.startsWith("gui.permissions.toggles.")) {
+            normalizedKey = effectName.replace("gui.permissions.toggles.", "");
+        }
+        
+        // Validate the strength (0-10)
         int validStrength = Math.max(0, Math.min(10, strength));
         
-        // Update both storage locations for backward compatibility
         // Store in potionEffects for the new way
         potionEffects.put(normalizedKey, validStrength);
         
-        // Also store in toggleStates with "Strength" suffix for backward compatibility
-        String strengthKey = normalizedKey.endsWith("Strength") ? 
-            normalizedKey : normalizedKey + "Strength";
-        toggleStates.put(strengthKey, validStrength);
+        // Clear the toggle state cache for this effect 
+        // so that getToggleState will recompute based on new strength
+        String toggleKey = "gui.permissions.toggles." + normalizedKey;
+        toggleStateCache.invalidate(toggleKey);
         
-        // Clear cache to ensure changes take effect
-        toggleStateCache.invalidateAll();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Set potion effect " + normalizedKey + " strength to " + validStrength + 
-                       " in area " + name);
+        // If it's zero, remove it to keep the data clean
+        if (validStrength == 0) {
+            potionEffects.remove(normalizedKey);
         }
+        
+        // if (plugin.isDebugMode()) {
+        //     plugin.debug("Set potion effect " + normalizedKey + " strength to " + validStrength + 
+        //         " (requested: " + strength + ")");
+        // }
     }
     
     /**
@@ -419,35 +642,74 @@ public final class Area {
     }
 
     public AreaDTO toDTO() {
-        // Create a JSONObject from toggleStates map
-        JSONObject toggleStatesJson = new JSONObject();
+        // Create a copy of the toggle states map for the DTO
+        JSONObject toggleStatesJson = new JSONObject(toggleStates);
         
-        // Only include actual toggle states (with prefix)
-        for (Map.Entry<String, Object> entry : toggleStates.entrySet()) {
-            String key = entry.getKey();
-            if (key.startsWith(GUI_PERMISSIONS_PREFIX)) {
-                toggleStatesJson.put(key, entry.getValue());
+        // Create a copy of the settings for the DTO
+        JSONObject updatedSettings = new JSONObject(dto.settings());
+        
+        // Always synchronize critical toggle states
+        String[] criticalToggles = {
+            "gui.permissions.toggles.allowBlockPlace",
+            "gui.permissions.toggles.allowBlockBreak",
+            "gui.permissions.toggles.allowInteract"
+        };
+        
+        for (String toggle : criticalToggles) {
+            // Get the current value from memory
+            boolean memoryValue = getToggleState(toggle);
+            
+            // Apply the memory value to both JSON objects
+            toggleStatesJson.put(toggle, memoryValue);
+            
+            // Also update the settings with the same value (without the prefix)
+            String shortKey = toggle.replace("gui.permissions.toggles.", "");
+            updatedSettings.put(shortKey, memoryValue);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Ensuring critical toggle '" + toggle + "' is consistent: " + memoryValue);
             }
         }
         
-        // Create a copy of the original settings
-        JSONObject updatedSettings = new JSONObject(dto.settings());
+        // Use cached permissions instead of fetching from database to avoid recursive calls
+        Map<String, Map<String, Boolean>> latestGroupPerms = this.groupPermissions;
+        Map<String, Map<String, Boolean>> latestTrackPerms = this.trackPermissions;
+        Map<String, Map<String, Boolean>> latestPlayerPerms;
         
-        // Ensure we have the latest permissions from PermissionOverrideManager
-        Map<String, Map<String, Boolean>> latestGroupPerms = getGroupPermissions();
-        Map<String, Map<String, Boolean>> latestTrackPerms = getTrackPermissions();
-        Map<String, Map<String, Boolean>> latestPlayerPerms = getPlayerPermissions();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug(String.format("Converting area %s to DTO", name));
-            plugin.debug("Toggle states: " + toggleStatesJson.toString());
-            plugin.debug("Updated settings: " + updatedSettings.toString());
-            plugin.debug("Latest player permissions: " + latestPlayerPerms);
-            plugin.debug("Latest group permissions: " + latestGroupPerms);
-            plugin.debug("Latest track permissions: " + latestTrackPerms);
-            plugin.debug("Potion effects: " + potionEffects.toString());
+        try {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Getting latest player permissions from database for DTO creation");
+            }
+            latestPlayerPerms = plugin.getPermissionOverrideManager().getAllPlayerPermissions(name);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Retrieved player permissions for area " + name + ": " + 
+                           latestPlayerPerms.size() + " players");
+                for (Map.Entry<String, Map<String, Boolean>> entry : latestPlayerPerms.entrySet()) {
+                    plugin.debug("  Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                }
+            }
+            
+            // Update our cached permissions while we're at it
+            if (latestPlayerPerms != null && !latestPlayerPerms.isEmpty()) {
+                this.playerPermissions = new HashMap<>(latestPlayerPerms);
+            } else if (this.playerPermissions != null && !this.playerPermissions.isEmpty()) {
+                // Keep existing if database returned empty but we have data
+                latestPlayerPerms = new HashMap<>(this.playerPermissions);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Database returned empty permissions but we have " + 
+                               this.playerPermissions.size() + " cached player permissions");
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to get player permissions from database", e);
+            // Fall back to cached permissions
+            latestPlayerPerms = this.playerPermissions != null ? 
+                new HashMap<>(this.playerPermissions) : new HashMap<>();
         }
-
+        
+        // Create a new DTO with the updated settings and toggle states
         return new AreaDTO(
             name,
             world,
@@ -455,7 +717,7 @@ public final class Area {
             priority,
             dto.showTitle(),
             updatedSettings,
-            latestGroupPerms,  // Use latest data from PermissionOverrideManager
+            latestGroupPerms,
             new HashMap<>(),   // inheritedPermissions - no longer needed
             toggleStatesJson,
             dto.defaultToggleStates(),
@@ -463,33 +725,74 @@ public final class Area {
             dto.permissions(),
             dto.enterMessage(),
             dto.leaveMessage(),
-            latestTrackPerms,  // Use latest data from PermissionOverrideManager
-            latestPlayerPerms, // Use latest data from PermissionOverrideManager
+            latestTrackPerms,
+            latestPlayerPerms,
             potionEffects
         );
     }
 
     /**
-     * Synchronizes all permission data between the Area object and PermissionOverrideManager
      * Call this before saving the area to ensure all permission data is consistent
      */
-    public void synchronizePermissions() {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Synchronizing permissions for area " + name);
+    public boolean syncPermissions() {
+        // Prevent recursion during permission syncing
+        Set<String> inProgress = savingAreas.get();
+        if (inProgress.contains(name + "_perm")) {
+            // We're already syncing permissions for this area in the current call stack
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive permission sync for area " + name);
+            }
+            return true; // Return success to avoid disrupting the parent operation
         }
+        inProgress.add(name + "_perm");
         
         try {
-            // Use the new bidirectional synchronization method
-            plugin.getPermissionOverrideManager().synchronizePermissions(
-                this, 
-                PermissionOverrideManager.SyncDirection.BIDIRECTIONAL
-            );
+            // Skip permission sync if we're in a high-frequency context
+            if (plugin.getRecentSaveTracker().isHighFrequencyContext()) {
+                return true;
+            }
             
-            if (plugin.isDebugMode()) {
-                plugin.debug("  Successfully synchronized permissions bidirectionally for area " + name);
+            // Rate limit permission syncs
+            long currentTime = System.currentTimeMillis();
+            if (plugin.getRecentSaveTracker().wasRecentlySynced(name, currentTime)) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Skipping permission sync for area " + name + " due to rate limiting");
+                }
+                return true;
+            }
+            
+            // Only log if we're in debug mode and not in a high-frequency context
+            boolean shouldLog = plugin.isDebugMode() && !plugin.getRecentSaveTracker().isHighFrequencyContext();
+            
+            if (shouldLog) {
+                plugin.debug("Synchronizing permissions for area " + name);
+            }
+            
+            try {
+                // Use the new bidirectional synchronization method
+                plugin.getPermissionOverrideManager().synchronizePermissions(
+                    this, 
+                    PermissionOverrideManager.SyncDirection.BIDIRECTIONAL
+                );
+                
+                // Mark as synced for rate limiting
+                plugin.getRecentSaveTracker().markSynced(name, currentTime);
+                
+                if (shouldLog) {
+                    plugin.debug("  Successfully synchronized permissions bidirectionally for area " + name);
+                }
+                
+                return true;
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to synchronize permissions for area " + name, e);
+                return false;
             }
         } catch (Exception e) {
-            plugin.getLogger().error("Failed to synchronize permissions for area " + name, e);
+            plugin.getLogger().error("Error syncing permissions for area " + name, e);
+            return false;
+        } finally {
+            // Clean up thread-local to prevent memory leaks
+            inProgress.remove(name + "_perm");
         }
     }
 
@@ -555,15 +858,37 @@ public final class Area {
         
         containsCache.invalidateAll();
         effectivePermissionCache.clear();
+        toggleStateCache.invalidateAll();
         cachedPlayerPermissions = null;
         
-        // Also clear the toggle states to force reload from DTO
+        // Completely refresh toggle states from the DTO
         toggleStates.clear();
         JSONObject toggles = dto.toggleStates();
         for (String key : toggles.keySet()) {
-            toggleStates.put(key, toggles.getBoolean(key));
+            try {
+                toggleStates.put(key, toggles.get(key));
+            } catch (Exception e) {
+                plugin.getLogger().warning("Error restoring toggle state for key: " + key);
+            }
         }
         
+        // Only log detailed potion effects info if there are any non-zero values
+        if (plugin.isDebugMode()) {
+            // Check if there are any non-zero potion effects
+            boolean hasEffects = false;
+            for (String key : potionEffects.keySet()) {
+                if (potionEffects.optInt(key, 0) > 0) {
+                    hasEffects = true;
+                    break;
+                }
+            }
+            
+            if (hasEffects) {
+                plugin.debug("Area " + name + " has potion effects: " + potionEffects.toString());
+            }
+        }
+
+        // Reload permissions
         playerPermissions = null;
         groupPermissions = null;
         trackPermissions = null;
@@ -588,12 +913,48 @@ public final class Area {
         return plugin.getPermissionOverrideManager().getTrackPermissions(name, trackName);
     }
 
+    /**
+     * Gets the internal track permissions map directly without triggering database queries
+     * This method is for internal use only to avoid recursive database calls
+     * 
+     * @return The internal track permissions map (not a defensive copy)
+     */
+    public Map<String, Map<String, Boolean>> getInternalTrackPermissions() {
+        return this.trackPermissions;
+    }
+
     public Map<String, Map<String, Boolean>> getTrackPermissions() {
-        // Always fetch fresh data from PermissionOverrideManager
-        trackPermissions = plugin.getPermissionOverrideManager().getAllTrackPermissions(name);
-        
-        // Return a defensive copy
-        return new HashMap<>(trackPermissions);
+        try {
+            // Check if we have already cached permissions
+            if (trackPermissions == null || trackPermissions.isEmpty()) {
+                // Load from database if not cached
+                trackPermissions = plugin.getPermissionOverrideManager().getAllTrackPermissions(name);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Loaded track permissions from database for area " + name + 
+                               ": " + (trackPermissions != null ? trackPermissions.size() : "0") + " tracks");
+                }
+                
+                // Initialize with empty map if null to avoid NPEs
+                if (trackPermissions == null) {
+                    trackPermissions = new HashMap<>();
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Initialized empty track permissions map after database load returned null");
+                    }
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Using cached track permissions for area " + name + 
+                           ": " + trackPermissions.size() + " tracks");
+            }
+            
+            // Return a defensive copy to prevent external modification
+            // We will NOT try to verify and save back to the database here to prevent recursion
+            return new HashMap<>(trackPermissions);
+        } catch (Exception e) {
+            plugin.getLogger().error("Error retrieving track permissions for area " + name, e);
+            // Return an empty map rather than null if there's an error
+            return new HashMap<>();
+        }
     }
 
     /**
@@ -601,26 +962,52 @@ public final class Area {
      * @return Map of player names to their permission maps
      */
     public Map<String, Map<String, Boolean>> getPlayerPermissions() {
-        // Always fetch fresh data from PermissionOverrideManager
-        playerPermissions = plugin.getPermissionOverrideManager().getAllPlayerPermissions(name);
-        
-        // Return a defensive copy
-        return new HashMap<>(playerPermissions);
+        try {
+            // Always fetch fresh data from PermissionOverrideManager
+            Map<String, Map<String, Boolean>> freshPermissions = plugin.getPermissionOverrideManager().getAllPlayerPermissions(name);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Retrieved player permissions for area " + name + ": " + 
+                            freshPermissions.size() + " players");
+            }
+            
+            // Update the cached map
+            this.playerPermissions = new HashMap<>(freshPermissions);
+            
+            // Return a defensive copy
+            return new HashMap<>(this.playerPermissions);
+        } catch (Exception e) {
+            plugin.getLogger().error("Error retrieving player permissions for area " + name, e);
+            // Return current cache or empty map if null
+            return playerPermissions != null ? new HashMap<>(playerPermissions) : new HashMap<>();
+        }
     }
     
     /**
      * Get permissions for a specific player in this area
      */
     public Map<String, Boolean> getPlayerPermissions(String playerName) {
-        // Always get fresh data from PermissionOverrideManager
-        Map<String, Boolean> playerPerms = plugin.getPermissionOverrideManager().getPlayerPermissions(name, playerName);
+        if (playerName == null) return new HashMap<>();
         
-        // Update the cached permissions map
-        if (playerPermissions != null) {
-            playerPermissions.put(playerName, new HashMap<>(playerPerms));
+        try {
+            // Always get fresh data from PermissionOverrideManager
+            Map<String, Boolean> playerPerms = plugin.getPermissionOverrideManager().getPlayerPermissions(name, playerName);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Retrieved permissions for player " + playerName + " in area " + 
+                            name + ": " + (playerPerms != null ? playerPerms.size() : "null") + " permissions");
+            }
+            
+            // Update the cached permissions map
+            if (playerPermissions != null && playerPerms != null) {
+                playerPermissions.put(playerName, new HashMap<>(playerPerms));
+            }
+            
+            return playerPerms != null ? new HashMap<>(playerPerms) : new HashMap<>();
+        } catch (Exception e) {
+            plugin.getLogger().error("Error retrieving permissions for player " + playerName, e);
+            return new HashMap<>();
         }
-        
-        return playerPerms;
     }
 
     public void setPlayerPermissions(String playerName, Map<String, Boolean> permissions) throws DatabaseException {
@@ -629,16 +1016,46 @@ public final class Area {
             plugin.debug("  New permissions: " + permissions);
         }
         
-        // Directly save to PermissionOverrideManager
-        plugin.getPermissionOverrideManager().setPlayerPermissions(name, playerName, permissions);
+        // This operation is for permissions only and should not trigger area recreation
+        String permOpsKey = "permission_only_op:" + name + ":" + playerName;
+        Set<String> processingSet = permissionOperations.get();
+        boolean shouldRemove = false;
         
-        // Update local cache
-        if (playerPermissions != null) {
-            playerPermissions.put(playerName, new HashMap<>(permissions));
+        if (!processingSet.contains(permOpsKey)) {
+            processingSet.add(permOpsKey);
+            shouldRemove = true;
         }
         
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Saved player permissions to PermissionOverrideManager and updated local cache");
+        try {
+            // Directly save to PermissionOverrideManager
+            plugin.getPermissionOverrideManager().setPlayerPermissions(name, playerName, permissions);
+            
+            // Update local cache
+            if (playerPermissions != null) {
+                playerPermissions.put(playerName, new HashMap<>(permissions));
+            }
+            if (cachedPlayerPermissions != null) {
+                cachedPlayerPermissions.remove(playerName);
+            }
+            
+            // Ensure the permission checker's cache is also invalidated
+            PermissionChecker permissionChecker = plugin.getPermissionOverrideManager().getPermissionChecker();
+            if (permissionChecker != null) {
+                permissionChecker.invalidateCache(name);
+                permissionChecker.invalidatePlayerCache(playerName);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Invalidated permission checker cache for area: " + name + " and player: " + playerName);
+                }
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Saved player permissions to PermissionOverrideManager and updated local cache");
+            }
+        } finally {
+            if (shouldRemove) {
+                processingSet.remove(permOpsKey);
+            }
         }
     }
 
@@ -658,10 +1075,25 @@ public final class Area {
             // Save updated permissions
             setPlayerPermissions(playerName, perms);
             
-            if (plugin.isDebugMode()) {
-                plugin.debug("Set player permission for " + playerName + " in area " + name);
-                plugin.debug("  Permission: " + permission + " = " + value);
-                plugin.debug("  Updated permissions: " + perms);
+            // Prevent recursive synchronization
+            String syncKey = name + "_sync_" + playerName;
+            if (!savingAreas.get().contains(syncKey)) {
+                savingAreas.get().add(syncKey);
+                try {
+                    // Ensure permissions are synchronized immediately
+                    plugin.getPermissionOverrideManager().synchronizeFromArea(this);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Set player permission for " + playerName + " in area " + name);
+                        plugin.debug("  Permission: " + permission + " = " + value);
+                        plugin.debug("  Updated permissions: " + perms);
+                        plugin.debug("  Synchronized changes to database immediately");
+                    }
+                } finally {
+                    savingAreas.get().remove(syncKey);
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Prevented recursive synchronization for player " + playerName + " in area " + name);
             }
         } catch (DatabaseException e) {
             plugin.getLogger().error("Failed to update player permission", e);
@@ -679,52 +1111,224 @@ public final class Area {
     }
 
     public Map<String, Boolean> getGroupPermissions(String groupName) {
-        return plugin.getPermissionOverrideManager().getGroupPermissions(name, groupName);
+        if (groupName == null) return new HashMap<>();
+        
+        try {
+            Map<String, Boolean> groupPerms = plugin.getPermissionOverrideManager().getGroupPermissions(name, groupName);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Retrieved permissions for group " + groupName + " in area " + 
+                            name + ": " + (groupPerms != null ? groupPerms.size() : "null") + " permissions");
+            }
+            
+            return groupPerms != null ? new HashMap<>(groupPerms) : new HashMap<>();
+        } catch (Exception e) {
+            plugin.getLogger().error("Error retrieving permissions for group " + groupName, e);
+            return new HashMap<>();
+        }
     }
 
     public Map<String, Map<String, Boolean>> getGroupPermissions() {
-        // Always fetch fresh data from PermissionOverrideManager
-        groupPermissions = plugin.getPermissionOverrideManager().getAllGroupPermissions(name);
-        
-        // Return a defensive copy
-        return new HashMap<>(groupPermissions);
+        try {
+            // Check if we have already cached permissions
+            if (groupPermissions == null || groupPermissions.isEmpty()) {
+                // Load from database if not cached
+                groupPermissions = plugin.getPermissionOverrideManager().getAllGroupPermissions(name);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Loaded group permissions from database for area " + name + 
+                               ": " + (groupPermissions != null ? groupPermissions.size() : "0") + " groups");
+                }
+                
+                // Initialize with empty map if null to avoid NPEs
+                if (groupPermissions == null) {
+                    groupPermissions = new HashMap<>();
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Initialized empty group permissions map after database load returned null");
+                    }
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Using cached group permissions for area " + name + 
+                           ": " + groupPermissions.size() + " groups");
+            }
+            
+            // Make sure group permissions are saved to the database (belt and suspenders approach)
+            if (groupPermissions != null && !groupPermissions.isEmpty()) {
+                boolean needsSaving = false;
+                
+                // Check if permissions actually exist in the database
+                try (Connection conn = plugin.getPermissionOverrideManager().getConnection();
+                     PreparedStatement stmt = conn.prepareStatement(
+                         "SELECT COUNT(*) FROM group_permissions WHERE area_name = ?")) {
+                    
+                    // First verify the table exists
+                    boolean tableExists = false;
+                    try (Statement checkStmt = conn.createStatement();
+                         ResultSet tableRs = checkStmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='group_permissions'")) {
+                        tableExists = tableRs.next();
+                    }
+                    
+                    if (!tableExists) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  group_permissions table does not exist! Creating it now.");
+                        }
+                        try (Statement createStmt = conn.createStatement()) {
+                            createStmt.execute("CREATE TABLE IF NOT EXISTS group_permissions (" +
+                                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                                "area_name TEXT NOT NULL, " +
+                                "group_name TEXT NOT NULL, " +
+                                "permission TEXT NOT NULL, " +
+                                "state INTEGER NOT NULL DEFAULT 1, " +
+                                "UNIQUE(area_name, group_name, permission))");
+                        }
+                        needsSaving = true;
+                    } else {
+                        // Table exists, check if permissions exist for this area
+                        stmt.setString(1, name);
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            int count = rs.next() ? rs.getInt(1) : 0;
+                            needsSaving = (count == 0);
+                            
+                            if (plugin.isDebugMode()) {
+                                if (needsSaving) {
+                                    plugin.debug("  No group permissions found in database for area " + name + 
+                                               " but " + groupPermissions.size() + " groups in memory; will force save");
+                                } else {
+                                    plugin.debug("  Found " + count + " group permission entries in database for area " + name);
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Error checking group permissions in database", e);
+                    // Assume we need to save if we can't verify
+                    needsSaving = true;
+                }
+                
+                // If no permissions in database, force save them
+                if (needsSaving) {
+                    int savedGroups = 0;
+                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                        try {
+                            // Use force=true to ensure the save happens
+                            plugin.getPermissionOverrideManager().setGroupPermissions(
+                                name, entry.getKey(), new HashMap<>(entry.getValue()), true);
+                            savedGroups++;
+                            
+                            if (plugin.isDebugMode() && savedGroups % 5 == 0) {
+                                plugin.debug("  Force saved permissions for " + savedGroups + " groups so far");
+                            }
+                        } catch (Exception e) {
+                            plugin.getLogger().error("Error force saving group permissions during getGroupPermissions for group " + 
+                                entry.getKey() + " in area " + name, e);
+                        }
+                    }
+                    
+                    if (plugin.isDebugMode() && savedGroups > 0) {
+                        plugin.debug("  Auto-recovery: Force saved permissions for " + savedGroups + " groups to database");
+                    }
+                }
+            }
+            
+            // Return a defensive copy to prevent external modification
+            return new HashMap<>(groupPermissions);
+        } catch (Exception e) {
+            plugin.getLogger().error("Error retrieving group permissions for area " + name, e);
+            // Return an empty map rather than null if there's an error
+            return new HashMap<>();
+        }
     }
 
     public void setGroupPermissions(String groupName, Map<String, Boolean> permissions) throws DatabaseException {
+        setGroupPermissions(groupName, permissions, false);
+    }
+    
+    /**
+     * Sets group permissions for a specific group with option to force saving
+     * 
+     * @param groupName The name of the group
+     * @param permissions The map of permissions to set
+     * @param force Whether to force saving even if no changes are detected
+     * @throws DatabaseException if there's an error saving to the database
+     */
+    public void setGroupPermissions(String groupName, Map<String, Boolean> permissions, boolean force) throws DatabaseException {
         if (plugin.isDebugMode()) {
-            plugin.debug("Setting permissions for group " + groupName + " in area " + name);
+            plugin.debug("Setting permissions for group " + groupName + " in area " + name + (force ? " (forced)" : ""));
             plugin.debug("  New permissions: " + permissions);
         }
         
-        // Directly save to PermissionOverrideManager
-        plugin.getPermissionOverrideManager().setGroupPermissions(name, groupName, permissions);
+        // This operation is for permissions only and should not trigger area recreation
+        String permOpsKey = "permission_only_op:" + name + ":group:" + groupName;
+        Set<String> processingSet = permissionOperations.get();
+        boolean shouldRemove = false;
         
-        // Update local cache
-        if (groupPermissions != null) {
-            groupPermissions.put(groupName, new HashMap<>(permissions));
+        if (!processingSet.contains(permOpsKey)) {
+            processingSet.add(permOpsKey);
+            shouldRemove = true;
         }
         
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Saved group permissions to PermissionOverrideManager and updated local cache");
+        try {
+            // Directly save to PermissionOverrideManager
+            plugin.getPermissionOverrideManager().setGroupPermissions(name, groupName, permissions, force);
+            
+            // Update local cache
+            if (groupPermissions != null) {
+                groupPermissions.put(groupName, new HashMap<>(permissions));
+            }
+            
+            // Ensure permissions are synchronized immediately
+            plugin.getPermissionOverrideManager().synchronizeFromArea(this);
+        } finally {
+            if (shouldRemove) {
+                processingSet.remove(permOpsKey);
+            }
         }
     }
 
+    /**
+     * Set permissions for a track
+     */
     public void setTrackPermissions(String trackName, Map<String, Boolean> permissions) throws DatabaseException {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Setting permissions for track " + trackName + " in area " + name);
-            plugin.debug("  New permissions: " + permissions);
+        if (trackName == null || permissions == null) {
+            return;
         }
         
-        // Directly save to PermissionOverrideManager
-        plugin.getPermissionOverrideManager().setTrackPermissions(name, trackName, permissions);
+        // This operation is for permissions only and should not trigger area recreation
+        String permOpsKey = "permission_only_op:" + name + ":track:" + trackName;
+        Set<String> processingSet = permissionOperations.get();
+        boolean shouldRemove = false;
         
-        // Update local cache
-        if (trackPermissions != null) {
-            trackPermissions.put(trackName, new HashMap<>(permissions));
+        if (!processingSet.contains(permOpsKey)) {
+            processingSet.add(permOpsKey);
+            shouldRemove = true;
         }
         
-        if (plugin.isDebugMode()) {
-            plugin.debug("  Saved track permissions to PermissionOverrideManager and updated local cache");
+        try {
+            // Directly save to PermissionOverrideManager with forced flag to ensure saving even if no changes detected
+            plugin.getPermissionOverrideManager().setTrackPermissions(this, trackName, permissions, true);
+            
+            // Update local cache
+            if (trackPermissions != null) {
+                Map<String, Boolean> trackPerms = trackPermissions.get(trackName);
+                if (trackPerms == null) {
+                    trackPerms = new HashMap<>();
+                    trackPermissions.put(trackName, trackPerms);
+                } else {
+                    trackPerms.clear();
+                }
+                
+                trackPerms.putAll(permissions);
+            }
+            
+            // Clear effective permission cache
+            effectivePermissionCache.clear();
+            
+            // Clear toggle state caches
+            toggleStateCache.invalidateAll();
+        } finally {
+            if (shouldRemove) {
+                processingSet.remove(permOpsKey);
+            }
         }
     }
 
@@ -941,71 +1545,123 @@ public final class Area {
     }
 
     /**
-     * Synchronizes toggles between the settings object and toggle state maps
-     * This ensures all toggle states are properly saved to the database
-     * @return The updated Area with synchronized toggle states
+     * Synchronize toggle states with database
+     * @return Updated area with synchronized toggle states
      */
     public Area synchronizeToggleStates() {
-        AreaDTO currentDTO = toDTO();
-        JSONObject settings = currentDTO.settings();
-        JSONObject toggleStatesJson = currentDTO.toggleStates();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Synchronizing toggle states for area " + name);
-            plugin.debug("  Before - Toggle states: " + toggleStatesJson);
+        // Check if this is a permission-only operation that shouldn't trigger area recreation
+        if (plugin.getPermissionOverrideManager().isPermissionOnlyOperation()) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Skipping toggle state synchronization for permission-only operation on area: " + name);
+            }
+            return this; // Just return the existing area without synchronization
         }
         
-        // Ensure all toggle states from settings are in the toggleStates map
-        // This is important for backward compatibility
-        for (String key : settings.keySet()) {
-            if (PermissionToggle.isValidToggle(key) && !toggleStatesJson.has(key)) {
-                Object value = settings.opt(key);
-                toggleStatesJson.put(key, value);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Adding missing toggle from settings: " + key + " = " + value);
-                }
+        // Before synchronizing, ensure we are not in a permission-setting context
+        // This is critical to prevent recursion
+        String syncKey = name + "_syncing_toggles";
+        Set<String> inProgress = savingAreas.get();
+        if (inProgress.contains(syncKey)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive toggle state synchronization for area: " + name);
             }
+            return this;
+        }
+        
+        inProgress.add(syncKey);
+        try {
+            AreaDTO currentDTO = toDTO();
+            JSONObject settings = currentDTO.settings();
+            JSONObject toggleStatesJson = currentDTO.toggleStates();
             
-            // If this is a short key (without prefix), add it with the prefix too
-            if (!key.startsWith(GUI_PERMISSIONS_PREFIX) && PermissionToggle.isValidToggle("gui.permissions.toggles." + key)) {
-                String fullKey = "gui.permissions.toggles." + key;
-                if (!toggleStatesJson.has(fullKey)) {
-                    Object value = settings.opt(key);
-                    toggleStatesJson.put(fullKey, value);
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Adding prefixed toggle: " + fullKey + " = " + value);
+            // Check if we actually need to synchronize - prevent unnecessary work
+            boolean needsSync = false;
+            
+            // Check if any toggle needs updating
+            for (Map.Entry<String, Object> entry : toggleStates.entrySet()) {
+                String key = entry.getKey();
+                if (entry.getValue() instanceof Boolean) {
+                    boolean value = (Boolean) entry.getValue();
+                    if (!toggleStatesJson.has(key) || toggleStatesJson.optBoolean(key) != value) {
+                        needsSync = true;
+                        break;
                     }
                 }
             }
-        }
-        
-        // Also ensure all toggle states from the in-memory map are in the JSON
-        for (Map.Entry<String, Object> entry : toggleStates.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
             
-            if (!toggleStatesJson.has(key)) {
-                toggleStatesJson.put(key, value);
-                
+            if (!needsSync) {
                 if (plugin.isDebugMode()) {
-                    plugin.debug("  Adding missing toggle from memory: " + key + " = " + value);
+                    plugin.debug("No toggle state changes detected for area " + name + " - skipping synchronization");
+                }
+                return this;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Synchronizing toggle states for area " + name);
+                plugin.debug("  Before - Toggle states: " + toggleStatesJson);
+            }
+            
+            // Process all toggle settings from the settings object
+            for (String key : settings.keySet()) {
+                // Only process toggle-related settings
+                if (PermissionToggle.isValidToggle(key)) {
+                    Object value = settings.opt(key);
+                    
+                    // Determine the correct key format to use in toggleStatesJson
+                    String toggleKey = key;
+                    
+                    // If it's a short key (no prefix), convert to full format for toggleStatesJson
+                    if (!key.startsWith(GUI_PERMISSIONS_PREFIX)) {
+                        toggleKey = GUI_PERMISSIONS_PREFIX + key;
+                    }
+                    
+                    // Add to toggleStatesJson if it's not already there or has a different value
+                    if (!toggleStatesJson.has(toggleKey) || !toggleStatesJson.get(toggleKey).equals(value)) {
+                        toggleStatesJson.put(toggleKey, value);
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Adding toggle from settings: " + toggleKey + " = " + value);
+                        }
+                    }
                 }
             }
+            
+            // Also ensure all toggle states from the in-memory map are in the JSON
+            for (Map.Entry<String, Object> entry : toggleStates.entrySet()) {
+                String key = entry.getKey();
+                Object value = entry.getValue();
+                
+                // Make sure the key is in the proper format for toggleStatesJson
+                String toggleKey = key;
+                if (!key.startsWith(GUI_PERMISSIONS_PREFIX) && key.startsWith("allow")) {
+                    toggleKey = GUI_PERMISSIONS_PREFIX + key;
+                }
+                
+                // Add to toggleStatesJson if it's not already there or has a different value
+                if (!toggleStatesJson.has(toggleKey)) {
+                    toggleStatesJson.put(toggleKey, value);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Adding missing toggle from memory: " + toggleKey + " = " + value);
+                    }
+                }
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  After - Toggle states: " + toggleStatesJson);
+            }
+            
+            // Invalidate toggle state cache after synchronization
+            toggleStateCache.invalidateAll();
+            
+            // Update area with synchronized toggle states
+            return AreaBuilder.fromDTO(currentDTO)
+                .toggleStates(toggleStatesJson)
+                .build();
+            
+        } finally {
+            inProgress.remove(syncKey);
         }
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("  After - Toggle states: " + toggleStatesJson);
-        }
-        
-        // Invalidate toggle state cache after synchronization
-        toggleStateCache.invalidateAll();
-        
-        // Update area with synchronized toggle states
-        return AreaBuilder.fromDTO(currentDTO)
-            .toggleStates(toggleStatesJson)
-            .build();
     }
 
     /**
@@ -1136,22 +1792,265 @@ public final class Area {
             plugin.debug("Updating internal permission maps for area " + name);
         }
         
-        // Update player permissions
-        this.playerPermissions = new HashMap<>(playerPerms);
+        // Update player permissions - but only if the provided map is not empty
+        // This prevents accidental clearing of permissions during area recreation
+        if (playerPerms != null) {
+            if (!playerPerms.isEmpty()) {
+                this.playerPermissions = new HashMap<>(playerPerms);
+            } else if (this.playerPermissions == null) {
+                // Only initialize with empty map if current permissions are null
+                this.playerPermissions = new HashMap<>();
+            }
+            // Otherwise keep existing permissions
+        }
         
         // Update group permissions
-        this.groupPermissions = new HashMap<>(groupPerms);
+        if (groupPerms != null) {
+            this.groupPermissions = new HashMap<>(groupPerms);
+        }
         
-        // Update track permissions
-        this.trackPermissions = new HashMap<>(trackPerms);
+        // Update track permissions - ensure we never set to null
+        if (trackPerms != null) {
+            this.trackPermissions = new HashMap<>(trackPerms);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Updated track permissions with " + trackPerms.size() + " tracks");
+                if (!trackPerms.isEmpty()) {
+                    plugin.debug("  Track names: " + String.join(", ", trackPerms.keySet()));
+                    // Log a sample of permissions for one track
+                    if (!trackPerms.isEmpty()) {
+                        String firstTrack = trackPerms.keySet().iterator().next();
+                        Map<String, Boolean> perms = trackPerms.get(firstTrack);
+                        plugin.debug("  Sample track permissions for " + firstTrack + ": " + 
+                                   (perms != null ? perms.size() : 0) + " permissions");
+                    }
+                }
+            }
+        } else if (this.trackPermissions == null) {
+            // Initialize with empty map if null to avoid NPEs
+            this.trackPermissions = new HashMap<>();
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Initialized empty track permissions map");
+            }
+        }
         
         // Clear the effective permission cache to force recalculation
         this.effectivePermissionCache.clear();
         
         if (plugin.isDebugMode()) {
-            plugin.debug("  Updated player permissions: " + this.playerPermissions.size() + " players");
-            plugin.debug("  Updated group permissions: " + this.groupPermissions.size() + " groups");
-            plugin.debug("  Updated track permissions: " + this.trackPermissions.size() + " tracks");
+            plugin.debug("  Updated player permissions: " + 
+                (this.playerPermissions != null ? this.playerPermissions.size() : 0) + " players");
+            plugin.debug("  Updated group permissions: " + 
+                (this.groupPermissions != null ? this.groupPermissions.size() : 0) + " groups");
+            plugin.debug("  Updated track permissions: " + 
+                (this.trackPermissions != null ? this.trackPermissions.size() : 0) + " tracks");
         }
+    }
+
+    /**
+     * Gets the internal group permissions map directly without triggering database queries
+     * This method is for internal use only to avoid recursive database calls
+     * 
+     * @return The internal group permissions map (not a defensive copy)
+     */
+    public Map<String, Map<String, Boolean>> getInternalGroupPermissions() {
+        return this.groupPermissions;
+    }
+
+    /**
+     * Updates a toggle state in memory only, without triggering database updates
+     * This is a fallback method for when database updates fail
+     * @param permission The permission toggle to update
+     * @param state The new toggle state value
+     */
+    public void updateToggleStateInMemory(String permission, boolean state) {
+        String normalizedPermission = normalizeToggleKey(permission);
+        
+        // Only update if it's a toggle permission
+        if (normalizedPermission.startsWith(GUI_PERMISSIONS_PREFIX)) {
+            // Check if the value is actually changing
+            boolean currentState = getToggleState(normalizedPermission);
+            if (currentState == state) {
+                // No change needed
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Memory toggle state for " + normalizedPermission + " already set to " + state + " - no change needed");
+                }
+                return;
+            }
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Memory-only update of toggle " + normalizedPermission + " from " + currentState + " to " + state);
+            }
+            
+            // Update cache and storage in memory only
+            toggleStates.put(normalizedPermission, state);
+            toggleStateCache.invalidateAll(); // Clear the entire toggle state cache
+            
+            // Invalidate all protection caches to ensure changes take effect immediately
+            if (plugin.getListenerManager() != null && 
+                plugin.getListenerManager().getProtectionListener() != null) {
+                plugin.getListenerManager().getProtectionListener().cleanup();
+                
+                if (plugin.getListenerManager().getEnvironmentListener() != null) {
+                    plugin.getListenerManager().getEnvironmentListener().invalidateCache();
+                }
+            }
+            
+            // Note: No database updates are triggered from this method
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("  Memory-only toggle update complete - database was NOT updated");
+            }
+        }
+    }
+
+    public boolean saveToDatabase() {
+        // Prevent recursion during database saves
+        Set<String> inProgress = savingAreas.get();
+        if (inProgress.contains(name)) {
+            // We're already saving this area in the current call stack
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive database save for area " + name);
+            }
+            return true; // Return success to avoid disrupting the parent operation
+        }
+        inProgress.add(name);
+        
+        try {
+            // Skip database update if we're in a high-frequency context
+            if (plugin.getRecentSaveTracker().isHighFrequencyContext()) {
+                return true;
+            }
+            
+            // Rate limit database updates
+            long currentTime = System.currentTimeMillis();
+            if (plugin.getRecentSaveTracker().wasRecentlyUpdated(name, currentTime)) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Skipping database update for area " + name + " due to rate limiting");
+                }
+                return true;
+            }
+            
+            // Only log if we're in debug mode and not in a high-frequency context
+            boolean shouldLog = plugin.isDebugMode() && !plugin.getRecentSaveTracker().isHighFrequencyContext();
+            
+            if (shouldLog) {
+                plugin.debug("Saving area " + name + " to database");
+            }
+            
+            try {
+                plugin.getDatabaseManager().updateArea(this);
+                
+                // Mark as updated for rate limiting
+                plugin.getRecentSaveTracker().markUpdated(name, currentTime);
+                
+                if (shouldLog) {
+                    plugin.debug("  Successfully updated area in the database");
+                }
+                
+                return true;
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to update area " + name + " in database", e);
+                return false;
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error saving area " + name + " to database", e);
+            return false;
+        } finally {
+            // Clean up thread-local to prevent memory leaks
+            inProgress.remove(name);
+        }
+    }
+
+    /**
+     * Performs multiple update operations in a single batch to minimize database overhead
+     * @param updateToggleStates Whether to update toggle states
+     * @param updateDatabase Whether to update the area in database
+     * @param syncPerms Whether to synchronize permissions
+     * @return True if all operations succeeded, false if any failed
+     */
+    public boolean batchUpdate(boolean updateToggleStates, boolean updateDatabase, boolean syncPerms) {
+        // Use high-frequency context for the entire batch operation
+        return plugin.executeInHighFrequencyContext(() -> {
+            boolean success = true;
+            
+            // Track operations for logging
+            long startTime = System.currentTimeMillis();
+            int operationsSuccess = 0;
+            int operationsFailed = 0;
+            
+            // Only log at the start if we're in debug mode
+            boolean shouldLog = plugin.isDebugMode();
+            if (shouldLog) {
+                plugin.debug("Starting batch update for area " + name);
+            }
+            
+            // First update toggle states if requested
+            if (updateToggleStates) {
+                if (saveToggleStates()) {
+                    operationsSuccess++;
+                } else {
+                    success = false;
+                    operationsFailed++;
+                }
+            }
+            
+            // Then synchronize permissions if requested
+            if (syncPerms) {
+                if (syncPermissions()) {
+                    operationsSuccess++;
+                } else {
+                    success = false;
+                    operationsFailed++;
+                }
+            }
+            
+            // Finally update the area in database if requested
+            if (updateDatabase) {
+                if (saveToDatabase()) {
+                    operationsSuccess++;
+                } else {
+                    success = false;
+                    operationsFailed++;
+                }
+            }
+            
+            // Log completion if we're in debug mode
+            if (shouldLog) {
+                long duration = System.currentTimeMillis() - startTime;
+                plugin.debug("Completed batch update for area " + name + 
+                    " in " + duration + "ms (" + operationsSuccess + " succeeded, " + 
+                    operationsFailed + " failed)");
+            }
+            
+            return success;
+        });
+    }
+
+    /**
+     * Synchronizes all permission data between the Area object and PermissionOverrideManager
+     * Call this before saving the area to ensure all permission data is consistent
+     * @deprecated Use syncPermissions() instead which includes rate limiting and recursion prevention
+     */
+    @Deprecated
+    public void synchronizePermissions() {
+        syncPermissions();
+    }
+
+    /**
+     * Get player permissions directly from memory without triggering database load.
+     * This method is used internally by the permission system to avoid recursive calls.
+     * @return The internal player permissions map reference, may be null
+     */
+    public Map<String, Map<String, Boolean>> getInternalPlayerPermissions() {
+        return this.playerPermissions;
+    }
+
+    /**
+     * Get the current set of permission operations being processed
+     * @return Set of permission operations
+     */
+    public static Set<String> getPermissionOperations() {
+        return permissionOperations.get();
     }
 }

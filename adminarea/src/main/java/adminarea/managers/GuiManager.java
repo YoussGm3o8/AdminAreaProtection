@@ -95,6 +95,27 @@ public class GuiManager {
             // Create and send form
             FormWindow form;
             if (area != null) {
+                // IMPORTANT: When possible, load a fresh copy of the area from the database
+                // to prevent duplicate areas in cache when editing permissions
+                try {
+                    // Only attempt this for edit-related forms, not for creation forms
+                    if (formId.startsWith("edit") || formId.endsWith("_settings") || 
+                        formId.contains("permission")) {
+                        Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                        if (freshArea != null) {
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Using fresh area from database for form: " + formId);
+                            }
+                            area = freshArea;
+                        }
+                    }
+                } catch (Exception e) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Failed to load fresh area from database: " + e.getMessage());
+                    }
+                    // Continue with the original area if refresh fails
+                }
+                
                 form = handler.createForm(player, area);
                 // Store area being edited if provided
                 plugin.getFormIdMap().put(player.getName() + "_editing",

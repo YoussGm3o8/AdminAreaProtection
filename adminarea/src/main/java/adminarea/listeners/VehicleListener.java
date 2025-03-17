@@ -72,4 +72,20 @@ public class VehicleListener implements Listener {
             plugin.getPerformanceMonitor().stopTimer(sample, "vehicle_enter_check");
         }
     }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onVehicleExit(EntityExitVehicleEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            if (event.getEntity() instanceof Player player) {
+                Position pos = event.getVehicle().getPosition();
+                if (protectionListener.handleProtection(pos, player, "allowVehicleExit")) {
+                    event.setCancelled(true);
+                    protectionListener.sendProtectionMessage(player, "messages.protection.vehicleExit");
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "vehicle_exit_check");
+        }
+    }
 }

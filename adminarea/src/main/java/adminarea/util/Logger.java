@@ -13,7 +13,7 @@ public class Logger {
 
     public void debug(String message, Object... args) {
         if (plugin.isDebugMode()) {
-            plugin.getLogger().debug(prefix + String.format(message, args));
+            plugin.getLogger().info(prefix + "[Debug] " + String.format(message, args));
         }
     }
 

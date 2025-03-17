@@ -199,17 +199,27 @@ public class PerformanceMonitor implements AutoCloseable {
                 LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE)));
 
             StringBuilder metrics = new StringBuilder("Timestamp,Metric,Value\n");
-            registry.getMeters().forEach(meter -> {
-                meter.measure().forEach(measurement -> {
-                    metrics.append(String.format("%s,%s,%.2f%n",
-                        LocalDateTime.now(),
-                        meter.getId().getName(),
-                        measurement.getValue()));
+            
+            try {
+                registry.getMeters().forEach(meter -> {
+                    try {
+                        for (Measurement measurement : meter.measure()) {
+                            metrics.append(String.format("%s,%s,%.2f%n",
+                                LocalDateTime.now(),
+                                meter.getId().getName(),
+                                measurement.getValue()));
+                        }
+                    } catch (Exception e) {
+                        // Skip individual metric on error
+                        plugin.getLogger().error("Failed to process meter: " + meter.getId().getName(), e);
+                    }
                 });
-            });
-
-            Files.write(metricsFile, metrics.toString().getBytes(),
-                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                
+                Files.write(metricsFile, metrics.toString().getBytes(),
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to process metrics collection", e);
+            }
 
         } catch (Exception e) {
             plugin.getLogger().error("Failed to export metrics", e);
@@ -248,14 +258,40 @@ public class PerformanceMonitor implements AutoCloseable {
     public void close() {
         isRunning = false;
         try {
-            scheduler.shutdown();
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow();
+            // Safely shutdown the scheduler first
+            try {
+                if (scheduler != null && !scheduler.isShutdown()) {
+                    scheduler.shutdown();
+                    if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                        scheduler.shutdownNow();
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Error shutting down scheduler", e);
             }
-            exportMetrics();
-            registry.close();
-        } catch (Exception e) {
-            plugin.getLogger().error("Error closing PerformanceMonitor", e);
+            
+            // Try to export metrics one last time, with extra error protection
+            try {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Attempting final metrics export during shutdown");
+                }
+                exportMetrics();
+            } catch (Throwable t) {
+                // Catch all throwables to ensure plugin shutdown completes
+                plugin.getLogger().error("Error during final metrics export", t);
+            }
+            
+            // Close the registry
+            try {
+                if (registry != null) {
+                    registry.close();
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Error closing metrics registry", e);
+            }
+        } catch (Throwable t) {
+            // Catch absolutely everything to ensure plugin shutdown
+            plugin.getLogger().error("Unexpected error during performance monitor shutdown", t);
         }
     }
     

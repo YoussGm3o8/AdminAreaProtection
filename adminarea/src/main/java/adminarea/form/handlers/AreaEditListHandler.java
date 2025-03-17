@@ -1,6 +1,9 @@
 package adminarea.form.handlers;
 
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.ArrayList;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
@@ -33,7 +36,32 @@ public class AreaEditListHandler extends BaseFormHandler {
                 plugin.getLanguageManager().get("gui.editArea.content")
             );
 
+            // IMPORTANT: Rather than using the nuclear reloadAllAreasFromDatabase method 
+            // which clears all areas first (potentially leading to data loss),
+            // just refresh the area list from the database without clearing anything
+            if (plugin.isDebugMode()) {
+                plugin.debug("Safely refreshing area list from database");
+            }
+            
+            // Get the current areas
             List<Area> areas = plugin.getAreas();
+            
+            // As an additional safety check, make sure there are no duplicates in the list
+            Set<String> areaNames = new HashSet<>();
+            List<Area> uniqueAreas = new ArrayList<>();
+            
+            for (Area area : areas) {
+                if (!areaNames.contains(area.getName().toLowerCase())) {
+                    areaNames.add(area.getName().toLowerCase());
+                    uniqueAreas.add(area);
+                } else if (plugin.isDebugMode()) {
+                    plugin.debug("Found duplicate area in list: " + area.getName() + " - skipping it");
+                }
+            }
+            
+            // Use the deduplicated list
+            areas = uniqueAreas;
+            
             if (areas.isEmpty()) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.area.list.empty"));
                 // Clean up form tracking data when there are no areas
@@ -49,10 +77,11 @@ public class AreaEditListHandler extends BaseFormHandler {
             // Add buttons for each area, with special formatting for global areas
             for (Area area : areas) {
                 String buttonText = area.getName();
+                String worldName = area.getWorld().length() > 20 ? area.getWorld().substring(0, 17) + "..." : area.getWorld();
                 if (area.toDTO().bounds().isGlobal()) {
-                    buttonText += "\n§3(Global Area - " + area.getWorld() + ")";
+                    buttonText += "\n§3(Global - " + worldName + ")";
                 } else {
-                    buttonText += "\n§8(World: " + area.getWorld() + ")";
+                    buttonText += "\n§8(World - " + worldName + ")";
                 }
                 form.addButton(new ElementButton(buttonText));
             }
@@ -99,6 +128,22 @@ public class AreaEditListHandler extends BaseFormHandler {
                     new FormTrackingData(FormIds.EDIT_LIST, System.currentTimeMillis()));
                 plugin.getGuiManager().openEditListForm(player);
                 return;
+            }
+            
+            // IMPORTANT: Load fresh area from database to prevent cache issues
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    area = freshArea;
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Using fresh area from database for edit form: " + area.getName());
+                    }
+                }
+            } catch (Exception e) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Failed to load fresh area from database: " + e.getMessage());
+                }
+                // Continue with the original area if refresh fails
             }
 
             // Store area being edited

@@ -15,16 +15,16 @@ import java.io.File;
 import java.io.FileWriter;
 import java.util.Stack;
 import java.util.HashMap;
+import java.util.ArrayList;
+import org.json.JSONObject;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import org.json.JSONObject;
 
 public class AreaCommand extends Command {
 
     private final AdminAreaProtectionPlugin plugin;
-    private final Set<String> bypassPlayers = new HashSet<>();
     public static final String CREATE_AREA_FORM_ID = "create_area_form";
     private final Map<String, Stack<Position[]>> selectionHistory = new HashMap<>();
     private static final int MAX_HISTORY = 10;
@@ -40,7 +40,7 @@ public class AreaCommand extends Command {
             CommandParameter.newEnum("subCommand", new String[]{
                 "create", "edit", "delete", "list", "wand", "pos1", "pos2", "help",
                 "bypass", "merge", "visualize", "stats", "reload", "undo", "clear",
-                "here", "expand", "debug", "toggle", "reset"
+                "here", "expand", "debug", "reset", "cache-reload"
             })
         });
         this.commandParameters.put("edit", new CommandParameter[]{
@@ -74,10 +74,8 @@ public class AreaCommand extends Command {
             CommandParameter.newEnum("subCommand", new String[]{"debug"}),
             CommandParameter.newEnum("state", new String[]{"on", "off"})
         });
-        this.commandParameters.put("toggle", new CommandParameter[]{
-            CommandParameter.newEnum("subCommand", new String[]{"toggle"}),
-            CommandParameter.newEnum("action", new String[]{"on", "off", "list"}),
-            CommandParameter.newType("toggleName", CommandParamType.STRING)
+        this.commandParameters.put("reset", new CommandParameter[]{
+            CommandParameter.newEnum("subCommand", new String[]{"reset"})
         });
     }
 
@@ -156,10 +154,8 @@ public class AreaCommand extends Command {
                     return handleReloadCommand(player);
                 case "debug":
                     return handleDebugCommand(player, args);
-                
-                // Toggle commands
-                case "toggle":
-                    return handleToggleCommand(player, args);
+                case "cache-reload":
+                    return handleCacheReloadCommand(player, args);
                 
                 // Help command
                 case "help":
@@ -180,18 +176,57 @@ public class AreaCommand extends Command {
     }
 
     private boolean handleHereCommand(Player player) {
-        if (!player.hasPermission("adminarea.command.area.create")) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.permissions.createArea"));
+        // No longer need to check for create permission since we're just showing info
+        if (!player.hasPermission("adminarea.command.area.info")) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
             return true;
         }
         
         Position pos = player.getPosition();
-        Position[] positions = plugin.getPlayerPositions().computeIfAbsent(player.getName(), k -> new Position[2]);
-        positions[0] = pos;
-        positions[1] = pos;
         
-        player.sendMessage(plugin.getLanguageManager().get("messages.positionsSetToCurrent"));
-        openCreateForm(player);
+        // Get the area at the player's current position
+        Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+        
+        if (area == null) {
+            // No area found at the player's position - handle potential missing language key
+            try {
+                player.sendMessage(plugin.getLanguageManager().get("messages.noProtectedAreas") + 
+                                  " " + plugin.getLanguageManager().get("messages.area.notInArea"));
+            } catch (Exception e) {
+                // If the new language key is missing, fall back to a simpler message
+                player.sendMessage(plugin.getLanguageManager().get("messages.noProtectedAreas") + 
+                                  " §7You are not in any protected area.");
+            }
+        } else {
+            // Display area information
+            String areaName = area.getName();
+            String worldName = area.getWorld();
+            int priority = area.getPriority();
+            
+            // Create a formatted message
+            AreaDTO.Bounds bounds = area.getBounds();
+            long sizeX = Math.abs(bounds.xMax() - bounds.xMin()) + 1;
+            long sizeY = Math.abs(bounds.yMax() - bounds.yMin()) + 1;
+            long sizeZ = Math.abs(bounds.zMax() - bounds.zMin()) + 1;
+            String size = area.isGlobal() ? "global" : String.valueOf(sizeX * sizeY * sizeZ);
+            
+            try {
+                // Use the protectedAreaEntry message format which already exists
+                player.sendMessage(plugin.getLanguageManager().get("messages.area.currentLocation") +
+                                String.format(plugin.getLanguageManager().get("messages.protectedAreaEntry"),
+                                            areaName, worldName, priority) + 
+                                "\n§7Size: " + size + " blocks" +
+                                "\n§7Position: §7(" + pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() + ")");
+            } catch (Exception e) {
+                // Fall back to a simpler message if the language key is missing
+                player.sendMessage("§2You are currently in area: §f" + areaName + 
+                                 "\n§7World: " + worldName + 
+                                 "\n§7Priority: " + priority + 
+                                 "\n§7Size: " + size + " blocks" +
+                                 "\n§7Position: §7(" + pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() + ")");
+            }
+        }
+        
         return true;
     }
 
@@ -566,20 +601,14 @@ public class AreaCommand extends Command {
         }
 
         String playerName = player.getName();
-        boolean newState = !bypassPlayers.contains(playerName);
-        if (newState) {
-            bypassPlayers.add(playerName);
-        } else {
-            bypassPlayers.remove(playerName);
-        }
+        
+        // Toggle bypass in the plugin instead of maintaining a separate set
+        plugin.toggleBypass(playerName);
+        boolean newState = plugin.isBypassing(playerName);
 
         player.sendMessage(plugin.getLanguageManager().get("messages.bypass.toggled",
             Map.of("status", newState ? "enabled" : "disabled")));
         return true;
-    }
-
-    public boolean isBypassEnabled(Player player) {
-        return bypassPlayers.contains(player.getName());
     }
 
     private boolean handleReloadCommand(Player player) {
@@ -626,111 +655,6 @@ public class AreaCommand extends Command {
         }
         
         return true;
-    }
-
-    private boolean handleToggleCommand(Player player, String[] args) {
-        if (!player.hasPermission("adminarea.command.toggle")) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.permissions.toggleArea"));
-            return true;
-        }
-
-        if (args.length == 1 || (args.length == 2 && args[1].equalsIgnoreCase("list"))) {
-            // Show toggle list
-            player.sendMessage(plugin.getLanguageManager().get("messages.toggleList.header"));
-            
-            // Get available toggles from config, or use defaults if section doesn't exist
-            Map<String, Object> toggles;
-            var togglesSection = plugin.getConfigManager().getSection("toggles");
-            if (togglesSection == null) {
-                // Use default toggles
-                toggles = Map.of(
-                    "pvp", true,
-                    "build", true,
-                    "interact", true,
-                    "container", true,
-                    "redstone", true,
-                    "monsters", true
-                );
-                // Create toggles section in config
-                for (Map.Entry<String, Object> entry : toggles.entrySet()) {
-                    plugin.getConfigManager().set("toggles." + entry.getKey(), entry.getValue());
-                }
-                plugin.getConfigManager().getConfig().save();
-            } else {
-                toggles = togglesSection.getAllMap();
-            }
-            
-            // Display each toggle with its description
-            for (String toggle : toggles.keySet()) {
-                String description = plugin.getLanguageManager().get("messages.toggleList." + toggle,
-                    Map.of("toggle", toggle));
-                player.sendMessage(description);
-            }
-            
-            // Show usage
-            player.sendMessage(plugin.getLanguageManager().get("messages.toggleList.usage"));
-            return true;
-        }
-
-        if (args.length < 3) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.usage.toggle"));
-            return true;
-        }
-
-        String action = args[1].toLowerCase();
-        String toggleName = args[2];
-
-        // Get toggles section, creating it if it doesn't exist
-        var togglesSection = plugin.getConfigManager().getSection("toggles");
-        if (togglesSection == null) {
-            plugin.getConfigManager().set("toggles", new JSONObject());
-            togglesSection = plugin.getConfigManager().getSection("toggles");
-        }
-
-        // Validate toggle name
-        if (!togglesSection.exists(toggleName)) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidToggle",
-                Map.of("toggle", toggleName)));
-            return true;
-        }
-
-        // Get toggle state
-        boolean newState;
-        switch (action) {
-            case "on":
-                newState = true;
-                break;
-            case "off":
-                newState = false;
-                break;
-            default:
-                player.sendMessage(plugin.getLanguageManager().get("messages.usage.toggle"));
-                return true;
-        }
-
-        try {
-            // Update toggle state in config
-            plugin.getConfigManager().set("toggles." + toggleName, newState);
-            plugin.getConfigManager().getConfig().save();
-
-            // Notify player
-            player.sendMessage(plugin.getLanguageManager().get("messages.toggleUpdated",
-                Map.of(
-                    "toggle", toggleName,
-                    "state", newState ? "enabled" : "disabled"
-                )));
-
-            // Log toggle change
-            if (plugin.isDebugMode()) {
-                plugin.debug("Toggle " + toggleName + " set to " + newState + " by " + player.getName());
-            }
-
-            return true;
-        } catch (Exception e) {
-            plugin.getLogger().error("Error updating toggle state", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.toggleUpdateFailed"));
-            return false;
-        }
     }
 
     private boolean handleCreateCommand(Player player, String[] args) {
@@ -965,10 +889,25 @@ public class AreaCommand extends Command {
         
         player.sendMessage(plugin.getLanguageManager().get("messages.protectedAreasHeader"));
         for (Area area : areas) {
-            player.sendMessage(String.format(plugin.getLanguageManager().get("messages.protectedAreaEntry"),
-                area.getName(),
-                area.getWorld(),
-                area.getPriority()));
+            // Calculate area size
+            AreaDTO.Bounds bounds = area.getBounds();
+            String sizeText;
+            if (area.isGlobal()) {
+                sizeText = "global";
+            } else {
+                long sizeX = Math.abs(bounds.xMax() - bounds.xMin()) + 1;
+                long sizeY = Math.abs(bounds.yMax() - bounds.yMin()) + 1;
+                long sizeZ = Math.abs(bounds.zMax() - bounds.zMin()) + 1;
+                sizeText = String.valueOf(sizeX * sizeY * sizeZ);
+            }
+            
+            // Use the proper message format from the language file
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.list.entry", Map.of(
+                "area", area.getName(),
+                "world", area.getWorld(),
+                "priority", String.valueOf(area.getPriority()),
+                "size", sizeText
+            )));
         }
     }
 
@@ -990,23 +929,24 @@ public class AreaCommand extends Command {
         player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.here"));
         player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.expand"));
 
-        // Permission toggles
-        if (player.hasPermission("adminarea.command.toggle")) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleHeader"));
-            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleArea"));
-            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleList"));
-            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.toggleCategory"));
-        }
-
-        // Advanced features
-        if (player.hasPermission("adminarea.command.area.bypass")) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.bypass")); 
-        }
+        // Stats
         if (player.hasPermission("adminarea.stats.view")) {
             player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.stats"));
         }
+        
+        // Advanced features
+        if (player.hasPermission("adminarea.command.area.bypass")) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.bypass"));
+        }
+        
+        // Admin commands
         if (player.hasPermission("adminarea.debug")) {
             player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.debug"));
+        }
+        
+        if (player.hasPermission("adminarea.command.area.admin")) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.reload"));
+            player.sendMessage("messages.commands.help.cachereload");
         }
     }
 
@@ -1027,5 +967,105 @@ public class AreaCommand extends Command {
         }
         
         return true;
+    }
+
+    private boolean handleCacheReloadCommand(Player player, String[] args) {
+        if (!player.hasPermission("adminarea.command.area.admin")) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
+            return true;
+        }
+        
+        try {
+            if (args.length >= 2) {
+                // Reload specific area
+                String areaName = args[1];
+                Area area = plugin.getArea(areaName);
+                
+                if (area == null) {
+                    player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound", 
+                        Map.of("area", areaName)));
+                    return true;
+                }
+                
+                // Force reload the area from database
+                try {
+                    // Clear caches first
+                    area.clearCaches();
+                    area.emergencyClearCaches();
+                    
+                    // Reload from database
+                    Area freshArea = plugin.getDatabaseManager().loadArea(areaName);
+                    if (freshArea != null) {
+                        player.sendMessage("§aSuccessfully reloaded area §e" + areaName + "§a from database.");
+                        
+                        // Show toggle states
+                        player.sendMessage("§aToggle states:");
+                        JSONObject toggles = freshArea.toDTO().toggleStates();
+                        for (String key : toggles.keySet()) {
+                            if (key.contains("TNT") || key.contains("Explo")) {
+                                player.sendMessage("§e  " + key + "§a: §6" + toggles.get(key));
+                            }
+                        }
+                        
+                        // First remove the old area to prevent duplication
+                        plugin.getAreaManager().removeArea(area);
+                        
+                        // Then add the fresh area
+                        plugin.getAreaManager().addArea(freshArea);
+                    } else {
+                        player.sendMessage("§cFailed to reload area from database.");
+                    }
+                } catch (Exception e) {
+                    player.sendMessage("§cError reloading area: " + e.getMessage());
+                    plugin.getLogger().error("Error reloading area", e);
+                }
+            } else {
+                // Reload all areas
+                // Get a count of the current areas
+                List<Area> currentAreas = new ArrayList<>(plugin.getAreas());
+                int count = currentAreas.size();
+                
+                player.sendMessage("§aReloading all " + count + " areas from database...");
+                
+                try {
+                    // Reload areas
+                    plugin.getAreaManager().loadAreas();
+                    
+                    // Check if areas were actually loaded
+                    if (plugin.getAreas().isEmpty() && !currentAreas.isEmpty()) {
+                        player.sendMessage("§cWarning: No areas were loaded from the database! Restoring previous areas...");
+                        
+                        // Restore the areas that were previously in memory
+                        for (Area area : currentAreas) {
+                            plugin.getAreaManager().addArea(area);
+                        }
+                        
+                        player.sendMessage("§eRestored " + currentAreas.size() + " areas from memory backup.");
+                    } else {
+                        player.sendMessage("§aSuccessfully reloaded " + plugin.getAreas().size() + " areas from database.");
+                    }
+                } catch (Exception e) {
+                    player.sendMessage("§cError reloading areas from database: " + e.getMessage());
+                    plugin.getLogger().error("Error reloading areas from database", e);
+                    
+                    // Restore the areas that were previously in memory
+                    if (plugin.getAreas().isEmpty() && !currentAreas.isEmpty()) {
+                        player.sendMessage("§eRestoring previous areas due to error...");
+                        
+                        for (Area area : currentAreas) {
+                            plugin.getAreaManager().addArea(area);
+                        }
+                        
+                        player.sendMessage("§eRestored " + currentAreas.size() + " areas from memory backup.");
+                    }
+                }
+            }
+            
+            return true;
+        } catch (Exception e) {
+            player.sendMessage("§cError reloading cache: " + e.getMessage());
+            plugin.getLogger().error("Error handling cache reload command", e);
+            return false;
+        }
     }
 }

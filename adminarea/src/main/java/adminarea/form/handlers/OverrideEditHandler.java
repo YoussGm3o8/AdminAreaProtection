@@ -102,10 +102,48 @@ public class OverrideEditHandler extends BaseFormHandler {
             Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentDTO.groupPermissions());
             updatedGroupPerms.put(groupName, overrides);
 
-            // Create updated area using builder
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .groupPermissions(updatedGroupPerms)
-                .build();
+            // Create updated area using builder - FIXED: Use safer AreaBuilder approach
+            AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+            areaBuilder.groupPermissions(updatedGroupPerms);
+            // We don't need to explicitly set player or track permissions as they're already part of the DTO
+            Area updatedArea = areaBuilder.build();
+
+            // Directly save to permission database first
+            try {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Explicitly saving group permissions for " + groupName + " in area " + area.getName());
+                    plugin.debug("Permission count: " + overrides.size());
+                }
+                
+                // Save directly to the permission database using PermissionOverrideManager
+                plugin.getPermissionOverrideManager().setGroupPermissions(area.getName(), groupName, overrides);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Successfully saved group permissions to database");
+                    
+                    // Verify permissions were saved
+                    Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
+                        area.getName(), groupName);
+                    plugin.debug("Verification - retrieved permissions: " + 
+                               (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
+                }
+                
+                // Force flush permissions to disk
+                plugin.getPermissionOverrideManager().forceFlushPermissions();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Forced permissions to be flushed to disk");
+                }
+                
+                // Force clear all area caches
+                plugin.getAreaManager().invalidateAreaCache(area.getName());
+                plugin.getPermissionOverrideManager().invalidateCache(area.getName());
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to explicitly save group permissions", e);
+                if (plugin.isDebugMode()) {
+                    e.printStackTrace();
+                }
+            }
 
             // Update area in plugin
             plugin.updateArea(updatedArea);

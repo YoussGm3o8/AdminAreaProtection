@@ -41,15 +41,31 @@ public class EntitySettingsHandler extends BaseFormHandler {
         if (area == null) return null;
 
         try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Reloaded area from database for entity settings form");
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database", e);
+            }
+            
             FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.entitySettings.title", 
                 Map.of("area", area.getName())));
             
             // Add header with clear instructions
             form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.entitySettings.header")));
             
-            // Get area settings
-            AreaDTO dto = area.toDTO();
-            JSONObject settings = dto.settings();
+            // Get area toggle states directly from the area object
+            if (plugin.isDebugMode()) {
+                plugin.debug("Creating entity settings form for area: " + area.getName());
+            }
 
             // Add toggles for this category
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ENTITY);
@@ -68,9 +84,16 @@ public class EntitySettingsHandler extends BaseFormHandler {
                             placeholders.put("player", "players");
                         }
                         
+                        // Get current toggle state with default fallback
+                        boolean currentValue = area.getToggleState(permissionNode);
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Toggle " + toggle.getDisplayName() + " (" + permissionNode + ") value: " + currentValue);
+                        }
+                        
                         form.addElement(new ElementToggle(
                             plugin.getLanguageManager().get("gui.permissions.toggle.format", placeholders),
-                            settings.optBoolean(permissionNode, toggle.getDefaultValue())
+                            currentValue
                         ));
                     } catch (Exception e) {
                         plugin.getLogger().error("Error adding toggle " + toggle.getPermissionNode(), e);
@@ -114,14 +137,32 @@ public class EntitySettingsHandler extends BaseFormHandler {
                 // Only track changes, don't apply yet
                 if (currentValue != newValue) {
                     toggleChanges.put(permissionNode, newValue);
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Will change toggle " + permissionNode + " from " + currentValue + " to " + newValue);
+                    }
                 }
             }
             
-            // Use the standardized method to update toggles
-            int changedSettings = updateAreaToggles(area, toggleChanges);
-            
-            // Use the standardized method to update the area and notify the player
-            updateAreaAndNotifyPlayer(player, area, changedSettings, FormIds.EDIT_AREA, "entity");
+            if (!toggleChanges.isEmpty()) {
+                // Use the standardized method to update toggles
+                int changedSettings = updateAreaToggles(area, toggleChanges);
+                
+                // Explicitly call saveToggleStates to ensure changes are persisted
+                area.saveToggleStates();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Explicitly saved toggle states for area: " + area.getName());
+                    plugin.debug("Updated toggle states: " + area.toDTO().toggleStates());
+                }
+                
+                // Use the standardized method to update the area and notify the player
+                updateAreaAndNotifyPlayer(player, area, changedSettings, FormIds.EDIT_AREA, "entity");
+            } else {
+                // No changes made, just return to edit area form
+                player.sendMessage(plugin.getLanguageManager().get("messages.area.noChanges",
+                    Map.of("area", area.getName())));
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+            }
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling entity settings", e);
@@ -144,4 +185,8 @@ public class EntitySettingsHandler extends BaseFormHandler {
         }
         return plugin.getArea(areaData.getFormId());
     }
-} 
+    
+    protected String normalizePermissionNode(String node) {
+        return node.startsWith("gui.permissions.toggles.") ? node : "gui.permissions.toggles." + node;
+    }
+}

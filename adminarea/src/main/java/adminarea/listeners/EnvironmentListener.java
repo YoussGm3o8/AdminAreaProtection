@@ -17,6 +17,8 @@ import cn.nukkit.block.BlockID;
 import cn.nukkit.level.Position;
 import io.micrometer.core.instrument.Timer;
 import cn.nukkit.Player;
+import cn.nukkit.event.player.PlayerInteractEvent;
+import cn.nukkit.event.entity.EntityInteractEvent;
 
 public class EnvironmentListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
@@ -222,9 +224,99 @@ public class EnvironmentListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onCropGrow(BlockGrowEvent event) {
-        if (shouldCheckProtection(event.getBlock(), "allowBlockSpread")) {
-            event.setCancelled(true);
+        Block block = event.getBlock();
+        
+        // Check if this is crop growth or another type of block spread
+        if (isCrop(block)) {
+            // Use the specific plant growth permission
+            if (shouldCheckProtection(block, "allowPlantGrowth")) {
+                event.setCancelled(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented plant growth at " + 
+                        block.x + "," + block.y + "," + block.z);
+                }
+            }
+        } else {
+            // Use the general block spread permission for non-crops
+            if (shouldCheckProtection(block, "allowBlockSpread")) {
+                event.setCancelled(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented block spread at " + 
+                        block.x + "," + block.y + "," + block.z);
+                }
+            }
         }
+    }
+
+    /**
+     * Handles farmland trampling when players step on farmland
+     * This is the proper event for farmland trampling in Nukkit
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPlayerTrampleFarmland(PlayerInteractEvent event) {
+        // Only handle PHYSICAL interactions (stepping on, jumping on)
+        if (event.getAction() != PlayerInteractEvent.Action.PHYSICAL) {
+            return;
+        }
+        
+        Block block = event.getBlock();
+        // Check if the block is farmland
+        if (block != null && block.getId() == BlockID.FARMLAND) {
+            Player player = event.getPlayer();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Detected player " + player.getName() + " interacting with farmland at " + 
+                    block.x + "," + block.y + "," + block.z + " (potential trampling)");
+            }
+            
+            // Check if farmland trampling is protected in this area
+            if (shouldCheckProtection(block, "allowFarmlandTrampling")) {
+                event.setCancelled(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented farmland trampling by " + player.getName() + " at " + 
+                        block.x + "," + block.y + "," + block.z);
+                }
+            }
+        }
+    }
+    
+    // Keep the existing method as it might catch some edge cases
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onFarmlandTrample(BlockFadeEvent event) {
+        Block block = event.getBlock();
+        
+        // Check if this is farmland being trampled (changing to dirt)
+        if (block.getId() == BlockID.FARMLAND) {
+            // If the block is being changed due to entity movement (trampling)
+            // Note: This event will trigger for both trampling and drying out
+            // Use the farmland trampling permission
+            if (shouldCheckProtection(block, "allowFarmlandTrampling")) {
+                event.setCancelled(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented farmland trampling at " + 
+                        block.x + "," + block.y + "," + block.z);
+                }
+            }
+        }
+    }
+
+    /**
+     * Helps determine if a block is a crop-type block
+     */
+    private boolean isCrop(Block block) {
+        // Check common crop block IDs
+        return block.getId() == BlockID.WHEAT_BLOCK ||
+               block.getId() == BlockID.BEETROOT_BLOCK ||
+               block.getId() == BlockID.POTATO_BLOCK ||
+               block.getId() == BlockID.CARROT_BLOCK ||
+               block.getId() == BlockID.PUMPKIN_STEM ||
+               block.getId() == BlockID.MELON_STEM ||
+               block.getId() == BlockID.SWEET_BERRY_BUSH ||
+               block.getId() == BlockID.BAMBOO_SAPLING;
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -239,6 +331,72 @@ public class EnvironmentListener implements Listener {
         String permission = event.getBlock().getId() == BlockID.ICE ? "allowIceForm" : "allowSnowForm";
         if (shouldCheckProtection(event.getBlock(), permission)) {
             event.setCancelled(true);
+        }
+    }
+
+    /**
+     * Handles gravity-affected blocks like sand and gravel falling
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockFall(BlockFallEvent event) {
+        if (shouldCheckProtection(event.getBlock(), "allowBlockGravity")) {
+            event.setCancelled(true);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Prevented block falling at " + 
+                    event.getBlock().x + "," + event.getBlock().y + "," + event.getBlock().z);
+            }
+        }
+    }
+
+    /**
+     * Alternative handler for gravity blocks if BlockFallEvent isn't working
+     * This catches any block updates, including when a block might start falling
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBlockUpdate(BlockUpdateEvent event) {
+        Block block = event.getBlock();
+        // Check if this is a gravity block (sand, gravel, concrete powder, etc.)
+        if (isGravityBlock(block) && shouldCheckProtection(block, "allowBlockGravity")) {
+            event.setCancelled(true);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Prevented gravity block physics at " + 
+                    block.x + "," + block.y + "," + block.z);
+            }
+        }
+    }
+    
+    /**
+     * Checks if a block is affected by gravity
+     */
+    private boolean isGravityBlock(Block block) {
+        return block.getId() == BlockID.SAND || 
+               block.getId() == BlockID.GRAVEL || 
+               block.getId() == BlockID.CONCRETE_POWDER;
+    }
+
+    /**
+     * Handles farmland trampling by non-player entities (animals, etc.)
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityTrampleFarmland(EntityInteractEvent event) {
+        Block block = event.getBlock();
+        
+        // Check if the block is farmland
+        if (block != null && block.getId() == BlockID.FARMLAND) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Detected entity interacting with farmland at " + 
+                    block.x + "," + block.y + "," + block.z + " (potential trampling)");
+            }
+            
+            // Check if farmland trampling is protected in this area
+            if (shouldCheckProtection(block, "allowFarmlandTrampling")) {
+                event.setCancelled(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented farmland trampling by entity at " + 
+                        block.x + "," + block.y + "," + block.z);
+                }
+            }
         }
     }
 

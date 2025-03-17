@@ -7,6 +7,7 @@ import cn.nukkit.event.EventPriority;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.player.PlayerDeathEvent;
 import cn.nukkit.event.player.PlayerRespawnEvent;
+import cn.nukkit.event.player.PlayerMoveEvent;
 import cn.nukkit.level.Position;
 import io.micrometer.core.instrument.Timer;
 
@@ -16,11 +17,48 @@ import java.util.Map;
 public class ExperienceListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
     private final ProtectionListener protectionListener;
-    private final Map<String, Integer> savedPlayerExperience = new HashMap<>();
+    // Cache of player XP pickup ability to avoid excessive checks
+    private final Map<String, Long> lastXpPickupCheck = new HashMap<>();
+    private static final long CHECK_INTERVAL = 500; // ms
 
     public ExperienceListener(AdminAreaProtectionPlugin plugin, ProtectionListener protectionListener) {
         this.plugin = plugin;
         this.protectionListener = protectionListener;
+    }
+
+    /**
+     * Monitor player movement to update their ability to pick up XP
+     * This is necessary since Nukkit doesn't have an XP pickup event
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerMove(PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        String playerName = player.getName();
+        
+        // Check if we need to update the XP pickup ability (throttle checks to avoid performance issues)
+        long now = System.currentTimeMillis();
+        if (lastXpPickupCheck.containsKey(playerName) && 
+            now - lastXpPickupCheck.get(playerName) < CHECK_INTERVAL) {
+            return;
+        }
+        
+        // Update the last check time
+        lastXpPickupCheck.put(playerName, now);
+        
+        // Check if XP pickup is allowed in the area
+        Position pos = player.getPosition();
+        boolean canPickup = protectionListener.handleProtection(pos, player, "allowXPPickup");
+        
+        // Update the player's ability to pick up XP
+        if (player.canPickupXP() != canPickup) {
+            player.setCanPickupXP(canPickup);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Updated player " + playerName + " XP pickup ability to " + 
+                    canPickup + " at " + pos.getFloorX() + ", " + pos.getFloorY() + ", " + 
+                    pos.getFloorZ());
+            }
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -32,50 +70,17 @@ public class ExperienceListener implements Listener {
             
             // Check if XP drops are allowed in this area
             if (protectionListener.handleProtection(pos, player, "allowXPDrop")) {
-                // Calculate and save the player's total XP for respawn
-                int totalExp = calculateTotalExperience(player.getExperienceLevel(), player.getExperience());
-                
-                savedPlayerExperience.put(player.getName(), totalExp);
-                
                 // Force keep XP instead of dropping it
+                // The game will handle restoring XP automatically, so we don't need to save it
                 event.setKeepExperience(true);
                 
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Saved " + totalExp + " XP for player " + player.getName() + 
-                        " to be restored on respawn");
+                    plugin.debug("Set keepExperience flag to true for player " + player.getName() + 
+                        " - XP will be preserved by game rules");
                 }
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "xp_drop_check");
-        }
-    }
-    
-    @EventHandler(priority = EventPriority.NORMAL)
-    public void onPlayerRespawn(PlayerRespawnEvent event) {
-        Player player = event.getPlayer();
-        String playerName = player.getName();
-        
-        // Check if we have saved XP for this player
-        if (savedPlayerExperience.containsKey(playerName)) {
-            // Get the saved XP value
-            int savedExp = savedPlayerExperience.remove(playerName);
-            
-            // Schedule XP restoration with a longer delay to ensure player is fully spawned
-            // This avoids potential race conditions with the vanilla respawn handler
-            plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
-                // Make sure player is still online
-                if (player.isOnline()) {
-                    // Reset first to avoid conflicts with any XP already given
-                    player.setExperience(0, 0);
-                    
-                    // Set the player's XP directly using our accurate method
-                    setPlayerTotalExperience(player, savedExp);
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Successfully restored " + savedExp + " XP for player " + playerName);
-                    }
-                }
-            }, 10); // Wait 10 ticks (0.5 seconds) to ensure player is fully spawned
         }
     }
     
@@ -99,42 +104,6 @@ public class ExperienceListener implements Listener {
         totalXp += Math.round(currentLevelXp * progress);
         
         return totalXp;
-    }
-    
-    /**
-     * Set a player's total experience points
-     * 
-     * @param player The player
-     * @param totalExp The total experience points
-     */
-    private void setPlayerTotalExperience(Player player, int totalExp) {
-        // Reset the player's XP first
-        player.setExperience(0, 0);
-        
-        // Calculate and set level and progress
-        int level = 0;
-        int remainingExp = totalExp;
-        
-        // Find the highest completed level
-        while (remainingExp >= getExpToLevel(level)) {
-            remainingExp -= getExpToLevel(level);
-            level++;
-        }
-        
-        // Calculate progress to next level
-        float progress = 0;
-        int expToNextLevel = getExpToLevel(level);
-        if (expToNextLevel > 0) {
-            progress = (float)remainingExp / expToNextLevel;
-        }
-        
-        // Set the XP directly
-        player.setExperience((int) progress, level);
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Set player " + player.getName() + " XP to level " + level + 
-                       " with progress " + progress + " (total XP: " + totalExp + ")");
-        }
     }
     
     /**

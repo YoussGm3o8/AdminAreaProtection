@@ -75,9 +75,30 @@ public class ConfigManager {
     }
 
     public void load() {
+        // Make sure the data folder exists
+        if (!plugin.getDataFolder().exists()) {
+            plugin.getDataFolder().mkdirs();
+        }
+        
         File configFile = new File(plugin.getDataFolder(), "config.yml");
         if (!configFile.exists()) {
-            plugin.saveResource("config.yml", false);
+            // Try to save the default config file
+            try {
+                plugin.saveResource("config.yml", false);
+                plugin.getLogger().info("Created default config.yml");
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to create default config.yml", e);
+            }
+            
+            // If the file still doesn't exist, create a basic one
+            if (!configFile.exists()) {
+                try {
+                    configFile.createNewFile();
+                    plugin.getLogger().info("Created empty config.yml");
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to create empty config.yml", e);
+                }
+            }
         }
 
         config = new Config(configFile, Config.YAML);

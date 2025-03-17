@@ -33,7 +33,30 @@ public class DeleteAreaHandler extends BaseFormHandler {
                 plugin.getLanguageManager().get("gui.deleteArea.content")
             );
 
+            // Get the current areas and ensure they're unique to prevent duplicates
             List<Area> areas = plugin.getAreas();
+            
+            // As an additional safety measure, make sure there are no duplicates in the list
+            if (plugin.isDebugMode()) {
+                plugin.debug("Safely processing area list for deletion menu");
+            }
+            
+            // Deduplicate areas by name
+            java.util.Set<String> areaNames = new java.util.HashSet<>();
+            java.util.List<Area> uniqueAreas = new java.util.ArrayList<>();
+            
+            for (Area area : areas) {
+                if (!areaNames.contains(area.getName().toLowerCase())) {
+                    areaNames.add(area.getName().toLowerCase());
+                    uniqueAreas.add(area);
+                } else if (plugin.isDebugMode()) {
+                    plugin.debug("Found duplicate area in delete list: " + area.getName() + " - skipping it");
+                }
+            }
+            
+            // Use the deduplicated list
+            areas = uniqueAreas;
+            
             if (areas.isEmpty()) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.area.list.empty"));
                 // Clean up form tracking data when there are no areas
@@ -49,10 +72,11 @@ public class DeleteAreaHandler extends BaseFormHandler {
             // Add buttons for each area, with special formatting for global areas
             for (Area area : areas) {
                 String buttonText = area.getName();
+                String worldName = area.getWorld().length() > 20 ? area.getWorld().substring(0, 17) + "..." : area.getWorld();
                 if (area.toDTO().bounds().isGlobal()) {
-                    buttonText += "\n§3(Global Area - " + area.getWorld() + ")";
+                    buttonText += "\n§3(Global - " + worldName + ")";
                 } else {
-                    buttonText += "\n§8(World: " + area.getWorld() + ")";
+                    buttonText += "\n§8(World - " + worldName + ")";
                 }
                 form.addButton(new ElementButton(buttonText));
             }
@@ -107,19 +131,8 @@ public class DeleteAreaHandler extends BaseFormHandler {
 
     @Override
     public void handleCancel(Player player) {
-        // Clean up data before returning to main menu
+        // Clean up data without opening the main menu
         cleanup(player);
-        
-        // Set main menu as current form
-        plugin.getFormIdMap().put(player.getName(), 
-            new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
-            
-        if (plugin.isDebugMode()) {
-            plugin.debug("Delete area cancelled, returning to main menu");
-        }
-        
-        // Open main menu directly instead of using back navigation
-        plugin.getGuiManager().openMainMenu(player);
     }
 
     private void processAreaDeletion(Player player, Area area) {

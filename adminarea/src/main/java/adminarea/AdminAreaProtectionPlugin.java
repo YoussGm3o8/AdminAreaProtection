@@ -22,6 +22,9 @@ import java.util.HashMap;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.model.group.Group;
@@ -46,11 +49,21 @@ import adminarea.exception.DatabaseException;
 import adminarea.form.FormRegistry;
 import adminarea.permissions.LuckPermsCache;
 import java.util.concurrent.ConcurrentHashMap;
+import cn.nukkit.scheduler.AsyncTask;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.sql.SQLException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.ResultSet;
+import java.io.IOException;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     private static AdminAreaProtectionPlugin instance;
-    // Add this field with other managers
+    private static final String CLEAN_SHUTDOWN_MARKER = "clean_shutdown.marker";
     private PermissionOverrideManager permissionOverrideManager;
     private DatabaseManager dbManager;
     private AreaCommand areaCommand;
@@ -78,6 +91,8 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     private FormRegistry formRegistry;
     
+    private RecentSaveTracker recentSaveTracker;
+    
         /**
          * Initializes the plugin, loads configuration, and sets up required components.
          * This includes:
@@ -93,6 +108,19 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             performanceMonitor = new PerformanceMonitor(this);
             Timer.Sample startupTimer = performanceMonitor.startTimer();
             
+            long startTime = System.currentTimeMillis();
+
+            // Initialize RecentSaveTracker first to avoid NPEs
+            recentSaveTracker = new RecentSaveTracker();
+            
+            // Ensure data folder exists
+            if (!getDataFolder().exists()) {
+                getDataFolder().mkdirs();
+            }
+            
+            // Save default config if it doesn't exist
+            saveDefaultConfig();
+            
             // Initialize debug mode once at startup
             this.debugMode = getConfig().getBoolean("debug", false);
             if (this.debugMode) {
@@ -102,6 +130,19 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             }
             
             try {
+                // Check for clean shutdown marker
+                Path cleanShutdownMarker = getDataFolder().toPath().resolve(CLEAN_SHUTDOWN_MARKER);
+                boolean cleanShutdownDetected = Files.exists(cleanShutdownMarker);
+                
+                // Delete the marker file at startup
+                if (cleanShutdownDetected) {
+                    debug("Detected clean shutdown from previous session, removing marker");
+                    Files.delete(cleanShutdownMarker);
+                } else {
+                    debug("No clean shutdown marker found, potential unclean shutdown detected");
+                    // Perform additional database verification if needed
+                }
+                
                 // Initialize config manager first
                 configManager = new ConfigManager(this);
                 configManager.load();
@@ -158,58 +199,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     return;
                 }
     
-                // Initialize managers with performance monitoring
-                Timer.Sample dbInitTimer = performanceMonitor.startTimer();
-                dbManager = new DatabaseManager(this);
-                try {
-                    dbManager.init(); // This method should throw DatabaseException
-                    performanceMonitor.stopTimer(dbInitTimer, "database_init");
-                    getLogger().info("Database initialized successfully");
-                } catch (DatabaseException e) {
-                    performanceMonitor.stopTimer(dbInitTimer, "database_init_failed");
-                    getLogger().error("Failed to initialize database", e);
-                    getServer().getPluginManager().disablePlugin(this);
-                    return;
-                }
-
-                Timer.Sample areaInitTimer = performanceMonitor.startTimer();
-                areaManager = new AreaManager(this);
-                try {
-                    List<Area> loadedAreas = dbManager.loadAreas(); // This method should throw DatabaseException
-                    for (Area area : loadedAreas) {
-                        areaManager.addArea(area);
-                    }
-                    
-                    // Note: we'll normalize toggle states later, after all components are initialized
-                    performanceMonitor.stopTimer(areaInitTimer, "area_manager_init");
-                    getLogger().info("Loaded " + loadedAreas.size() + " areas from database");
-                } catch (DatabaseException e) {
-                    performanceMonitor.stopTimer(areaInitTimer, "area_manager_init_failed");
-                    getLogger().error("Failed to load areas from database", e);
-                    getServer().getPluginManager().disablePlugin(this);
-                    return;
-                }
-    
-                // Initialize FormRegistry before GUI manager
-                formRegistry = new FormRegistry(this);
-                formRegistry.initialize();
-                
-                // Verify handlers were registered
-                if (formRegistry.getHandler(FormIds.MAIN_MENU) == null) {
-                    getLogger().error("MainMenuHandler was not registered!");
-                }
-                if (formRegistry.getHandler(FormIds.CREATE_AREA) == null) {
-                    getLogger().error("CreateAreaHandler was not registered!");
-                }
-    
-                // Initialize GUI managers after form registry
-                guiManager = new GuiManager(this);
-    
-                wandListener = new WandListener(this); // Initialize WandListener
-    
-                validationUtils = new ValidationUtils();
-
-                // Initialize LuckPerms integration before PermissionOverrideManager
+                // Initialize LuckPerms integration first
                 if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
                     try {
                         luckPermsApi = LuckPermsProvider.get();
@@ -231,24 +221,132 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     getLogger().info("LuckPerms not found. Proceeding without it.");
                 }
 
-                // Initialize PermissionOverrideManager
-                permissionOverrideManager = new PermissionOverrideManager(this);
+                // Initialize PermissionOverrideManager before loading areas
+                try {
+                    permissionOverrideManager = new PermissionOverrideManager(this);
+                    getLogger().info("PermissionOverrideManager initialized successfully");
+                    
+                    // Verify and repair track permissions database
+                    verifyTrackPermissionsDatabase();
+                    
+                    // Verify and repair group permissions database 
+                    verifyGroupPermissionsDatabase();
+                } catch (Exception e) {
+                    getLogger().error("Failed to initialize PermissionOverrideManager", e);
+                    getServer().getPluginManager().disablePlugin(this);
+                    return;
+                }
+    
+                // Initialize database manager and load areas
+                try {
+                    dbManager = new DatabaseManager(this);
+                    
+                    // Add recovery check for crashed sessions
+                    getLogger().info("Checking for database recovery needs...");
+                    Path areasLockFilePath = getDataFolder().toPath().resolve("areas.db-shm");
+                    Path permLockFilePath = getDataFolder().toPath().resolve("permission_overrides.db-shm");
+
+                    // Check if recovery might be needed: files exist AND there was not a clean shutdown
+                    boolean needsAreaRecovery = Files.exists(areasLockFilePath) && !cleanShutdownDetected;
+                    boolean needsPermRecovery = Files.exists(permLockFilePath) && !cleanShutdownDetected;
+
+                    if (needsAreaRecovery || needsPermRecovery) {
+                        getLogger().info("Detected potential unclean shutdown. Running database recovery...");
+                        
+                        // Recover areas database if needed
+                        if (needsAreaRecovery) {
+                            try (Connection conn = dbManager.getConnection();
+                                 Statement stmt = conn.createStatement()) {
+                                stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                                getLogger().info("Area database recovery completed successfully");
+                            } catch (SQLException e) {
+                                getLogger().error("Error during area database recovery", e);
+                            }
+                        }
+                        
+                        // Recover permission database if needed
+                        if (needsPermRecovery && permissionOverrideManager != null) {
+                            try (Connection conn = permissionOverrideManager.getConnection();
+                                 Statement stmt = conn.createStatement()) {
+                                stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                                getLogger().info("Permission database recovery completed successfully");
+                            } catch (SQLException e) {
+                                getLogger().error("Error during permission database recovery", e);
+                            }
+                        }
+                    } else {
+                        if (isDebugMode()) {
+                            debug("No database recovery required - clean shutdown detected");
+                        }
+                    }
+                    
+                    // Reset clean shutdown flag for next time
+                    debug("Clean shutdown detection completed");
+                    
+                    // Initialize the database tables
+                    dbManager.init();
+                    getLogger().info("Database tables initialized successfully");
+                    
+                    areaManager = new AreaManager(this);
+                    
+                    // Load areas from database
+                    if (isDebugMode()) {
+                        debug("Loading areas from database...");
+                    }
+                    areaManager.loadAreas();
+                    if (isDebugMode()) {
+                        debug("Areas loaded successfully: " + areaManager.getAllAreas().size() + " areas");
+                    }
+                    
+                    getLogger().info("Database and area managers initialized successfully");
+                } catch (Exception e) {
+                    getLogger().error("Failed to initialize database or area manager", e);
+                    getServer().getPluginManager().disablePlugin(this);
+                    return;
+                }
+
+                // Initialize FormRegistry before GUI manager
+                formRegistry = new FormRegistry(this);
+                formRegistry.initialize();
+                
+                // Verify handlers were registered
+                if (formRegistry.getHandler(FormIds.MAIN_MENU) == null) {
+                    getLogger().error("MainMenuHandler was not registered!");
+                }
+                if (formRegistry.getHandler(FormIds.CREATE_AREA) == null) {
+                    getLogger().error("CreateAreaHandler was not registered!");
+                }
+    
+                // Initialize GUI managers after form registry
+                guiManager = new GuiManager(this);
+    
+                wandListener = new WandListener(this); // Initialize WandListener
+    
+                validationUtils = new ValidationUtils();
                 
                 // Now that PermissionOverrideManager is initialized, load permissions for all areas
                 try {
                     getLogger().info("Loading permissions for all areas...");
                     List<Area> allAreas = areaManager.getAllAreas();
+                    
+                    // Add counter for monitoring
+                    int successCount = 0;
+                    int failCount = 0;
+                    
                     for (Area area : allAreas) {
                         try {
                             permissionOverrideManager.synchronizeOnLoad(area);
+                            successCount++;
                             if (isDebugMode()) {
                                 debug("Loaded permissions for area: " + area.getName());
                             }
                         } catch (Exception e) {
+                            failCount++;
                             getLogger().error("Failed to load permissions for area: " + area.getName(), e);
                         }
                     }
-                    getLogger().info("Permissions loaded for " + areaManager.getAllAreas().size() + " areas");
+                    getLogger().info("Permissions loaded for " + successCount + " areas, " + 
+                                    failCount + " areas failed to load permissions");
                 } catch (Exception e) {
                     getLogger().error("Failed to load permissions for areas", e);
                 }
@@ -278,7 +376,12 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 // Now that all managers are initialized, normalize toggle states
                 if (configManager.getBoolean("normalize_toggle_states", true)) {
                     getLogger().info("Normalizing toggle states for all areas...");
-                    areaManager.normalizeAllAreaToggleStates();
+                    
+                    // Use high-frequency context for this intensive operation
+                    executeInHighFrequencyContext(() -> {
+                        areaManager.normalizeAllAreaToggleStates();
+                    });
+                    
                     getLogger().info("Toggle states normalized successfully.");
                 }
 
@@ -299,6 +402,21 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getLogger().error("Critical error during plugin startup", e);
                 getServer().getPluginManager().disablePlugin(this);
             }
+
+            // Defer non-critical initialization tasks
+            getServer().getScheduler().scheduleDelayedTask(this, () -> {
+                // Perform any initialization that doesn't need to happen immediately
+                // For example: pre-caching data, background cleanups, etc.
+                if (isDebugMode()) {
+                    debug("Running deferred initialization tasks");
+                }
+            }, 20); // 1-second delay
+            
+            // Log startup time
+            long elapsedTime = System.currentTimeMillis() - startTime;
+            getLogger().info("Plugin startup completed in " + elapsedTime + "ms");
+
+            logStartupPerformance(startTime);
         }
     
         /**
@@ -346,6 +464,18 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             }
             
             getLogger().info("All caches have been cleared and listeners reloaded");
+
+            // After reloading configuration
+            if (permissionOverrideManager != null && areaManager != null) {
+                try {
+                    // Refresh permission caches and synchronize all areas
+                    getLogger().info("Synchronizing permissions after config reload...");
+                    int syncedCount = areaManager.synchronizeAllPermissions();
+                    getLogger().info("Successfully synchronized permissions for " + syncedCount + " areas");
+                } catch (Exception e) {
+                    getLogger().error("Failed to synchronize permissions during reload", e);
+                }
+            }
         }
     
         public ConfigManager getConfigManager() {
@@ -433,55 +563,100 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     // If cleanup method exists, call it, otherwise simply null out the reference
                     // luckPermsCache.cleanup();
                 }
+                
+                // Mark as clean shutdown 
+                debug("Clean shutdown detection completed");
             
-                // Save areas before shutting down DB
+                // IMPORTANT: Save operations in priority order
+                // Step 1: First save all permissions to database
+                try {
+                    if (permissionOverrideManager != null && areaManager != null) {
+                        getLogger().info("Synchronizing area permissions...");
+                        int syncedCount = areaManager.synchronizeAllPermissions();
+                        getLogger().info("Successfully synchronized permissions for " + syncedCount + " areas");
+                    }
+                } catch (Exception e) {
+                    getLogger().error("Failed to save area permissions!", e);
+                }
+                
+                // Step 2: Then save all areas
                 if (areaManager != null) {
                     Timer.Sample saveTimer = performanceMonitor.startTimer();
                     try {
-                        // Get areas and save them with batching for better performance
-                        List<Area> allAreas = areaManager.getAllAreas();
-                        getLogger().info("Saving " + allAreas.size() + " areas before shutdown...");
-                        
-                        // Save in batches to avoid memory pressure
-                        int batchSize = 20;
-                        for (int i = 0; i < allAreas.size(); i += batchSize) {
-                            int end = Math.min(i + batchSize, allAreas.size());
-                            for (int j = i; j < end; j++) {
-                                try {
-                                    dbManager.saveArea(allAreas.get(j));
-                                } catch (Exception e) {
-                                    getLogger().error("Failed to save area: " + allAreas.get(j).getName(), e);
-                                }
-                            }
-                        }
+                        getLogger().info("Saving all areas before shutdown...");
+                        int savedCount = areaManager.saveAllAreas();
+                        getLogger().info("Successfully saved " + savedCount + " areas");
                         performanceMonitor.stopTimer(saveTimer, "final_area_save");
-                        getLogger().info("Area data saved successfully");
                     } catch (Exception e) {
                         performanceMonitor.stopTimer(saveTimer, "final_area_save_failed");
                         getLogger().error("Error saving areas during shutdown", e);
                     }
                 }
                 
-                // Close database connection last
+                // Step 3: Close databases in proper order, with pre-close checkpoint
+                Timer.Sample dbCloseTimer = performanceMonitor.startTimer();
+                
+                // First do a soft checkpoint of the area database
                 if (dbManager != null) {
-                    Timer.Sample dbCloseTimer = performanceMonitor.startTimer();
+                    try (Connection conn = dbManager.getConnection();
+                        Statement stmt = conn.createStatement()) {
+                        // First try a passive checkpoint which is less likely to cause locks
+                        stmt.execute("PRAGMA busy_timeout = 5000");
+                        stmt.execute("PRAGMA wal_checkpoint(PASSIVE)");
+                        if (isDebugMode()) {
+                            debug("Executed passive checkpoint on area database before closing");
+                        }
+                    } catch (Exception e) {
+                        // Just log and continue if this fails
+                        getLogger().error("Error checkpointing area database", e);
+                    }
+                    
+                    // Then close the area database
                     try {
                         dbManager.close();
-                        performanceMonitor.stopTimer(dbCloseTimer, "database_close");
-                        getLogger().info("Database connection closed");
+                        getLogger().info("Area database connection closed");
                     } catch (Exception e) {
-                        performanceMonitor.stopTimer(dbCloseTimer, "database_close_failed");
-                        getLogger().error("Error closing database", e);
+                        getLogger().error("Failed to close area database", e);
                     }
                 }
                 
+                // Now handle permission database
+                if (permissionOverrideManager != null) {
+                    // Close it after everything else is done
+                    try {
+                        permissionOverrideManager.close();
+                        getLogger().info("Permission override manager closed");
+                    } catch (Exception e) {
+                        getLogger().error("Failed to close permission override manager", e);
+                    }
+                }
+
+                performanceMonitor.stopTimer(dbCloseTimer, "database_close");
+                
+                // Write a clean shutdown marker file
+                try {
+                    Path cleanShutdownMarker = getDataFolder().toPath().resolve(CLEAN_SHUTDOWN_MARKER);
+                    Files.write(cleanShutdownMarker, "Clean shutdown completed".getBytes());
+                    if (debugMode) {
+                        debug("Created clean shutdown marker file");
+                    }
+                } catch (Exception e) {
+                    getLogger().error("Failed to create clean shutdown marker", e);
+                }
+                
                 performanceMonitor.stopTimer(shutdownTimer, "plugin_shutdown");
+                getLogger().info("AdminAreaProtectionPlugin disabled successfully.");
             } catch (Exception e) {
                 getLogger().error("Error during plugin shutdown", e);
             } finally {
                 // Final cleanup of the performance monitor
                 if (performanceMonitor != null) {
-                    performanceMonitor.close();
+                    try {
+                        performanceMonitor.close();
+                    } catch (Throwable t) {
+                        // Catch all errors during PerformanceMonitor close to ensure plugin shutdown completes
+                        getLogger().error("Error during performance monitor shutdown - this won't affect plugin operation", t);
+                    }
                 }
                 
                 getLogger().info("AdminAreaProtectionPlugin disabled.");
@@ -613,26 +788,17 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             
             if (isDebugMode()) {
                 debug("Saving area: " + area.getName());
-                debug("  World: " + area.getWorld());
-                debug("  Priority: " + area.getPriority());
-                debug("  Toggle states count: " + area.getToggleStates().size());
             }
 
             try {
-                // First save the area without applying toggle states
+                // Save directly to database using DatabaseManager
                 dbManager.saveArea(area);
                 
-                // Then add to area manager, which will apply default toggle states if needed
-                areaManager.addArea(area);
-                
-                // Ensure toggle states are saved in a single batch operation
-                area.saveToggleStates();
-                
                 if (isDebugMode()) {
-                    debug("  Area saved successfully");
+                    debug("Area saved successfully to database");
                 }
             } catch (Exception e) {
-                getLogger().error("Failed to save area: " + area.getName(), e);
+                getLogger().error("Failed to save area to database: " + area.getName(), e);
             }
         }
     
@@ -693,7 +859,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          */
         public void debug(String message) {
             if (debugMode) {
-                getLogger().debug("[Debug] " + message);
+                getLogger().info("[Debug] " + message);
             }
         }
 
@@ -758,17 +924,102 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             }
             
             try {
-                var user = luckPermsApi.getUserManager().getUser(player.getUniqueId());
-                if (user == null) return false;
-                
+                // Get the track
                 var track = luckPermsApi.getTrackManager().getTrack(trackName);
-                if (track == null) return false;
+                if (track == null) {
+                    if (isDebugMode()) {
+                        debug("Track " + trackName + " does not exist");
+                    }
+                    return false;
+                }
                 
-                // Check if player has any group in this track
-                String currentGroup = user.getPrimaryGroup();
-                return track.getGroups().contains(currentGroup);
+                // Get all groups in this track
+                List<String> trackGroups = track.getGroups();
+                
+                // Get the player's primary group for debugging
+                String primaryGroup = getPrimaryGroup(player);
+                
+                // Check ALL groups the player is in, not just primary group
+                String playerName = player.getName();
+                List<String> playerGroups = getLuckPermsCache().getGroups(playerName);
+                
+                if (isDebugMode()) {
+                    debug("Player " + player.getName() + " has primary group: " + primaryGroup);
+                    debug("Player " + player.getName() + " belongs to groups: " + String.join(", ", playerGroups));
+                    debug("Track " + trackName + " has groups: " + String.join(", ", trackGroups));
+                }
+                
+                // Check if any of the player's groups are in the track
+                boolean isInTrack = false;
+                for (String group : playerGroups) {
+                    if (trackGroups.contains(group)) {
+                        if (isDebugMode()) {
+                            debug("Player group " + group + " is in track " + trackName);
+                        }
+                        isInTrack = true;
+                        break;
+                    }
+                }
+                
+                if (isDebugMode()) {
+                    debug("Player has group in track: " + isInTrack);
+                }
+                
+                // If not directly in track by group membership, check inheritance
+                if (!isInTrack) {
+                    for (String group : playerGroups) {
+                        boolean inheritedGroupInTrack = isPlayerInTrackByInheritance(player, trackName, group, trackGroups);
+                        if (inheritedGroupInTrack) {
+                            if (isDebugMode()) {
+                                debug("Player has inherited group from " + group + " in track: " + inheritedGroupInTrack);
+                            }
+                            isInTrack = true;
+                            break;
+                        }
+                    }
+                }
+                
+                return isInTrack;
             } catch (Exception e) {
                 getLogger().error("Error checking track membership", e);
+                return false;
+            }
+        }
+
+        /**
+         * Checks if a player is in a track through inheritance
+         * @param player The player to check
+         * @param trackName The name of the track
+         * @param groupName The name of the group to check inheritance from
+         * @param trackGroups The groups in the track
+         * @return True if the player is in the track through inheritance
+         */
+        public boolean isPlayerInTrackByInheritance(Player player, String trackName, String groupName, List<String> trackGroups) {
+            if (!isLuckPermsEnabled() || player == null || trackName == null || groupName == null || trackGroups == null) {
+                return false;
+            }
+            
+            try {
+                // Get all groups the specified group inherits from
+                List<String> inheritedGroups = getGroupInheritance(groupName);
+                
+                if (isDebugMode()) {
+                    debug("Group " + groupName + " inherits from groups: " + String.join(", ", inheritedGroups));
+                }
+                
+                // Check if any of the group's inherited groups are in the track
+                for (String group : inheritedGroups) {
+                    if (trackGroups.contains(group)) {
+                        if (isDebugMode()) {
+                            debug("Group " + groupName + " inherits from " + group + " which is in track " + trackName);
+                        }
+                        return true;
+                    }
+                }
+                
+                return false;
+            } catch (Exception e) {
+                getLogger().error("Error checking track membership through inheritance", e);
                 return false;
             }
         }
@@ -796,24 +1047,470 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         }
 
         public PermissionOverrideManager getPermissionOverrideManager() {
-            // If permissionOverrideManager is null and we're in the middle of initialization,
-            // create it on-demand to avoid NPEs
+            // If permissionOverrideManager is null, this is a critical error,
+            // as it should never be accessed before initialization
             if (permissionOverrideManager == null) {
-                getLogger().warning("PermissionOverrideManager was accessed before initialization. Creating it now.");
+                getLogger().error("CRITICAL: PermissionOverrideManager was accessed before initialization");
+                
+                // Log stack trace to help identify where this is being called from
                 try {
+                    throw new IllegalStateException("PermissionOverrideManager not initialized");
+                } catch (IllegalStateException e) {
+                    getLogger().error("Call stack:", e);
+                }
+                
+                // Create emergency instance but log warning
+                try {
+                    getLogger().warning("Creating emergency PermissionOverrideManager instance");
                     permissionOverrideManager = new PermissionOverrideManager(this);
                 } catch (Exception e) {
-                    getLogger().error("Failed to initialize PermissionOverrideManager on-demand", e);
+                    getLogger().error("Failed to create emergency PermissionOverrideManager", e);
                 }
             }
             return permissionOverrideManager;
         }
-        
-        /**
-         * Alias for getPermissionOverrideManager() for backward compatibility.
-         */
-        public PermissionOverrideManager getOverrideManager() {
-            return getPermissionOverrideManager(); // Use the main method to ensure consistency
+
+        private void logStartupPerformance(long startTime) {
+            long totalTime = System.currentTimeMillis() - startTime;
+            
+            StringBuilder perfBuilder = new StringBuilder();
+            perfBuilder.append("\n------ Startup Performance ------\n");
+            perfBuilder.append("Total startup time: ").append(totalTime).append("ms\n");
+            
+            // Add specific module timings if available
+            if (performanceMonitor != null) {
+                // Since getTimings() is not available, we'll use other metrics or skip this part
+                perfBuilder.append("For detailed timings, enable debug mode");
+            }
+            
+            perfBuilder.append("\n------------------------------");
+            
+            // Log the performance data
+            getLogger().info(perfBuilder.toString());
+            
+            // Check for slow startup
+            if (totalTime > 250) {
+                getLogger().warning("Slow plugin startup detected: " + totalTime + "ms");
+            }
         }
 
-}
+        /**
+         * Verifies the track permissions database and attempts to repair any issues.
+         * This is called during startup to ensure the database is in a valid state.
+         */
+        private void verifyTrackPermissionsDatabase() {
+            if (permissionOverrideManager == null) {
+                getLogger().error("Cannot verify track permissions database: PermissionOverrideManager is null");
+                return;
+            }
+            
+            try {
+                getLogger().info("Verifying track permissions database integrity...");
+                
+                // Get a connection to the database
+                try (Connection conn = permissionOverrideManager.getConnection();
+                     Statement stmt = conn.createStatement()) {
+                    
+                    // Check if the track_permissions table exists
+                    boolean tableExists = false;
+                    try (ResultSet rs = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='track_permissions'")) {
+                        tableExists = rs.next();
+                    }
+                    
+                    if (!tableExists) {
+                        getLogger().warning("track_permissions table does not exist! This should never happen.");
+                        return;
+                    }
+                    
+                    // Check the total number of track permissions
+                    int totalCount = 0;
+                    try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM track_permissions")) {
+                        totalCount = rs.next() ? rs.getInt(1) : 0;
+                    }
+                    
+                    getLogger().info("Found " + totalCount + " total track permission entries in database");
+                    
+                    // Only force save track permissions if none exist in the database
+                    // This prevents overwriting existing permissions during startup
+                    if (totalCount == 0) {
+                        getLogger().warning("No track permissions found in database. Attempting recovery...");
+                        
+                        // Since no permissions exist in the database, try to restore from memory
+                        int forceSavedCount = 0;
+                        
+                        if (areaManager != null) {
+                            List<Area> allAreas = areaManager.getAllAreas();
+                            getLogger().info("Force saving track permissions for " + allAreas.size() + " areas...");
+                            
+                            for (Area area : allAreas) {
+                                Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
+                                if (trackPerms != null && !trackPerms.isEmpty()) {
+                                    for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
+                                        String trackName = entry.getKey();
+                                        Map<String, Boolean> permissions = entry.getValue();
+                                        
+                                        if (permissions != null && !permissions.isEmpty()) {
+                                            try {
+                                                // Use the force flag to ensure saving
+                                                permissionOverrideManager.setTrackPermissions(area, trackName, new HashMap<>(permissions), true);
+                                                forceSavedCount++;
+                                                
+                                                if (isDebugMode() && forceSavedCount % 5 == 0) {
+                                                    debug("Force saved " + forceSavedCount + " track permissions so far");
+                                                }
+                                            } catch (Exception e) {
+                                                getLogger().error("Failed to force save track permissions for track " + trackName + 
+                                                    " in area " + area.getName(), e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            getLogger().info("Force saved " + forceSavedCount + " track permissions to the database");
+                        
+                            // Force a checkpoint to ensure the changes are persisted
+                            try {
+                                stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                                getLogger().info("Executed full checkpoint to persist track permissions");
+                            } catch (SQLException e) {
+                                getLogger().error("Failed to execute checkpoint", e);
+                            }
+                            
+                            // Check the permissions count again after saving
+                            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM track_permissions")) {
+                                int newCount = rs.next() ? rs.getInt(1) : 0;
+                                getLogger().info("After force saving: " + newCount + " track permission entries in database (added " + (newCount - totalCount) + ")");
+                            }
+                        }
+                    } else {
+                        getLogger().info("Track permissions exist in database, skipping force save to preserve data");
+                        
+                        // Still check for coherence between memory and database
+                        if (areaManager != null && isDebugMode()) {
+                            List<Area> allAreas = areaManager.getAllAreas();
+                            debug("Verifying track permissions for " + allAreas.size() + " areas...");
+                            
+                            for (Area area : allAreas) {
+                                // Get permissions from the database for verification
+                                Map<String, Map<String, Boolean>> dbTrackPerms = 
+                                    permissionOverrideManager.getAllTrackPermissions(area.getName());
+                                
+                                // Get permissions from memory
+                                Map<String, Map<String, Boolean>> memTrackPerms = area.getTrackPermissions();
+                                
+                                if (dbTrackPerms != null && !dbTrackPerms.isEmpty()) {
+                                    debug("  Area " + area.getName() + " has " + dbTrackPerms.size() + 
+                                        " tracks in database, " + (memTrackPerms != null ? memTrackPerms.size() : 0) + 
+                                        " tracks in memory");
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Check for any NULL values in critical columns
+                    int nullCount = 0;
+                    try (ResultSet rs = stmt.executeQuery(
+                            "SELECT COUNT(*) FROM track_permissions WHERE area_name IS NULL OR track_name IS NULL OR permission IS NULL")) {
+                        nullCount = rs.next() ? rs.getInt(1) : 0;
+                    }
+                    
+                    if (nullCount > 0) {
+                        getLogger().warning("Found " + nullCount + " track permission entries with NULL values, fixing...");
+                        stmt.execute("DELETE FROM track_permissions WHERE area_name IS NULL OR track_name IS NULL OR permission IS NULL");
+                        getLogger().info("Removed " + nullCount + " invalid track permission entries");
+                    }
+                    
+                    getLogger().info("Track permissions database verification completed");
+                }
+            } catch (Exception e) {
+                getLogger().error("Error verifying track permissions database", e);
+            }
+        }
+
+        /**
+         * Verifies the group permissions database and attempts to repair any issues.
+         * This is called during startup to ensure the database is in a valid state.
+         */
+        private void verifyGroupPermissionsDatabase() {
+            if (permissionOverrideManager == null) {
+                getLogger().error("Cannot verify group permissions database: PermissionOverrideManager is null");
+                return;
+            }
+            
+            try {
+                getLogger().info("Verifying group permissions database integrity...");
+                
+                // Get a connection to the database
+                try (Connection conn = permissionOverrideManager.getConnection();
+                     Statement stmt = conn.createStatement()) {
+                    
+                    // Check if the group_permissions table exists
+                    boolean tableExists = false;
+                    try (ResultSet rs = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='group_permissions'")) {
+                        tableExists = rs.next();
+                    }
+                    
+                    if (!tableExists) {
+                        getLogger().warning("group_permissions table does not exist! This should never happen.");
+                        return;
+                    }
+                    
+                    // Check the total number of group permissions
+                    int totalCount = 0;
+                    try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM group_permissions")) {
+                        totalCount = rs.next() ? rs.getInt(1) : 0;
+                    }
+                    
+                    getLogger().info("Found " + totalCount + " total group permission entries in database");
+                    
+                    // Only force save group permissions if none exist in the database
+                    // This prevents overwriting existing permissions during startup
+                    if (totalCount == 0) {
+                        getLogger().warning("No group permissions found in database. Attempting recovery...");
+                        
+                        // Since no permissions exist in the database, try to restore from memory
+                        int forceSavedCount = 0;
+                        
+                        if (areaManager != null) {
+                            List<Area> allAreas = areaManager.getAllAreas();
+                            getLogger().info("Force saving group permissions for " + allAreas.size() + " areas...");
+                            
+                            for (Area area : allAreas) {
+                                Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
+                                if (groupPerms != null && !groupPerms.isEmpty()) {
+                                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
+                                        String groupName = entry.getKey();
+                                        Map<String, Boolean> permissions = entry.getValue();
+                                        
+                                        if (permissions != null && !permissions.isEmpty()) {
+                                            try {
+                                                // Use the force flag to ensure saving
+                                                permissionOverrideManager.setGroupPermissions(area.getName(), groupName, new HashMap<>(permissions), true);
+                                                forceSavedCount++;
+                                                
+                                                if (isDebugMode() && forceSavedCount % 5 == 0) {
+                                                    debug("Force saved " + forceSavedCount + " group permissions so far");
+                                                }
+                                            } catch (Exception e) {
+                                                getLogger().error("Failed to force save group permissions for group " + groupName + 
+                                                    " in area " + area.getName(), e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            getLogger().info("Force saved " + forceSavedCount + " group permissions to the database");
+                        
+                            // Force a checkpoint to ensure the changes are persisted
+                            try {
+                                stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                                getLogger().info("Executed full checkpoint to persist group permissions");
+                            } catch (SQLException e) {
+                                getLogger().error("Failed to execute checkpoint", e);
+                            }
+                            
+                            // Check the permissions count again after saving
+                            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM group_permissions")) {
+                                int newCount = rs.next() ? rs.getInt(1) : 0;
+                                getLogger().info("After force saving: " + newCount + " group permission entries in database (added " + (newCount - totalCount) + ")");
+                            }
+                        }
+                    } else {
+                        getLogger().info("Group permissions exist in database, skipping force save to preserve data");
+                        
+                        // Still check for coherence between memory and database
+                        if (areaManager != null && isDebugMode()) {
+                            List<Area> allAreas = areaManager.getAllAreas();
+                            debug("Verifying group permissions for " + allAreas.size() + " areas...");
+                            
+                            for (Area area : allAreas) {
+                                // Get permissions from the database for verification
+                                Map<String, Map<String, Boolean>> dbGroupPerms = 
+                                    permissionOverrideManager.getAllGroupPermissions(area.getName());
+                                
+                                // Get permissions from memory
+                                Map<String, Map<String, Boolean>> memGroupPerms = area.getGroupPermissions();
+                                
+                                if (dbGroupPerms != null && !dbGroupPerms.isEmpty()) {
+                                    debug("  Area " + area.getName() + " has " + dbGroupPerms.size() + 
+                                        " groups in database, " + (memGroupPerms != null ? memGroupPerms.size() : 0) + 
+                                        " groups in memory");
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Check for any NULL values in critical columns
+                    int nullCount = 0;
+                    try (ResultSet rs = stmt.executeQuery(
+                            "SELECT COUNT(*) FROM group_permissions WHERE area_name IS NULL OR group_name IS NULL OR permission IS NULL")) {
+                        nullCount = rs.next() ? rs.getInt(1) : 0;
+                    }
+                    
+                    if (nullCount > 0) {
+                        getLogger().warning("Found " + nullCount + " group permission entries with NULL values, fixing...");
+                        stmt.execute("DELETE FROM group_permissions WHERE area_name IS NULL OR group_name IS NULL OR permission IS NULL");
+                        getLogger().info("Removed " + nullCount + " invalid group permission entries");
+                    }
+                    
+                    getLogger().info("Group permissions database verification completed");
+                }
+            } catch (Exception e) {
+                getLogger().error("Error verifying group permissions database", e);
+            }
+        }
+
+        /**
+         * Get the tracker for recent save operations
+         * @return The RecentSaveTracker instance
+         */
+        public RecentSaveTracker getRecentSaveTracker() {
+            return recentSaveTracker;
+        }
+
+        /**
+         * Executes an operation in a high-frequency context to prevent excessive database operations
+         * @param operation The operation to execute
+         */
+        public void executeInHighFrequencyContext(Runnable operation) {
+            RecentSaveTracker tracker = getRecentSaveTracker();
+            if (tracker != null) {
+                tracker.beginHighFrequencyContext();
+            }
+            try {
+                operation.run();
+            } finally {
+                if (tracker != null) {
+                    tracker.endHighFrequencyContext();
+                }
+            }
+        }
+        
+        /**
+         * Executes an operation in a high-frequency context and returns a result
+         * @param <T> The type of result
+         * @param operation The operation to execute
+         * @return The result of the operation
+         */
+        public <T> T executeInHighFrequencyContext(Supplier<T> operation) {
+            RecentSaveTracker tracker = getRecentSaveTracker();
+            if (tracker != null) {
+                tracker.beginHighFrequencyContext();
+            }
+            try {
+                return operation.get();
+            } finally {
+                if (tracker != null) {
+                    tracker.endHighFrequencyContext();
+                }
+            }
+        }
+
+        /**
+         * Tracks recent save operations to prevent excessive database writes
+         */
+        public static class RecentSaveTracker {
+            private final Map<String, Long> lastSaveTime = new ConcurrentHashMap<>();
+            private final Map<String, Long> lastUpdateTime = new ConcurrentHashMap<>();
+            private final Map<String, Long> lastSyncTime = new ConcurrentHashMap<>();
+            private final long MIN_SAVE_INTERVAL = TimeUnit.MILLISECONDS.convert(1, TimeUnit.SECONDS);
+            private final long MIN_UPDATE_INTERVAL = TimeUnit.MILLISECONDS.convert(2, TimeUnit.SECONDS);
+            private final long MIN_SYNC_INTERVAL = TimeUnit.MILLISECONDS.convert(3, TimeUnit.SECONDS);
+            private final ThreadLocal<Boolean> highFrequencyContext = ThreadLocal.withInitial(() -> false);
+            
+            /**
+             * Mark the start of a high-frequency operation context
+             */
+            public void beginHighFrequencyContext() {
+                highFrequencyContext.set(true);
+            }
+            
+            /**
+             * Mark the end of a high-frequency operation context
+             */
+            public void endHighFrequencyContext() {
+                highFrequencyContext.set(false);
+            }
+            
+            /**
+             * Check if current thread is in a high-frequency update context
+             */
+            public boolean isHighFrequencyContext() {
+                return highFrequencyContext.get();
+            }
+            
+            /**
+             * Check if an area was recently saved
+             */
+            public boolean wasRecentlySaved(String areaKey, long currentTime) {
+                Long lastTime = lastSaveTime.get(areaKey);
+                return lastTime != null && (currentTime - lastTime) < MIN_SAVE_INTERVAL;
+            }
+            
+            /**
+             * Check if an area was recently updated in the database
+             */
+            public boolean wasRecentlyUpdated(String areaKey, long currentTime) {
+                Long lastTime = lastUpdateTime.get(areaKey);
+                return lastTime != null && (currentTime - lastTime) < MIN_UPDATE_INTERVAL;
+            }
+            
+            /**
+             * Check if an area was recently synchronized with permission system
+             */
+            public boolean wasRecentlySynced(String areaKey, long currentTime) {
+                Long lastTime = lastSyncTime.get(areaKey);
+                return lastTime != null && (currentTime - lastTime) < MIN_SYNC_INTERVAL;
+            }
+            
+            /**
+             * Mark an area as saved
+             */
+            public void markSaved(String areaKey, long time) {
+                lastSaveTime.put(areaKey, time);
+            }
+            
+            /**
+             * Mark an area as updated in the database
+             */
+            public void markUpdated(String areaKey, long time) {
+                lastUpdateTime.put(areaKey, time);
+            }
+            
+            /**
+             * Mark an area as synchronized with permission system
+             */
+            public void markSynced(String areaKey, long time) {
+                lastSyncTime.put(areaKey, time);
+            }
+            
+            /**
+             * Clear all tracking data
+             */
+            public void clear() {
+                lastSaveTime.clear();
+                lastUpdateTime.clear();
+                lastSyncTime.clear();
+            }
+        }
+
+        /**
+         * Gets an area by name with rate limiting for high-frequency operations
+         * @param name The name of the area to get
+         * @return The area, or null if not found
+         */
+        public Area getAreaRateLimited(String name) {
+            // Use a ThreadLocal boolean to prevent recursive calls
+            RecentSaveTracker tracker = getRecentSaveTracker();
+            
+            // If we're already in a high-frequency context, just get the area directly
+            if (tracker.isHighFrequencyContext()) {
+                return getArea(name);
+            }
+            
+            // Otherwise, wrap the operation in a high-frequency context
+            return executeInHighFrequencyContext(() -> getArea(name));
+        }
+    }

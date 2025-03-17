@@ -84,6 +84,27 @@ public class PotionEffectsHandler extends BaseFormHandler {
         if (area == null) return null;
 
         try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                // Get a fresh copy of the area from the database
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area instead
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        Map<String, Integer> effects = area.getAllPotionEffects();
+                        boolean hasAnyEffects = effects.values().stream().anyMatch(v -> v > 0);
+                        
+                        if (hasAnyEffects) {
+                            plugin.debug("Area " + area.getName() + " has potion effects: " + effects);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database for potion effects form", e);
+            }
+            
             FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.potionEffectsSettings.title", 
                 Map.of("area", area.getName())));
             
@@ -96,11 +117,12 @@ public class PotionEffectsHandler extends BaseFormHandler {
             // Get area settings
             AreaDTO dto = area.toDTO();
             JSONObject settings = dto.settings();
-
+            
+            // Skip loading potion effects log to reduce spam
+            
             // Add sliders for potion effects strength (no toggles)
             for (ToggleDefinition toggle : POTION_TOGGLES) {
-                String permissionNode = normalizePermissionNode(toggle.permissionNode);
-                String strengthNode = permissionNode + "Strength";
+                String permissionNode = toggle.permissionNode;
                 
                 String description = plugin.getLanguageManager().get(
                     "gui.permissions.toggles." + toggle.permissionNode, 
@@ -112,7 +134,13 @@ public class PotionEffectsHandler extends BaseFormHandler {
                 }
                 
                 // Add slider for effect strength (0-10)
-                int currentStrength = area.getPotionEffectStrength(strengthNode);
+                int currentStrength = area.getPotionEffectStrength(permissionNode);
+                
+                // Only log non-zero strength to reduce spam
+                if (plugin.isDebugMode() && currentStrength > 0) {
+                    plugin.debug("Effect " + toggle.displayName + " has strength: " + currentStrength);
+                }
+                
                 form.addElement(new ElementSlider(
                     "§e" + toggle.displayName + "\n§8" + description,
                     0, 10, 1, currentStrength
@@ -142,14 +170,13 @@ public class PotionEffectsHandler extends BaseFormHandler {
             for (int i = 0; i < POTION_TOGGLES.size(); i++) {
                 try {
                     ToggleDefinition toggle = POTION_TOGGLES.get(i);
-                    String permissionNode = normalizePermissionNode(toggle.permissionNode);
-                    String strengthNode = permissionNode + "Strength";
+                    String permissionNode = toggle.permissionNode;
                     
                     // Calculate index for slider (2 + index of effect)
                     int sliderIndex = 2 + i;
                     
                     // Get current strength value from area
-                    int currentStrengthValue = area.getPotionEffectStrength(strengthNode);
+                    int currentStrengthValue = area.getPotionEffectStrength(permissionNode);
                     
                     // Get and validate strength value from response
                     int strengthValue = 0;
@@ -176,18 +203,15 @@ public class PotionEffectsHandler extends BaseFormHandler {
                     // Only track changes, don't apply yet
                     if (currentStrengthValue != strengthValue) {
                         // Add to the effects map
-                        effectStrengths.put(strengthNode, strengthValue);
-                        
-                        // Also handle the associated permission toggle
-                        effectStrengths.put(permissionNode, strengthValue > 0 ? 1 : 0);
+                        effectStrengths.put(permissionNode, strengthValue);
                         
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Will update strength " + strengthNode + " from " + 
+                            plugin.debug("Will update strength " + permissionNode + " from " + 
                                 currentStrengthValue + " to " + strengthValue);
                         }
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().error("Error processing effect " + POTION_TOGGLES.get(i).permissionNode, e);
+                    plugin.getLogger().error("Error processing effect at index " + i, e);
                 }
             }
             

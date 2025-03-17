@@ -2,8 +2,6 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.area.AreaBuilder;
-import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
@@ -13,10 +11,10 @@ import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowCustom;
-import org.json.JSONObject;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 public class ItemsDropsHandler extends BaseFormHandler {
 
@@ -45,9 +43,10 @@ public class ItemsDropsHandler extends BaseFormHandler {
         // Add header with clear instructions
         form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.itemsDropsSettings.header")));
         
-        // Get area settings
-        AreaDTO dto = area.toDTO();
-        JSONObject settings = dto.settings();
+        // Get area toggle states directly from the area object
+        if (plugin.isDebugMode()) {
+            plugin.debug("Creating items drops settings form for area: " + area.getName());
+        }
 
         // Add toggles for this category
         List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ITEMS);
@@ -56,10 +55,18 @@ public class ItemsDropsHandler extends BaseFormHandler {
                 String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
                 String description = plugin.getLanguageManager().get(
                     "gui.permissions.toggles." + toggle.getPermissionNode());
+                
+                // Get current toggle state with default fallback
+                boolean currentValue = area.getToggleState(permissionNode);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Toggle " + toggle.getDisplayName() + " (" + permissionNode + ") value: " + currentValue);
+                }
+                
                 form.addElement(new ElementToggle(
                     plugin.getLanguageManager().get("gui.permissions.toggle.format", 
                         Map.of("name", toggle.getDisplayName(), "description", description)),
-                    settings.optBoolean(permissionNode, toggle.getDefaultValue())
+                    currentValue
                 ));
             }
         }
@@ -73,21 +80,16 @@ public class ItemsDropsHandler extends BaseFormHandler {
             Area area = getEditingArea(player);
             if (area == null) return;
 
-            // Get current DTO
-            AreaDTO currentDTO = area.toDTO();
-            JSONObject updatedSettings = new JSONObject(currentDTO.settings());
-
-            // Get category toggles
+            // Process toggle responses
+            Map<String, Boolean> toggleChanges = new HashMap<>();
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.ITEMS);
+            
             if (toggles == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
                 plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
                 return;
             }
-
-            // Track changes
-            int changedSettings = 0;
-
+            
             // Debug log the response data
             if (plugin.isDebugMode()) {
                 plugin.debug("Processing items/drops settings form response:");
@@ -98,76 +100,43 @@ public class ItemsDropsHandler extends BaseFormHandler {
             }
 
             // Skip header label element (index 0)
-            // Process each toggle starting at index 1
-            for (int i = 0; i < toggles.size(); i++) {
-                try {
-                    String permissionNode = normalizePermissionNode(toggles.get(i).getPermissionNode());
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Processing toggle: " + toggles.get(i).getDisplayName() + 
-                                    " with permission node: " + permissionNode);
-                    }
-                    
-                    // Get current value from settings
-                    boolean currentValue = updatedSettings.optBoolean(
-                        permissionNode, 
-                        toggles.get(i).getDefaultValue()
-                    );
-                    
-                    // Get raw response first
-                    Object rawResponse = response.getResponse(i + 1);
-                    if (rawResponse == null) {
+            int index = 1;
+            for (PermissionToggle toggle : toggles) {
+                String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
+                boolean currentValue = area.getToggleState(permissionNode);
+                
+                // Get response, safely handling potential nulls or type issues
+                boolean newValue = false;
+                Object rawValue = response.getResponse(index++);
+                if (rawValue instanceof Boolean) {
+                    newValue = (Boolean)rawValue;
+                } else if (rawValue != null) {
+                    try {
+                        newValue = Boolean.parseBoolean(rawValue.toString());
+                    } catch (Exception e) {
                         if (plugin.isDebugMode()) {
-                            plugin.debug("Null raw response for toggle " + permissionNode + " at index " + (i + 1));
+                            plugin.debug("Could not parse toggle value: " + rawValue);
                         }
                         continue;
                     }
-
-                    // Convert response to boolean
-                    boolean toggleValue;
-                    if (rawResponse instanceof Boolean) {
-                        toggleValue = (Boolean) rawResponse;
-                    } else {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Invalid response type for toggle " + permissionNode + 
-                                ": " + rawResponse.getClass().getName());
-                        }
-                        continue;
-                    }
+                }
+                
+                // Only track changes, don't apply yet
+                if (currentValue != newValue) {
+                    toggleChanges.put(permissionNode, newValue);
                     
-                    // Only count as changed if value is different
-                    if (currentValue != toggleValue) {
-                        changedSettings++;
-                        updatedSettings.put(permissionNode, toggleValue);
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Updated toggle " + permissionNode + " from " + 
-                                currentValue + " to " + toggleValue);
-                        }
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Error processing toggle " + toggles.get(i).getPermissionNode() + ": " + e.getMessage());
                     if (plugin.isDebugMode()) {
-                        e.printStackTrace();
+                        plugin.debug("Will change toggle " + permissionNode + " from " + 
+                                    currentValue + " to " + newValue);
                     }
                 }
             }
-
-            // Create updated area
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .settings(updatedSettings)
-                .build();
-
-            // Save changes
-            plugin.updateArea(updatedArea);
             
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.updated",
-                Map.of(
-                    "area", area.getName(),
-                    "count", String.valueOf(changedSettings)
-                )));
-
-            // Return to edit menu
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+            // Use the standardized method to update toggles
+            int changedSettings = updateAreaToggles(area, toggleChanges);
+            
+            // Use the standardized method to update the area and notify the player
+            updateAreaAndNotifyPlayer(player, area, changedSettings, FormIds.EDIT_AREA, "items/drops");
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling items/drops settings", e);

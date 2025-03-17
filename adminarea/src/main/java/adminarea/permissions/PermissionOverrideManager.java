@@ -2,40 +2,49 @@ package adminarea.permissions;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
+import adminarea.area.AreaDTO;
+import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.event.LuckPermsTrackChangeEvent;
 import adminarea.exception.DatabaseException;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.sql.*;
-import java.time.*;
-import java.time.format.DateTimeFormatter;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 /**
- * Manages permission overrides for players, groups, and tracks using a dedicated database.
- * This centralizes all permission storage outside of the area objects themselves.
+ * Manages permission overrides for areas, providing a centralized API for 
+ * player, group, and track permissions with efficient caching.
  */
 public class PermissionOverrideManager implements AutoCloseable {
+    private static final Logger logger = LoggerFactory.getLogger(PermissionOverrideManager.class);
     private final AdminAreaProtectionPlugin plugin;
-    private final HikariDataSource dataSource;
-    private final Cache<String, Map<String, Boolean>> playerPermCache;
-    private final Cache<String, Map<String, Boolean>> groupPermCache;
-    private final Cache<String, Map<String, Boolean>> trackPermCache;
+    private final PermissionDatabaseManager databaseManager;
+    private final PermissionCache permissionCache;
+    private final PermissionChecker permissionChecker;
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
-    private final Object dbLock = new Object();
-    private final PermissionChecker permissionChecker;
     
-    // Define the SyncDirection enum used in Area.java
+    // Track updated permissions
+    private final Map<String, Set<String>> updatedPlayerPermissions = new ConcurrentHashMap<>();
+    private final Set<String> updatedGroupPermissions = ConcurrentHashMap.newKeySet();
+    private final Set<String> updatedTrackPermissions = ConcurrentHashMap.newKeySet();
+    
+    // ThreadLocal for tracking permissions being processed to prevent recursion
+    private static final ThreadLocal<Set<String>> PROCESSING_PERMISSIONS = ThreadLocal.withInitial(HashSet::new);
+    
+    /**
+     * Direction to synchronize permissions
+     */
     public enum SyncDirection {
         /**
          * Sync permissions from area object to the database
@@ -53,1015 +62,1345 @@ public class PermissionOverrideManager implements AutoCloseable {
         BIDIRECTIONAL
     }
     
-    // Track updated permissions for change detection
-    private final Map<String, Set<String>> updatedPlayerPermissions = new ConcurrentHashMap<>();
-    private final Set<String> updatedGroupPermissions = ConcurrentHashMap.newKeySet();
-    private final Set<String> updatedTrackPermissions = ConcurrentHashMap.newKeySet();
-    
-    private static final int CACHE_SIZE = 200;
-    private static final long CACHE_DURATION = TimeUnit.MINUTES.toMillis(5);
-    private static final String DB_FILE = "permission_overrides.db";
-
     public PermissionOverrideManager(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
-        this.dataSource = initializeDataSource();
-        this.playerPermCache = CacheBuilder.newBuilder()
-            .maximumSize(CACHE_SIZE)
-            .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
-            .build();
-        this.groupPermCache = CacheBuilder.newBuilder()
-            .maximumSize(CACHE_SIZE)
-            .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
-            .build();
-        this.trackPermCache = CacheBuilder.newBuilder()
-            .maximumSize(CACHE_SIZE)
-            .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
-            .build();
-        this.scheduler = Executors.newScheduledThreadPool(1);
-        // Pass only the plugin instance, not this (to avoid circular dependency)
+        this.databaseManager = new PermissionDatabaseManager(plugin);
+        this.permissionCache = new PermissionCache();
         this.permissionChecker = new PermissionChecker(plugin);
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
         
-        initializeDatabase();
         setupScheduledTasks();
     }
     
-    private HikariDataSource initializeDataSource() {
-        try {
-            HikariConfig config = new HikariConfig();
-            Path dbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
-            config.setJdbcUrl("jdbc:sqlite:" + dbPath);
-            config.setMaximumPoolSize(10);
-            config.setMinimumIdle(3);
-            config.setIdleTimeout(300000); // 5 minutes
-            config.setMaxLifetime(600000); // 10 minutes
-            config.setConnectionTimeout(30000);
-            config.setConnectionTestQuery("SELECT 1");
-            return new HikariDataSource(config);
-        } catch (Exception e) {
-            plugin.getLogger().error("Failed to initialize permission override database", e);
-            throw new RuntimeException("Database initialization failed", e);
-        }
-    }
-    
-    private void initializeDatabase() {
-        try (Connection conn = dataSource.getConnection();
-             Statement stmt = conn.createStatement()) {
-            
-            conn.setAutoCommit(false);
-            try {
-                // Create player permissions table
-                stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS player_permissions (
-                        area_name TEXT NOT NULL,
-                        player_name TEXT NOT NULL,
-                        permission TEXT NOT NULL,
-                        state BOOLEAN NOT NULL,
-                        last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (area_name, player_name, permission)
-                    )
-                """);
-                
-                // Create group permissions table
-                stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS group_permissions (
-                        area_name TEXT NOT NULL,
-                        group_name TEXT NOT NULL,
-                        permission TEXT NOT NULL,
-                        state BOOLEAN NOT NULL,
-                        last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (area_name, group_name, permission)
-                    )
-                """);
-                
-                // Create track permissions table
-                stmt.execute("""
-                    CREATE TABLE IF NOT EXISTS track_permissions (
-                        area_name TEXT NOT NULL,
-                        track_name TEXT NOT NULL,
-                        permission TEXT NOT NULL,
-                        state BOOLEAN NOT NULL,
-                        last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (area_name, track_name, permission)
-                    )
-                """);
-                
-                // Create indexes
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_player_perms_area ON player_permissions(area_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_player_perms_player ON player_permissions(player_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_group_perms_area ON group_permissions(area_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_group_perms_group ON group_permissions(group_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_track_perms_area ON track_permissions(area_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_track_perms_track ON track_permissions(track_name)");
-                
-                conn.commit();
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Permission override database initialized successfully");
-                }
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to initialize permission override database", e);
-            throw new RuntimeException("Database initialization failed", e);
-        }
-    }
-    
     private void setupScheduledTasks() {
-        // Schedule periodic backup
-        scheduler.scheduleAtFixedRate(
-            this::backupDatabase, 
-            6, 6, TimeUnit.HOURS
-        );
-        
-        // Schedule cache cleanup
+        // Schedule database backups
         scheduler.scheduleAtFixedRate(() -> {
-            playerPermCache.cleanUp();
-            groupPermCache.cleanUp();
-            trackPermCache.cleanUp();
-        }, 5, 5, TimeUnit.MINUTES);
+            if (!isShuttingDown.get()) {
+                try {
+                    databaseManager.backupDatabase();
+                } catch (Exception e) {
+                    logger.error("Failed to run scheduled database backup", e);
+                }
+            }
+        }, 1, 12, TimeUnit.HOURS);
+        
+        // Schedule WAL checkpoint
+        scheduler.scheduleAtFixedRate(() -> {
+            if (!isShuttingDown.get()) {
+                try {
+                    databaseManager.checkpoint();
+                } catch (Exception e) {
+                    logger.error("Failed to run scheduled WAL checkpoint", e);
+                }
+            }
+        }, 30, 30, TimeUnit.MINUTES);
     }
     
-    // Player permissions
+    // --- Player Permissions ---
+    
+    /**
+     * Get permissions for a player in an area
+     */
     public Map<String, Boolean> getPlayerPermissions(String areaName, String playerName) {
-        String cacheKey = areaName + ":" + playerName;
-        Map<String, Boolean> cachedPerms = playerPermCache.getIfPresent(cacheKey);
-        if (cachedPerms != null) {
-            return new HashMap<>(cachedPerms);
+        if (areaName == null || playerName == null) {
+            return Collections.emptyMap();
         }
         
-        Map<String, Boolean> permissions = new HashMap<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT permission, state FROM player_permissions WHERE area_name = ? AND player_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            stmt.setString(2, playerName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    permissions.put(rs.getString("permission"), rs.getBoolean("state"));
-                }
-            }
-            
-            playerPermCache.put(cacheKey, new HashMap<>(permissions));
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve player permissions", e);
-        }
-        
-        return permissions;
-    }
-    
-    public void setPlayerPermissions(String areaName, String playerName, Map<String, Boolean> permissions) throws DatabaseException {
+        // For debug logging
         if (plugin.isDebugMode()) {
-            plugin.debug("Setting permissions for player " + playerName + " in area " + areaName);
-            plugin.debug("  Permissions: " + permissions);
+            plugin.debug("Retrieved permissions for player " + playerName + " in area " + areaName);
         }
         
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    // Delete existing permissions
-                    try (PreparedStatement deleteStmt = conn.prepareStatement(
-                        "DELETE FROM player_permissions WHERE area_name = ? AND player_name = ?")) {
-                        deleteStmt.setString(1, areaName);
-                        deleteStmt.setString(2, playerName);
-                        deleteStmt.executeUpdate();
-                    }
-                    
-                    // Insert new permissions
-                    try (PreparedStatement insertStmt = conn.prepareStatement(
-                        "INSERT INTO player_permissions (area_name, player_name, permission, state) VALUES (?, ?, ?, ?)")) {
-                        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
-                            insertStmt.setString(1, areaName);
-                            insertStmt.setString(2, playerName);
-                            insertStmt.setString(3, entry.getKey());
-                            insertStmt.setBoolean(4, entry.getValue());
-                            insertStmt.addBatch();
-                        }
-                        insertStmt.executeBatch();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Update cache
-                    String cacheKey = areaName + ":" + playerName;
-                    playerPermCache.put(cacheKey, new HashMap<>(permissions));
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Successfully saved player permissions to database");
-                    }
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to save player permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to save player permissions", e);
+        String cacheKey = PermissionCache.createPlayerKey(areaName, playerName);
+        Map<String, Boolean> cached = permissionCache.getPlayerPermissions(cacheKey);
+        
+        if (cached != null) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Player " + playerName + " has " + cached.size() + " cached permissions in area " + areaName);
             }
-        }
-    }
-    
-    // Group permissions
-    public Map<String, Boolean> getGroupPermissions(String areaName, String groupName) {
-        String cacheKey = areaName + ":" + groupName;
-        Map<String, Boolean> cachedPerms = groupPermCache.getIfPresent(cacheKey);
-        if (cachedPerms != null) {
-            return new HashMap<>(cachedPerms);
-        }
-        
-        Map<String, Boolean> permissions = new HashMap<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT permission, state FROM group_permissions WHERE area_name = ? AND group_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            stmt.setString(2, groupName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    permissions.put(rs.getString("permission"), rs.getBoolean("state"));
-                }
-            }
-            
-            groupPermCache.put(cacheKey, new HashMap<>(permissions));
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve group permissions", e);
-        }
-        
-        return permissions;
-    }
-    
-    public void setGroupPermissions(String areaName, String groupName, Map<String, Boolean> permissions) throws DatabaseException {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Setting permissions for group " + groupName + " in area " + areaName);
-            plugin.debug("  Permissions: " + permissions);
-        }
-        
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    // Delete existing permissions
-                    try (PreparedStatement deleteStmt = conn.prepareStatement(
-                        "DELETE FROM group_permissions WHERE area_name = ? AND group_name = ?")) {
-                        deleteStmt.setString(1, areaName);
-                        deleteStmt.setString(2, groupName);
-                        deleteStmt.executeUpdate();
-                    }
-                    
-                    // Insert new permissions
-                    try (PreparedStatement insertStmt = conn.prepareStatement(
-                        "INSERT INTO group_permissions (area_name, group_name, permission, state) VALUES (?, ?, ?, ?)")) {
-                        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
-                            insertStmt.setString(1, areaName);
-                            insertStmt.setString(2, groupName);
-                            insertStmt.setString(3, entry.getKey());
-                            insertStmt.setBoolean(4, entry.getValue());
-                            insertStmt.addBatch();
-                        }
-                        insertStmt.executeBatch();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Update cache
-                    String cacheKey = areaName + ":" + groupName;
-                    groupPermCache.put(cacheKey, new HashMap<>(permissions));
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Successfully saved group permissions to database");
-                    }
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to save group permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to save group permissions", e);
-            }
-        }
-    }
-    
-    // Track permissions
-    public Map<String, Boolean> getTrackPermissions(String areaName, String trackName) {
-        String cacheKey = areaName + ":" + trackName;
-        Map<String, Boolean> cachedPerms = trackPermCache.getIfPresent(cacheKey);
-        if (cachedPerms != null) {
-            return new HashMap<>(cachedPerms);
-        }
-        
-        Map<String, Boolean> permissions = new HashMap<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT permission, state FROM track_permissions WHERE area_name = ? AND track_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            stmt.setString(2, trackName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    permissions.put(rs.getString("permission"), rs.getBoolean("state"));
-                }
-            }
-            
-            trackPermCache.put(cacheKey, new HashMap<>(permissions));
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve track permissions", e);
-        }
-        
-        return permissions;
-    }
-    
-    public void setTrackPermissions(String areaName, String trackName, Map<String, Boolean> permissions) throws DatabaseException {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Setting permissions for track " + trackName + " in area " + areaName);
-            plugin.debug("  Permissions: " + permissions);
-        }
-        
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    // Delete existing permissions
-                    try (PreparedStatement deleteStmt = conn.prepareStatement(
-                        "DELETE FROM track_permissions WHERE area_name = ? AND track_name = ?")) {
-                        deleteStmt.setString(1, areaName);
-                        deleteStmt.setString(2, trackName);
-                        deleteStmt.executeUpdate();
-                    }
-                    
-                    // Insert new permissions
-                    try (PreparedStatement insertStmt = conn.prepareStatement(
-                        "INSERT INTO track_permissions (area_name, track_name, permission, state) VALUES (?, ?, ?, ?)")) {
-                        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
-                            insertStmt.setString(1, areaName);
-                            insertStmt.setString(2, trackName);
-                            insertStmt.setString(3, entry.getKey());
-                            insertStmt.setBoolean(4, entry.getValue());
-                            insertStmt.addBatch();
-                        }
-                        insertStmt.executeBatch();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Update cache
-                    String cacheKey = areaName + ":" + trackName;
-                    trackPermCache.put(cacheKey, new HashMap<>(permissions));
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Successfully saved track permissions to database");
-                    }
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to save track permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to save track permissions", e);
-            }
-        }
-    }
-    
-    // Get all permissions for an area
-    public Map<String, Map<String, Boolean>> getAllPlayerPermissions(String areaName) {
-        Map<String, Map<String, Boolean>> result = new HashMap<>();
-        
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT player_name, permission, state FROM player_permissions WHERE area_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    String playerName = rs.getString("player_name");
-                    String permission = rs.getString("permission");
-                    boolean state = rs.getBoolean("state");
-                    
-                    result.computeIfAbsent(playerName, k -> new HashMap<>())
-                          .put(permission, state);
-                }
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve all player permissions", e);
-        }
-        
-        return result;
-    }
-    
-    public Map<String, Map<String, Boolean>> getAllGroupPermissions(String areaName) {
-        Map<String, Map<String, Boolean>> result = new HashMap<>();
-        
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT group_name, permission, state FROM group_permissions WHERE area_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    String groupName = rs.getString("group_name");
-                    String permission = rs.getString("permission");
-                    boolean state = rs.getBoolean("state");
-                    
-                    result.computeIfAbsent(groupName, k -> new HashMap<>())
-                          .put(permission, state);
-                }
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve all group permissions", e);
-        }
-        
-        return result;
-    }
-    
-    public Map<String, Map<String, Boolean>> getAllTrackPermissions(String areaName) {
-        Map<String, Map<String, Boolean>> result = new HashMap<>();
-        
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT track_name, permission, state FROM track_permissions WHERE area_name = ?")) {
-            
-            stmt.setString(1, areaName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    String trackName = rs.getString("track_name");
-                    String permission = rs.getString("permission");
-                    boolean state = rs.getBoolean("state");
-                    
-                    result.computeIfAbsent(trackName, k -> new HashMap<>())
-                          .put(permission, state);
-                }
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve all track permissions", e);
-        }
-        
-        return result;
-    }
-    
-    // Area deletion and renaming
-    public void deleteAreaPermissions(String areaName) throws DatabaseException {
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    // Delete from all tables
-                    try (PreparedStatement stmt1 = conn.prepareStatement("DELETE FROM player_permissions WHERE area_name = ?");
-                         PreparedStatement stmt2 = conn.prepareStatement("DELETE FROM group_permissions WHERE area_name = ?");
-                         PreparedStatement stmt3 = conn.prepareStatement("DELETE FROM track_permissions WHERE area_name = ?")) {
-                        
-                        stmt1.setString(1, areaName);
-                        stmt1.executeUpdate();
-                        
-                        stmt2.setString(1, areaName);
-                        stmt2.executeUpdate();
-                        
-                        stmt3.setString(1, areaName);
-                        stmt3.executeUpdate();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Clear caches
-                    clearAreaFromCache(areaName);
-                    
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to delete area permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to delete area permissions", e);
-            }
-        }
-    }
-    
-    public void renameArea(String oldName, String newName) throws DatabaseException {
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    // Update all tables
-                    try (PreparedStatement stmt1 = conn.prepareStatement("UPDATE player_permissions SET area_name = ? WHERE area_name = ?");
-                         PreparedStatement stmt2 = conn.prepareStatement("UPDATE group_permissions SET area_name = ? WHERE area_name = ?");
-                         PreparedStatement stmt3 = conn.prepareStatement("UPDATE track_permissions SET area_name = ? WHERE area_name = ?")) {
-                        
-                        stmt1.setString(1, newName);
-                        stmt1.setString(2, oldName);
-                        stmt1.executeUpdate();
-                        
-                        stmt2.setString(1, newName);
-                        stmt2.setString(2, oldName);
-                        stmt2.executeUpdate();
-                        
-                        stmt3.setString(1, newName);
-                        stmt3.setString(2, oldName);
-                        stmt3.executeUpdate();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Clear caches
-                    clearAreaFromCache(oldName);
-                    
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to rename area permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to rename area permissions", e);
-            }
-        }
-    }
-    
-    // Data migration from old structure
-    public void migrateAreaPermissions(Area area) throws DatabaseException {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Migrating permissions for area " + area.getName());
+            return new HashMap<>(cached);
         }
         
         try {
-            // Migrate player permissions
-            Map<String, Map<String, Boolean>> playerPerms = area.getPlayerPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : playerPerms.entrySet()) {
-                if (!entry.getValue().isEmpty()) {
-                    setPlayerPermissions(area.getName(), entry.getKey(), entry.getValue());
-                }
-            }
-            
-            // Migrate group permissions
-            Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
-                if (!entry.getValue().isEmpty()) {
-                    setGroupPermissions(area.getName(), entry.getKey(), entry.getValue());
-                }
-            }
-            
-            // Migrate track permissions
-            Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
-                if (!entry.getValue().isEmpty()) {
-                    setTrackPermissions(area.getName(), entry.getKey(), entry.getValue());
-                }
-            }
+            Map<String, Boolean> permissions = databaseManager.getPlayerPermissions(areaName, playerName);
             
             if (plugin.isDebugMode()) {
-                plugin.debug("Successfully migrated permissions for area " + area.getName());
+                plugin.debug("Retrieved " + permissions.size() + " permissions for player " + playerName + " in area " + areaName);
+                if (permissions.isEmpty()) {
+                    plugin.debug("Player " + playerName + " has no specific permissions in area " + areaName);
+                }
             }
-        } catch (Exception e) {
-            throw new DatabaseException("Failed to migrate permissions for area " + area.getName(), e);
+            
+            permissionCache.cachePlayerPermissions(cacheKey, permissions);
+            return permissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load player permissions for {}:{}", areaName, playerName, e);
+            return Collections.emptyMap();
         }
     }
     
-    private void clearAreaFromCache(String areaName) {
-        // Clear player permissions cache
-        playerPermCache.asMap().keySet().removeIf(key -> key.startsWith(areaName + ":"));
-        
-        // Clear group permissions cache
-        groupPermCache.asMap().keySet().removeIf(key -> key.startsWith(areaName + ":"));
-        
-        // Clear track permissions cache
-        trackPermCache.asMap().keySet().removeIf(key -> key.startsWith(areaName + ":"));
-    }
-    
-    private void backupDatabase() {
-        if (isShuttingDown.get()) return;
-        
-        try {
-            Path backupDir = plugin.getDataFolder().toPath().resolve("permission_backups");
-            Files.createDirectories(backupDir);
-            
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
-            Path backupFile = backupDir.resolve(String.format("permissions_%s.db", timestamp));
-            
-            Path sourceDbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
-            
-            // Create a backup using file copy instead of SQL command
-            synchronized (dbLock) {
-                // Ensure writes are flushed to disk before copying
-                try (Connection conn = dataSource.getConnection();
-                     Statement stmt = conn.createStatement()) {
-                    // Use PRAGMA to ensure integrity before backup
-                    stmt.execute("PRAGMA wal_checkpoint(FULL)");
-                }
-                
-                // Copy the database file
-                Files.copy(sourceDbPath, backupFile, StandardCopyOption.REPLACE_EXISTING);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Successfully backed up permissions database to " + backupFile);
-                }
-            }
-        } catch (Exception e) {
-            plugin.getLogger().error("Failed to backup permissions database", e);
-        }
-    }
-    
-    @Override
-    public void close() {
-        if (!isShuttingDown.compareAndSet(false, true)) {
-            return; // Already shutting down
+    /**
+     * Set permissions for a player in an area
+     */
+    public void setPlayerPermissions(String areaName, String playerName, Map<String, Boolean> permissions) 
+            throws DatabaseException {
+        if (areaName == null || playerName == null || permissions == null) {
+            return;
         }
         
-        try {
-            // Shutdown scheduler first
-            scheduler.shutdown();
-            try {
-                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                    scheduler.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                scheduler.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-            
-            // Perform final backup
-            backupDatabase();
-            
-            // Close data source
-            if (dataSource != null && !dataSource.isClosed()) {
-                dataSource.close();
-            }
-            
-            // Clear caches
-            playerPermCache.invalidateAll();
-            groupPermCache.invalidateAll();
-            trackPermCache.invalidateAll();
-            
+        // Prevent recursion - check if we're already processing this area+player combination
+        String key = areaName + ":" + playerName;
+        Set<String> processingSet = PROCESSING_PERMISSIONS.get();
+        
+        if (processingSet.contains(key)) {
             if (plugin.isDebugMode()) {
-                plugin.debug("Permission override manager closed successfully");
+                plugin.debug("Preventing recursive player permission update for " + playerName + " in area " + areaName);
             }
-        } catch (Exception e) {
-            plugin.getLogger().error("Error during permission override manager shutdown", e);
-        }
-    }
-    
-    /**
-     * Gets the permission checker instance
-     * @return The PermissionChecker instance
-     */
-    public PermissionChecker getPermissionChecker() {
-        return permissionChecker;
-    }
-    
-    /**
-     * Synchronizes permissions for an area when it's loaded
-     * This loads all permissions from the database and updates the area's permission state
-     * 
-     * @param area The area to synchronize permissions for
-     */
-    public void synchronizeOnLoad(Area area) {
-        if (area == null) return;
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Synchronizing permissions on load for area: " + area.getName());
+            return;
         }
         
+        processingSet.add(key);
         try {
-            // Load player permissions
-            Map<String, Map<String, Boolean>> playerPerms = getAllPlayerPermissions(area.getName());
-            for (Map.Entry<String, Map<String, Boolean>> entry : playerPerms.entrySet()) {
-                try {
-                    area.setPlayerPermissions(entry.getKey(), entry.getValue());
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Synchronized player permissions for: " + entry.getKey());
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to synchronize player permissions for " + 
-                        entry.getKey() + " in area " + area.getName(), e);
-                }
-            }
+            databaseManager.savePlayerPermissions(areaName, playerName, permissions);
             
-            // Load group permissions
-            Map<String, Map<String, Boolean>> groupPerms = getAllGroupPermissions(area.getName());
-            for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
-                try {
-                    area.setGroupPermissions(entry.getKey(), entry.getValue());
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Synchronized group permissions for: " + entry.getKey());
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to synchronize group permissions for " + 
-                        entry.getKey() + " in area " + area.getName(), e);
-                }
-            }
+            // Update caches
+            String cacheKey = PermissionCache.createPlayerKey(areaName, playerName);
+            permissionCache.cachePlayerPermissions(cacheKey, permissions);
             
-            // Load track permissions
-            Map<String, Map<String, Boolean>> trackPerms = getAllTrackPermissions(area.getName());
-            for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
-                try {
-                    area.setTrackPermissions(entry.getKey(), entry.getValue());
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Synchronized track permissions for: " + entry.getKey());
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to synchronize track permissions for " + 
-                        entry.getKey() + " in area " + area.getName(), e);
-                }
-            }
+            // Invalidate any area permission caches for this area
+            invalidateCache(areaName);
             
-            if (plugin.isDebugMode()) {
-                plugin.debug("  Permission synchronization completed for: " + area.getName());
-            }
+            // Clear listeners and caches for this area
+            plugin.getListenerManager().getProtectionListener().cleanup();
         } catch (Exception e) {
-            plugin.getLogger().error("Error synchronizing permissions for area: " + area.getName(), e);
+            plugin.getLogger().error("Failed to update player permissions for " + playerName, e);
+            throw new DatabaseException("Failed to update player permissions", e);
+        } finally {
+            // Remove from processing set to allow future updates
+            processingSet.remove(key);
         }
     }
     
     /**
-     * Alias for synchronizeFromArea that follows naming convention in the DatabaseManager
-     * @param area The area to synchronize
-     * @throws DatabaseException If there is an error synchronizing the area
-     */
-    public void synchronizeOnSave(Area area) throws DatabaseException {
-        synchronizeFromArea(area);
-    }
-    
-    /**
-     * Synchronizes permissions from an area to the database
-     * This is used when permissions are modified directly on the area object
-     * 
-     * @param area The area to synchronize permissions from
-     */
-    public void synchronizeFromArea(Area area) throws DatabaseException {
-        if (area == null) return;
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Synchronizing permissions from area to database: " + area.getName());
-        }
-        
-        try {
-            // Synchronize player permissions
-            Map<String, Map<String, Boolean>> playerPerms = area.getPlayerPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : playerPerms.entrySet()) {
-                setPlayerPermissions(area.getName(), entry.getKey(), entry.getValue());
-            }
-            
-            // Synchronize group permissions
-            Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : groupPerms.entrySet()) {
-                setGroupPermissions(area.getName(), entry.getKey(), entry.getValue());
-            }
-            
-            // Synchronize track permissions
-            Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
-            for (Map.Entry<String, Map<String, Boolean>> entry : trackPerms.entrySet()) {
-                setTrackPermissions(area.getName(), entry.getKey(), entry.getValue());
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("  Permission synchronization from area completed: " + area.getName());
-            }
-        } catch (Exception e) {
-            throw new DatabaseException("Error synchronizing permissions from area: " + area.getName(), e);
-        }
-    }
-    
-    /**
-     * Delete player permissions for a specific player in an area
-     * @param areaName The name of the area
-     * @param playerName The name of the player
-     * @throws DatabaseException If there is an error deleting permissions
+     * Delete permissions for a player in an area
      */
     public void deletePlayerPermissions(String areaName, String playerName) throws DatabaseException {
-        if (plugin.isDebugMode()) {
-            plugin.debug("Deleting permissions for player " + playerName + " in area " + areaName);
+        if (areaName == null || playerName == null) {
+            return;
         }
         
-        synchronized (dbLock) {
-            try (Connection conn = dataSource.getConnection()) {
-                conn.setAutoCommit(false);
-                
-                try {
-                    try (PreparedStatement deleteStmt = conn.prepareStatement(
-                        "DELETE FROM player_permissions WHERE area_name = ? AND player_name = ?")) {
-                        deleteStmt.setString(1, areaName);
-                        deleteStmt.setString(2, playerName);
-                        deleteStmt.executeUpdate();
-                    }
-                    
-                    conn.commit();
-                    
-                    // Update cache
-                    String cacheKey = areaName + ":" + playerName;
-                    playerPermCache.invalidate(cacheKey);
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Successfully deleted player permissions from database");
-                    }
-                } catch (SQLException e) {
-                    conn.rollback();
-                    throw new DatabaseException("Failed to delete player permissions", e);
-                }
-            } catch (SQLException e) {
-                throw new DatabaseException("Failed to delete player permissions", e);
+        databaseManager.deletePlayerPermissions(areaName, playerName);
+        
+        String cacheKey = PermissionCache.createPlayerKey(areaName, playerName);
+        permissionCache.invalidatePlayerPermissions(cacheKey);
+        
+        // Remove from updated tracking
+        Set<String> playersForArea = updatedPlayerPermissions.get(areaName);
+        if (playersForArea != null) {
+            playersForArea.remove(playerName);
+            if (playersForArea.isEmpty()) {
+                updatedPlayerPermissions.remove(areaName);
             }
         }
     }
     
+    // --- Group Permissions ---
+    
     /**
-     * Get a list of area names that have permissions for a specific group
-     * @param groupName The name of the group
-     * @return A list of area names with permissions for the group
+     * Get permissions for a group in an area
      */
-    public List<String> getAreasWithGroupPermissions(String groupName) {
-        List<String> areas = new ArrayList<>();
-        
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT DISTINCT area_name FROM group_permissions WHERE group_name = ?")) {
-            
-            stmt.setString(1, groupName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    areas.add(rs.getString("area_name"));
-                }
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve areas with group permissions", e);
+    public Map<String, Boolean> getGroupPermissions(String areaName, String groupName) {
+        if (areaName == null || groupName == null) {
+            return Collections.emptyMap();
         }
         
-        return areas;
+        String cacheKey = PermissionCache.createGroupKey(areaName, groupName);
+        Map<String, Boolean> cached = permissionCache.getGroupPermissions(cacheKey);
+        
+        if (cached != null) {
+            return new HashMap<>(cached);
+        }
+        
+        try {
+            Map<String, Boolean> permissions = databaseManager.getGroupPermissions(areaName, groupName);
+            permissionCache.cacheGroupPermissions(cacheKey, permissions);
+            return permissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load group permissions for {}:{}", areaName, groupName, e);
+            return Collections.emptyMap();
+        }
     }
     
     /**
-     * Get a list of area names that have permissions for a specific track
-     * @param trackName The name of the track
-     * @return A list of area names with permissions for the track
+     * Set permissions for a group in an area
      */
-    public List<String> getAreasWithTrackPermissions(String trackName) {
-        List<String> areas = new ArrayList<>();
-        
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                 "SELECT DISTINCT area_name FROM track_permissions WHERE track_name = ?")) {
-            
-            stmt.setString(1, trackName);
-            
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    areas.add(rs.getString("area_name"));
-                }
-            }
-        } catch (SQLException e) {
-            plugin.getLogger().error("Failed to retrieve areas with track permissions", e);
+    public void setGroupPermissions(String areaName, String groupName, Map<String, Boolean> permissions) 
+            throws DatabaseException {
+        if (areaName == null || groupName == null || permissions == null) {
+            return;
         }
         
-        return areas;
+        try {
+            // Use the direct method to avoid area recreation
+            boolean success = plugin.getAreaManager().directUpdateGroupPermissions(areaName, groupName, permissions);
+            
+            if (!success) {
+                throw new DatabaseException("Failed to update group permissions using direct method");
+            }
+            
+            // Invalidation is handled by the direct method
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update group permissions for " + groupName, e);
+            throw new DatabaseException("Failed to update group permissions", e);
+        }
     }
     
     /**
-     * Invalidate the cache for a specific group's permissions in an area
-     * @param areaName The name of the area
-     * @param groupName The name of the group
+     * Set permissions for a group in an area with force flag
+     */
+    public void setGroupPermissions(String areaName, String groupName, Map<String, Boolean> permissions, boolean force) 
+            throws DatabaseException {
+        // The force flag is ignored in this implementation since we always save
+        setGroupPermissions(areaName, groupName, permissions);
+    }
+    
+    /**
+     * Invalidate group permissions cache
      */
     public void invalidateGroupPermissions(String areaName, String groupName) {
-        String cacheKey = areaName + ":" + groupName;
-        groupPermCache.invalidate(cacheKey);
+        if (areaName == null || groupName == null) {
+            return;
+        }
         
-        // Mark this group as updated for future permission checks
-        updatedGroupPermissions.add(groupName);
+        String cacheKey = PermissionCache.createGroupKey(areaName, groupName);
+        permissionCache.invalidateGroupPermissions(cacheKey);
+    }
+    
+    // --- Track Permissions ---
+    
+    /**
+     * Get permissions for a track in an area
+     */
+    public Map<String, Boolean> getTrackPermissions(String areaName, String trackName) {
+        if (areaName == null || trackName == null) {
+            return Collections.emptyMap();
+        }
         
-        if (plugin.isDebugMode()) {
-            plugin.debug("Invalidated group permissions cache for " + groupName + " in " + areaName);
+        String cacheKey = PermissionCache.createTrackKey(areaName, trackName);
+        Map<String, Boolean> cached = permissionCache.getTrackPermissions(cacheKey);
+        
+        if (cached != null) {
+            return new HashMap<>(cached);
+        }
+        
+        try {
+            Map<String, Boolean> permissions = databaseManager.getTrackPermissions(areaName, trackName);
+            permissionCache.cacheTrackPermissions(cacheKey, permissions);
+            return permissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load track permissions for {}:{}", areaName, trackName, e);
+            return Collections.emptyMap();
         }
     }
     
     /**
-     * Invalidate the cache for a specific track's permissions in an area
-     * @param areaName The name of the area
-     * @param trackName The name of the track
+     * Set permissions for a track in an area
+     */
+    public void setTrackPermissions(String areaName, String trackName, Map<String, Boolean> permissions) 
+            throws DatabaseException {
+        if (areaName == null || trackName == null || permissions == null) {
+            return;
+        }
+        
+        try {
+            // Use the direct method to avoid area recreation
+            boolean success = plugin.getAreaManager().directUpdateTrackPermissions(areaName, trackName, permissions);
+            
+            if (!success) {
+                throw new DatabaseException("Failed to update track permissions using direct method");
+            }
+            
+            // Invalidation is handled by the direct method
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to update track permissions for " + trackName, e);
+            throw new DatabaseException("Failed to update track permissions", e);
+        }
+    }
+    
+    /**
+     * Sets track permissions for an area
+     * @param area The area to set permissions for
+     * @param trackName The track name
+     * @param permissions The permissions to set
+     */
+    public void setTrackPermissions(Area area, String trackName, Map<String, Boolean> permissions) {
+        if (area == null || trackName == null || permissions == null) {
+            return;
+        }
+        
+        try {
+            // Save to database using the string version
+            setTrackPermissions(area.getName(), trackName, permissions);
+        } catch (Exception e) {
+            logger.error("Failed to save track permissions for track {} in area {}", 
+                trackName, area.getName(), e);
+        }
+    }
+    
+    /**
+     * Sets track permissions for an area with force option
+     * @param area The area to set permissions for
+     * @param trackName The track name
+     * @param permissions The permissions to set
+     * @param force Whether to force the permission change (ignored in this implementation)
+     */
+    public void setTrackPermissions(Area area, String trackName, Map<String, Boolean> permissions, boolean force) {
+        // The force parameter is ignored in this implementation
+        setTrackPermissions(area, trackName, permissions);
+    }
+    
+    /**
+     * Invalidate track permissions cache
      */
     public void invalidateTrackPermissions(String areaName, String trackName) {
-        String cacheKey = areaName + ":" + trackName;
-        trackPermCache.invalidate(cacheKey);
+        if (areaName == null || trackName == null) {
+            return;
+        }
         
-        // Mark this track as updated for future permission checks
-        updatedTrackPermissions.add(trackName);
+        String cacheKey = PermissionCache.createTrackKey(areaName, trackName);
+        permissionCache.invalidateTrackPermissions(cacheKey);
+    }
+    
+    // --- Bulk Operations ---
+    
+    /**
+     * Get all player permissions for an area
+     */
+    public Map<String, Map<String, Boolean>> getAllPlayerPermissions(String areaName) {
+        if (areaName == null) {
+            return Collections.emptyMap();
+        }
         
+        try {
+            Map<String, Map<String, Boolean>> allPermissions = databaseManager.getAllPlayerPermissions(areaName);
+            
+            // Cache individual player permissions
+            for (Map.Entry<String, Map<String, Boolean>> entry : allPermissions.entrySet()) {
+                String cacheKey = PermissionCache.createPlayerKey(areaName, entry.getKey());
+                permissionCache.cachePlayerPermissions(cacheKey, entry.getValue());
+            }
+            
+            return allPermissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load all player permissions for area {}", areaName, e);
+            return Collections.emptyMap();
+        }
+    }
+    
+    /**
+     * Get all group permissions for an area
+     */
+    public Map<String, Map<String, Boolean>> getAllGroupPermissions(String areaName) {
+        if (areaName == null) {
+            return Collections.emptyMap();
+        }
+        
+        try {
+            Map<String, Map<String, Boolean>> allPermissions = databaseManager.getAllGroupPermissions(areaName);
+            
+            // Cache individual group permissions
+            for (Map.Entry<String, Map<String, Boolean>> entry : allPermissions.entrySet()) {
+                String cacheKey = PermissionCache.createGroupKey(areaName, entry.getKey());
+                permissionCache.cacheGroupPermissions(cacheKey, entry.getValue());
+            }
+            
+            return allPermissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load all group permissions for area {}", areaName, e);
+            return Collections.emptyMap();
+        }
+    }
+    
+    /**
+     * Get all track permissions for an area
+     */
+    public Map<String, Map<String, Boolean>> getAllTrackPermissions(String areaName) {
+        if (areaName == null) {
+            return Collections.emptyMap();
+        }
+        
+        try {
+            Map<String, Map<String, Boolean>> allPermissions = databaseManager.getAllTrackPermissions(areaName);
+            
+            // Cache individual track permissions
+            for (Map.Entry<String, Map<String, Boolean>> entry : allPermissions.entrySet()) {
+                String cacheKey = PermissionCache.createTrackKey(areaName, entry.getKey());
+                permissionCache.cacheTrackPermissions(cacheKey, entry.getValue());
+            }
+            
+            return allPermissions;
+        } catch (DatabaseException e) {
+            logger.error("Failed to load all track permissions for area {}", areaName, e);
+            return Collections.emptyMap();
+        }
+    }
+    
+    /**
+     * Delete all permissions for an area.
+     * The permissions will be completely removed from the database.
+     * 
+     * @param areaName Name of the area to delete permissions for
+     * @throws DatabaseException If there is a database error
+     */
+    public void deleteAreaPermissions(String areaName) throws DatabaseException {
+        deleteAreaPermissions(areaName, false);
+    }
+    
+    /**
+     * Delete all permissions for an area, optionally preserving player permissions
+     * for later restoration.
+     * 
+     * @param areaName Name of the area to delete permissions for
+     * @param preservePlayerPermissions If true, player permissions will be returned
+     * @return Map of player permissions if preservePlayerPermissions is true, null otherwise
+     * @throws DatabaseException If there is a database error
+     */
+    public Map<String, Map<String, Boolean>> deleteAreaPermissions(String areaName, boolean preservePlayerPermissions) 
+            throws DatabaseException {
+        if (areaName == null) {
+            return null;
+        }
+        
+        // Extra debug: Log who's deleting permissions to help diagnose issues
         if (plugin.isDebugMode()) {
-            plugin.debug("Invalidated track permissions cache for " + trackName + " in " + areaName);
+            plugin.debug("PERMISSION DELETION REQUESTED for area " + areaName + 
+                        ", preservePlayerPermissions=" + preservePlayerPermissions);
+            
+            // Get stack trace to see who's calling
+            StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+            StringBuilder traceLog = new StringBuilder("Permission deletion call trace:");
+            for (int i = 2; i < Math.min(12, stackTrace.length); i++) {
+                traceLog.append("\n  ").append(i-1).append(": ").append(stackTrace[i]);
+            }
+            plugin.debug(traceLog.toString());
+            
+            // Check if this is a permission-only operation
+            if (isPermissionOnlyOperation()) {
+                plugin.debug("WARNING: Permission deletion during a permission-only operation!");
+            }
         }
+        
+        // Get current player permissions before deleting if needed
+        Map<String, Map<String, Boolean>> playerPermissions = null;
+        if (preservePlayerPermissions) {
+            // Try to get permissions from cache first
+            // If not found, get from database
+            String cacheKey = areaName.toLowerCase();
+            Set<String> playerKeys = permissionCache.getPlayerKeysForArea(cacheKey);
+            if (playerKeys != null && !playerKeys.isEmpty()) {
+                playerPermissions = new HashMap<>();
+                for (String playerName : playerKeys) {
+                    String playerKey = PermissionCache.createPlayerKey(areaName, playerName);
+                    Map<String, Boolean> perms = permissionCache.getPlayerPermissions(playerKey);
+                    if (perms != null && !perms.isEmpty()) {
+                        playerPermissions.put(playerName, new HashMap<>(perms));
+                    }
+                }
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Preserved " + playerPermissions.size() + " player permissions from cache for area " + areaName);
+                    
+                    // Show detailed permission count
+                    for (Map.Entry<String, Map<String, Boolean>> entry : playerPermissions.entrySet()) {
+                        plugin.debug("  Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                    }
+                }
+            }
+        }
+        
+        // If no permissions found in cache but we want to preserve them, get from database
+        if (preservePlayerPermissions && (playerPermissions == null || playerPermissions.isEmpty())) {
+            playerPermissions = databaseManager.deleteAreaPermissions(areaName, true);
+            
+            if (plugin.isDebugMode() && playerPermissions != null) {
+                plugin.debug("Preserved " + playerPermissions.size() + " player permissions from database for area " + areaName);
+                
+                // Show detailed permission count
+                for (Map.Entry<String, Map<String, Boolean>> entry : playerPermissions.entrySet()) {
+                    plugin.debug("  Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                }
+            }
+        } else {
+            // Delete without preserving if we already have them from cache
+            databaseManager.deleteAreaPermissions(areaName, false);
+        }
+        
+        // Invalidate caches for this area
+        permissionCache.invalidateArea(areaName);
+        
+        // Clean up updated tracking
+        updatedPlayerPermissions.remove(areaName);
+        
+        return playerPermissions;
     }
     
     /**
-     * Check if a player's permissions have been updated since last check
-     * @param areaName The name of the area
-     * @param playerName The name of the player
-     * @return true if the player's permissions have been updated
+     * Rename area permissions (when an area is renamed)
      */
-    public boolean hasUpdatedPlayerPermissions(String areaName, String playerName) {
-        Set<String> updated = updatedPlayerPermissions.get(areaName);
-        if (updated != null && updated.contains(playerName)) {
-            // Clear the update flag
-            updated.remove(playerName);
-            return true;
+    public void renameArea(String oldName, String newName) throws DatabaseException {
+        if (oldName == null || newName == null) {
+            return;
         }
-        return false;
+        
+        databaseManager.renameAreaPermissions(oldName, newName);
+        
+        // Invalidate caches for old area
+        permissionCache.invalidateArea(oldName);
     }
     
-    /**
-     * Check if a group's permissions have been updated since last check
-     * @param groupName The name of the group
-     * @return true if the group's permissions have been updated
-     */
-    public boolean hasUpdatedGroupPermissions(String groupName) {
-        if (updatedGroupPermissions.contains(groupName)) {
-            // Clear the update flag
-            updatedGroupPermissions.remove(groupName);
-            return true;
-        }
-        return false;
-    }
+    // --- Cache Management ---
     
     /**
-     * Check if a track's permissions have been updated since last check
-     * @param trackName The name of the track
-     * @return true if the track's permissions have been updated
-     */
-    public boolean hasUpdatedTrackPermissions(String trackName) {
-        if (updatedTrackPermissions.contains(trackName)) {
-            // Clear the update flag
-            updatedTrackPermissions.remove(trackName);
-            return true;
-        }
-        return false;
-    }
-    
-    /**
-     * Invalidate all caches for the given area name
-     * @param areaName The name of the area to invalidate caches for
+     * Invalidate all caches for an area
      */
     public void invalidateCache(String areaName) {
-        clearAreaFromCache(areaName);
+        if (areaName == null) {
+            return;
+        }
+        
+        permissionCache.invalidateArea(areaName);
+        permissionChecker.invalidateCache(areaName);
     }
     
     /**
      * Invalidate all caches
      */
     public void invalidateCache() {
-        playerPermCache.invalidateAll();
-        groupPermCache.invalidateAll();
-        trackPermCache.invalidateAll();
+        permissionCache.invalidateAll();
+        permissionChecker.invalidateCache();
+    }
+    
+    // --- Area Synchronization ---
+    
+    /**
+     * Synchronize permissions when loading an area
+     */
+    public void synchronizeOnLoad(Area area) {
+        if (area == null) {
+            return;
+        }
         
-        if (plugin.isDebugMode()) {
-            plugin.debug("Invalidated all permission caches");
+        try {
+            synchronizePermissions(area, SyncDirection.FROM_DATABASE);
+        } catch (DatabaseException e) {
+            logger.error("Failed to synchronize permissions on load for area {}", area.getName(), e);
         }
     }
     
     /**
-     * Synchronizes permissions between the Area object and the database
-     *
-     * @param area The area to synchronize
-     * @param direction The synchronization direction
-     * @throws DatabaseException If there is an error during synchronization
+     * Check if the operation is only modifying permissions which shouldn't trigger area recreation
+     * Permission operations use a separate database and should not cause area recreation
      */
-    public void synchronizePermissions(Area area, SyncDirection direction) throws DatabaseException {
-        if (area == null) return;
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Synchronizing permissions for area " + area.getName() + " (direction: " + direction + ")");
+    public boolean isPermissionOnlyOperation() {
+        // FIRST CHECK: Thread-local marker for permission operations
+        // This is the most reliable way to identify permission operations
+        Set<String> processingSet = PROCESSING_PERMISSIONS.get();
+        if (!processingSet.isEmpty()) {
+            // If we're already processing permissions, this is a permission-only operation
+            return true;
         }
         
-        try {
-            if (direction == SyncDirection.FROM_DATABASE || direction == SyncDirection.BIDIRECTIONAL) {
-                // Load data from database to area
-                Map<String, Map<String, Boolean>> playerPerms = getAllPlayerPermissions(area.getName());
-                Map<String, Map<String, Boolean>> groupPerms = getAllGroupPermissions(area.getName());
-                Map<String, Map<String, Boolean>> trackPerms = getAllTrackPermissions(area.getName());
-                
-                // Update area's internal maps with data from database
-                area.updateInternalPermissions(playerPerms, groupPerms, trackPerms);
-                
+        // Also check for stack trace markers from permission operations
+        // Get the current stack trace to detect if we're being called from an Area permission method
+        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+        String className = null;
+        String methodName = null;
+        
+        // Get the class and method that's calling us
+        for (int i = 2; i < stackTrace.length; i++) {
+            className = stackTrace[i].getClassName();
+            methodName = stackTrace[i].getMethodName();
+            
+            // If we're called from an Area class with a permission method
+            if (className.contains("Area") && 
+                (methodName.contains("Permission") || methodName.contains("permission"))) {
                 if (plugin.isDebugMode()) {
-                    plugin.debug("  Updated area from database: " + 
-                        playerPerms.size() + " player permissions, " + 
-                        groupPerms.size() + " group permissions, " +
-                        trackPerms.size() + " track permissions");
+                    plugin.debug("Detected permission-only operation from " + className + "." + methodName);
+                }
+                return true;
+            }
+        }
+        
+        // SECOND CHECK: Stack trace analysis
+        // Check for clear permission method names in the stack trace
+        for (StackTraceElement element : stackTrace) {
+            methodName = element.getMethodName();
+            className = element.getClassName();
+            
+            // Look for permission-related methods
+            if ((methodName.contains("Permission") || methodName.contains("permission")) && 
+                (methodName.startsWith("set") || methodName.startsWith("get") || 
+                 methodName.startsWith("save") || methodName.startsWith("update") ||
+                 methodName.startsWith("synchronize"))) {
+                
+                // If we're directly in a permission method, this is a permission-only operation
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Detected permission operation from method: " + className + "." + methodName);
+                }
+                return true;
+            }
+            
+            // Also check for form handler classes that work with permissions
+            if (className.contains("Permission") || 
+                (className.contains("form") && className.contains("handler") && 
+                 (methodName.contains("Permission") || methodName.contains("permission")))) {
+                return true;
+            }
+        }
+        
+        // NOT a permission-only operation, allow area recreation
+        return false;
+    }
+    
+    /**
+     * Synchronize permissions when saving an area
+     * This is called from the DatabaseManager.saveArea and DatabaseManager.updateArea methods
+     */
+    public void synchronizeOnSave(Area area) throws DatabaseException {
+        if (area == null) {
+            return;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Starting permission synchronization on save for area: " + area.getName());
+        }
+        
+        // We only want to save permissions to the database here
+        try {
+            // Check if this is a permission-only operation that shouldn't cause area recreation
+            boolean permissionOnly = isPermissionOnlyOperation();
+            if (permissionOnly && plugin.isDebugMode()) {
+                plugin.debug("Detected permission-only operation - will skip area recreation");
+            }
+            
+            synchronizePermissions(area, SyncDirection.TO_DATABASE);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Successfully synchronized permissions to database for area: " + area.getName());
+            }
+        } catch (DatabaseException e) {
+            // Log the error but don't throw it - we don't want to fail the main area save operation
+            logger.error("Failed to synchronize permissions on save for area: " + area.getName(), e);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("ERROR: Failed to synchronize permissions for area: " + area.getName());
+                plugin.debug("  Error: " + e.getMessage());
+                plugin.debug("  Will attempt to force flush the permissions to ensure persistence");
+            }
+            
+            // Try to force flush the permissions
+            try {
+                forceFlushPermissions();
+            } catch (Exception flushEx) {
+                logger.error("Failed to force flush permissions after sync error", flushEx);
+            }
+        }
+    }
+    
+    /**
+     * Synchronize permissions for an area from database to area object
+     * or from area object to database based on the direction
+     */
+    public void synchronizePermissions(Area area, SyncDirection direction) throws DatabaseException {
+        if (area == null) {
+            return;
+        }
+        
+        String areaName = area.getName();
+        
+        // Prevent recursion - check if we're already synchronizing this area
+        String syncKey = "sync:" + areaName + ":" + direction;
+        Set<String> processingSet = PROCESSING_PERMISSIONS.get();
+        
+        if (processingSet.contains(syncKey)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive permission synchronization for area " + areaName + " (direction: " + direction + ")");
+            }
+            return; // Skip the synchronization to prevent recursive loop
+        }
+        
+        processingSet.add(syncKey);
+        try {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Synchronizing permissions for area " + areaName + " (direction: " + direction + ")");
+            }
+            
+            // Track errors for error reporting
+            List<String> errors = new ArrayList<>();
+            
+            if (direction == SyncDirection.FROM_DATABASE || direction == SyncDirection.BIDIRECTIONAL) {
+                try {
+                    // Before fetching, check if we have permissions in memory that should be preserved
+                    Map<String, Map<String, Boolean>> existingPlayerPerms = area.getInternalPlayerPermissions();
+                    boolean hasExistingPermissions = existingPlayerPerms != null && !existingPlayerPerms.isEmpty();
+                    
+                    if (hasExistingPermissions && plugin.isDebugMode()) {
+                        plugin.debug("  Area has existing player permissions in memory before database sync: " + 
+                                   existingPlayerPerms.size() + " players");
+                        for (Map.Entry<String, Map<String, Boolean>> entry : existingPlayerPerms.entrySet()) {
+                            plugin.debug("    Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                        }
+                    }
+                    
+                    // Load all permissions from the database
+                    Map<String, Map<String, Boolean>> playerPermissions = getAllPlayerPermissions(areaName);
+                    Map<String, Map<String, Boolean>> groupPermissions = getAllGroupPermissions(areaName);
+                    Map<String, Map<String, Boolean>> trackPermissions = getAllTrackPermissions(areaName);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Loaded from database: " +
+                            playerPermissions.size() + " player entries, " +
+                            groupPermissions.size() + " group entries, " +
+                            trackPermissions.size() + " track entries");
+                        
+                        if (!playerPermissions.isEmpty()) {
+                            plugin.debug("  Player permissions detail:");
+                            for (Map.Entry<String, Map<String, Boolean>> entry : playerPermissions.entrySet()) {
+                                plugin.debug("    Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                            }
+                        }
+                    }
+                    
+                    // If we got empty player permissions from the database but we have in-memory data,
+                    // don't overwrite with empty data - this is critical to prevent permission loss
+                    if (playerPermissions.isEmpty() && hasExistingPermissions) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Database returned empty player permissions but area has " + 
+                                       existingPlayerPerms.size() + " players in memory - keeping memory data");
+                            
+                            // Verify from database directly to see if this is a real issue
+                            try {
+                                Connection conn = getConnection();
+                                try (PreparedStatement stmt = conn.prepareStatement(
+                                         "SELECT COUNT(*) FROM player_permissions WHERE area_name = ?")) {
+                                    stmt.setString(1, areaName);
+                                    ResultSet rs = stmt.executeQuery();
+                                    if (rs.next()) {
+                                        int count = rs.getInt(1);
+                                        plugin.debug("  Direct database query found " + count + 
+                                                   " player permission entries for area " + areaName);
+                                        
+                                        if (count > 0) {
+                                            plugin.debug("  WARNING: Database has permissions but loader returned empty map!" +
+                                                       " This could indicate a database loading issue");
+                                        }
+                                    }
+                                    rs.close();
+                                }
+                                conn.close();
+                            } catch (Exception e) {
+                                plugin.debug("  Failed to perform direct database check: " + e.getMessage());
+                            }
+                        }
+                        
+                        // Use the existing permissions instead
+                        playerPermissions = new HashMap<>(existingPlayerPerms);
+                    }
+                    
+                    // Update area's permissions in a single call to avoid multiple invalidations
+                    area.updateInternalPermissions(playerPermissions, groupPermissions, trackPermissions);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Successfully updated area object with permissions");
+                        // Verify permissions were actually updated
+                        Map<String, Map<String, Boolean>> verifiedPerms = area.getInternalPlayerPermissions();
+                        if (verifiedPerms != null) {
+                            plugin.debug("  Verified area now has " + verifiedPerms.size() + " player permissions");
+                            for (Map.Entry<String, Map<String, Boolean>> entry : verifiedPerms.entrySet()) {
+                                plugin.debug("    Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                            }
+                        } else {
+                            plugin.debug("  WARNING: Area still has null player permissions after update!");
+                        }
+                    }
+                } catch (Exception e) {
+                    String error = "Failed to load permissions from database: " + e.getMessage();
+                    logger.error(error, e);
+                    errors.add(error);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  " + error);
+                        plugin.debug("  Error details: " + e.toString());
+                    }
                 }
             }
             
             if (direction == SyncDirection.TO_DATABASE || direction == SyncDirection.BIDIRECTIONAL) {
-                // Save area data to database
-                synchronizeFromArea(area);
+                try {
+                    // This synchronizes the area's permissions to the database
+                    // Get player permissions from the area
+                    Map<String, Map<String, Boolean>> playerPermissions = area.getPlayerPermissions();
+                    
+                    // Get group permissions from the area
+                    Map<String, Map<String, Boolean>> groupPermissions = area.getGroupPermissions();
+                    
+                    // Get track permissions from the area
+                    Map<String, Map<String, Boolean>> trackPermissions = area.getTrackPermissions();
+                    
+                    if (plugin.isDebugMode()) {
+                        int playerEntries = 0;
+                        int groupEntries = 0;
+                        int trackEntries = 0;
+                        
+                        for (Map<String, Boolean> perms : playerPermissions.values()) {
+                            playerEntries += perms.size();
+                        }
+                        
+                        for (Map<String, Boolean> perms : groupPermissions.values()) {
+                            groupEntries += perms.size();
+                        }
+                        
+                        for (Map<String, Boolean> perms : trackPermissions.values()) {
+                            trackEntries += perms.size();
+                        }
+                        
+                        plugin.debug("  Saving to database: " +
+                            playerPermissions.size() + " players (" + playerEntries + " total permissions), " +
+                            groupPermissions.size() + " groups (" + groupEntries + " total permissions), " +
+                            trackPermissions.size() + " tracks (" + trackEntries + " total permissions)");
+                        
+                        // FIX: Log more details about player permissions
+                        if (!playerPermissions.isEmpty()) {
+                            plugin.debug("  Player permissions detail for database save:");
+                            for (Map.Entry<String, Map<String, Boolean>> entry : playerPermissions.entrySet()) {
+                                plugin.debug("    Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+                            }
+                        }
+                    }
+                    
+                    // Save each permission type with its own error handling
+                    int successCount = 0;
+                    
+                    // Save player permissions
+                    for (Map.Entry<String, Map<String, Boolean>> entry : playerPermissions.entrySet()) {
+                        try {
+                            databaseManager.savePlayerPermissions(areaName, entry.getKey(), entry.getValue());
+                            successCount++;
+                        } catch (Exception e) {
+                            String error = "Failed to save player permissions for " + entry.getKey() + ": " + e.getMessage();
+                            logger.error(error, e);
+                            errors.add(error);
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  " + error);
+                            }
+                        }
+                    }
+                    
+                    // Save group permissions
+                    for (Map.Entry<String, Map<String, Boolean>> entry : groupPermissions.entrySet()) {
+                        try {
+                            databaseManager.saveGroupPermissions(areaName, entry.getKey(), entry.getValue());
+                            successCount++;
+                        } catch (Exception e) {
+                            String error = "Failed to save group permissions for " + entry.getKey() + ": " + e.getMessage();
+                            logger.error(error, e);
+                            errors.add(error);
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  " + error);
+                            }
+                        }
+                    }
+                    
+                    // Save track permissions
+                    for (Map.Entry<String, Map<String, Boolean>> entry : trackPermissions.entrySet()) {
+                        try {
+                            databaseManager.saveTrackPermissions(areaName, entry.getKey(), entry.getValue());
+                            successCount++;
+                        } catch (Exception e) {
+                            String error = "Failed to save track permissions for " + entry.getKey() + ": " + e.getMessage();
+                            logger.error(error, e);
+                            errors.add(error);
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("  " + error);
+                            }
+                        }
+                    }
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Successfully saved " + successCount + " permission entries to database");
+                        plugin.debug("  Forcing database checkpoint to ensure persistence");
+                    }
+                    
+                    // Force WAL checkpoint to ensure changes are persisted
+                    databaseManager.forceWalCheckpoint();
+                    
+                    // Invalidate cache to ensure we get fresh data next time
+                    invalidateCache(areaName);
+                } catch (Exception e) {
+                    String error = "Failed to save permissions to database: " + e.getMessage();
+                    logger.error(error, e);
+                    errors.add(error);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  " + error);
+                    }
+                }
+            }
+            
+            if (!errors.isEmpty()) {
+                throw new DatabaseException("Failed to synchronize permissions for area " + areaName + 
+                                           ": " + String.join("; ", errors));
+            }
+        } finally {
+            // Clean up - remove from processing set
+            processingSet.remove(syncKey);
+        }
+    }
+    
+    /**
+     * Synchronize permissions from an area to the database
+     */
+    public void synchronizeFromArea(Area area) throws DatabaseException {
+        if (area == null) {
+            return;
+        }
+        
+        String areaName = area.getName();
+        
+        // Prevent recursion - check if we're already synchronizing this area
+        String syncKey = "sync_from:" + areaName;
+        Set<String> processingSet = PROCESSING_PERMISSIONS.get();
+        
+        if (processingSet.contains(syncKey)) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Preventing recursive synchronization from area " + areaName);
+            }
+            return;
+        }
+        
+        processingSet.add(syncKey);
+        try {
+            synchronizePermissions(area, SyncDirection.TO_DATABASE);
+        } finally {
+            processingSet.remove(syncKey);
+        }
+    }
+    
+    // --- Additional Methods ---
+    
+    /**
+     * Check if a player has updated permissions for an area
+     */
+    public boolean hasUpdatedPlayerPermissions(String areaName, String playerName) {
+        if (areaName == null || playerName == null) {
+            return false;
+        }
+        
+        Set<String> playersForArea = updatedPlayerPermissions.get(areaName);
+        return playersForArea != null && playersForArea.contains(playerName);
+    }
+    
+    /**
+     * Check if a group has updated permissions
+     */
+    public boolean hasUpdatedGroupPermissions(String groupName) {
+        return groupName != null && updatedGroupPermissions.contains(groupName);
+    }
+    
+    /**
+     * Check if a track has updated permissions
+     */
+    public boolean hasUpdatedTrackPermissions(String trackName) {
+        return trackName != null && updatedTrackPermissions.contains(trackName);
+    }
+    
+    /**
+     * Get areas that have permissions for a group
+     */
+    public List<String> getAreasWithGroupPermissions(String groupName) {
+        if (groupName == null) {
+            return Collections.emptyList();
+        }
+        
+        try {
+            return databaseManager.getAreasWithGroupPermissions(groupName);
+        } catch (DatabaseException e) {
+            logger.error("Failed to get areas with group permissions for {}", groupName, e);
+            return Collections.emptyList();
+        }
+    }
+    
+    /**
+     * Get areas that have permissions for a track
+     */
+    public List<String> getAreasWithTrackPermissions(String trackName) {
+        if (trackName == null) {
+            return Collections.emptyList();
+        }
+        
+        try {
+            return databaseManager.getAreasWithTrackPermissions(trackName);
+        } catch (DatabaseException e) {
+            logger.error("Failed to get areas with track permissions for {}", trackName, e);
+            return Collections.emptyList();
+        }
+    }
+    
+    /**
+     * Get the permission checker instance
+     */
+    public PermissionChecker getPermissionChecker() {
+        return permissionChecker;
+    }
+    
+    /**
+     * Gets a database connection from the database manager
+     * @return A SQL connection
+     * @throws SQLException If there is an error getting the connection
+     */
+    public Connection getConnection() throws SQLException {
+        return databaseManager.getConnection();
+    }
+    
+    /**
+     * Saves all permissions to the database
+     * This iterates through all areas and ensures their permissions are synchronized
+     */
+    public void saveAllPermissions() {
+        if (plugin.isDebugMode()) {
+            plugin.debug("Starting to save all permission overrides to the database...");
+        }
+        
+        int success = 0;
+        int failure = 0;
+        List<String> failedAreas = new ArrayList<>();
+        
+        try {
+            // Get all areas
+            List<Area> allAreas = plugin.getAreaManager().getAllAreas();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Found " + allAreas.size() + " areas to process");
+            }
+            
+            // Process each area
+            for (Area area : allAreas) {
+                String areaName = area.getName();
+                
+                try {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Synchronizing permissions for area: " + areaName);
+                    }
+                    
+                    synchronizePermissions(area, SyncDirection.TO_DATABASE);
+                    success++;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Successfully synchronized permissions for area: " + areaName);
+                    }
+                } catch (Exception e) {
+                    failure++;
+                    failedAreas.add(areaName);
+                    logger.error("Failed to save permissions for area: " + areaName, e);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Failed to synchronize permissions for area: " + areaName);
+                        plugin.debug("  Error: " + e.getMessage());
+                    }
+                }
+            }
+            
+            // Force a checkpoint to ensure all changes are written
+            try {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Forcing final database checkpoint to ensure persistence");
+                }
+                
+                databaseManager.checkpoint();
                 
                 if (plugin.isDebugMode()) {
-                    plugin.debug("  Updated database from area");
+                    plugin.debug("Checkpoint completed successfully");
+                }
+            } catch (Exception e) {
+                logger.error("Failed to perform final database checkpoint", e);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Failed to perform final checkpoint: " + e.getMessage());
+                }
+            }
+            
+            if (plugin.isDebugMode() || success > 0 || failure > 0) {
+                String message = String.format("Permission save complete: %d areas successful, %d areas failed", 
+                    success, failure);
+                
+                if (failure > 0) {
+                    message += " (Failed areas: " + String.join(", ", failedAreas) + ")";
+                }
+                
+                logger.info(message);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug(message);
                 }
             }
         } catch (Exception e) {
-            throw new DatabaseException("Error synchronizing permissions for area: " + area.getName(), e);
+            logger.error("Failed to save all permission overrides", e);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Critical error during permission save: " + e.getMessage());
+            }
         }
+    }
+    
+    /**
+     * Forces a database checkpoint and ensures all permissions are flushed to disk.
+     * Call this method after setting important permissions to ensure they're persisted.
+     */
+    public void forceFlushPermissions() {
+        try {
+            // Run a WAL checkpoint to ensure changes are written to the main database file
+            databaseManager.checkpoint();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Forced permission database checkpoint to ensure changes are persisted");
+            }
+        } catch (Exception e) {
+            logger.error("Failed to force flush permissions to disk", e);
+        }
+    }
+    
+    /**
+     * Rebuilds the permission database from scratch.
+     * This is a drastic measure to be used only when the database is corrupted.
+     * After rebuilding the database, this method will try to repopulate it with
+     * permissions from all areas.
+     */
+    public void rebuildPermissionDatabase() {
+        logger.warn("Rebuilding permission database and repopulating from areas...");
+        
+        try {
+            // Backup the current database first
+            databaseManager.backupDatabase();
+            
+            // Rebuild the database schema
+            databaseManager.rebuildDatabase();
+            
+            // Clear all caches
+            invalidateCache();
+            
+            // Repopulate the database with permissions from all areas
+            for (Area area : plugin.getAreaManager().getAllAreas()) {
+                try {
+                    logger.info("Repopulating permissions for area: " + area.getName());
+                    synchronizePermissions(area, SyncDirection.TO_DATABASE);
+                } catch (Exception e) {
+                    logger.error("Failed to repopulate permissions for area: " + area.getName(), e);
+                }
+            }
+            
+            // Force checkpoint to ensure all changes are written
+            databaseManager.checkpoint();
+            
+            logger.info("Permission database rebuild complete");
+        } catch (Exception e) {
+            logger.error("Failed to rebuild permission database", e);
+        }
+    }
+    
+    /**
+     * Debug method to dump player permissions directly from the database
+     * This bypasses all caches and directly queries the database
+     */
+    public void debugDumpPlayerPermissions(String areaName, String playerName) throws DatabaseException {
+        databaseManager.debugDumpPlayerPermissions(areaName, playerName);
+    }
+    
+    /**
+     * Checks if an area's permissions are consistent between the area object and the database.
+     * This is useful for debugging purposes.
+     * 
+     * @param area The area to check
+     * @return A report of any inconsistencies found
+     */
+    public String checkPermissionConsistency(Area area) {
+        if (area == null) {
+            return "Cannot check consistency for null area";
+        }
+        
+        StringBuilder report = new StringBuilder();
+        String areaName = area.getName();
+        
+        report.append("Permission consistency check for area: ").append(areaName).append("\n");
+        
+        try {
+            // Get permissions from area object
+            Map<String, Map<String, Boolean>> areaPlayerPerms = area.getPlayerPermissions();
+            Map<String, Map<String, Boolean>> areaGroupPerms = area.getGroupPermissions();
+            Map<String, Map<String, Boolean>> areaTrackPerms = area.getTrackPermissions();
+            
+            // Get permissions from database
+            Map<String, Map<String, Boolean>> dbPlayerPerms = getAllPlayerPermissions(areaName);
+            Map<String, Map<String, Boolean>> dbGroupPerms = getAllGroupPermissions(areaName);
+            Map<String, Map<String, Boolean>> dbTrackPerms = getAllTrackPermissions(areaName);
+            
+            // Check player permissions
+            report.append("Player permissions:\n");
+            report.append("  Area object: ").append(areaPlayerPerms.size()).append(" players\n");
+            report.append("  Database: ").append(dbPlayerPerms.size()).append(" players\n");
+            
+            // Find players in area but not in db
+            for (String player : areaPlayerPerms.keySet()) {
+                if (!dbPlayerPerms.containsKey(player)) {
+                    report.append("  Player '").append(player).append("' exists in area object but not in database\n");
+                }
+            }
+            
+            // Find players in db but not in area
+            for (String player : dbPlayerPerms.keySet()) {
+                if (!areaPlayerPerms.containsKey(player)) {
+                    report.append("  Player '").append(player).append("' exists in database but not in area object\n");
+                }
+            }
+            
+            // Check for differences in player permissions
+            for (String player : areaPlayerPerms.keySet()) {
+                if (dbPlayerPerms.containsKey(player)) {
+                    Map<String, Boolean> areaPerms = areaPlayerPerms.get(player);
+                    Map<String, Boolean> dbPerms = dbPlayerPerms.get(player);
+                    
+                    if (!areaPerms.equals(dbPerms)) {
+                        report.append("  Player '").append(player).append("' has different permissions:\n");
+                        report.append("    Area permissions size: ").append(areaPerms.size()).append("\n");
+                        report.append("    DB permissions size: ").append(dbPerms.size()).append("\n");
+                        
+                        // Find permissions in area but not in db
+                        for (Map.Entry<String, Boolean> entry : areaPerms.entrySet()) {
+                            String perm = entry.getKey();
+                            Boolean value = entry.getValue();
+                            
+                            if (!dbPerms.containsKey(perm)) {
+                                report.append("    Permission '").append(perm)
+                                      .append("' with value '").append(value)
+                                      .append("' exists in area object but not in database\n");
+                            } else if (!dbPerms.get(perm).equals(value)) {
+                                report.append("    Permission '").append(perm)
+                                      .append("' has different values: area=").append(value)
+                                      .append(", db=").append(dbPerms.get(perm)).append("\n");
+                            }
+                        }
+                        
+                        // Find permissions in db but not in area
+                        for (Map.Entry<String, Boolean> entry : dbPerms.entrySet()) {
+                            String perm = entry.getKey();
+                            if (!areaPerms.containsKey(perm)) {
+                                report.append("    Permission '").append(perm)
+                                      .append("' with value '").append(entry.getValue())
+                                      .append("' exists in database but not in area object\n");
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Similar checks for group and track permissions
+            // Group permissions check
+            report.append("Group permissions:\n");
+            report.append("  Area object: ").append(areaGroupPerms.size()).append(" groups\n");
+            report.append("  Database: ").append(dbGroupPerms.size()).append(" groups\n");
+            
+            // Find groups in area but not in db
+            for (String group : areaGroupPerms.keySet()) {
+                if (!dbGroupPerms.containsKey(group)) {
+                    report.append("  Group '").append(group).append("' exists in area object but not in database\n");
+                }
+            }
+            
+            // Find groups in db but not in area
+            for (String group : dbGroupPerms.keySet()) {
+                if (!areaGroupPerms.containsKey(group)) {
+                    report.append("  Group '").append(group).append("' exists in database but not in area object\n");
+                }
+            }
+            
+            // Track permissions check
+            report.append("Track permissions:\n");
+            report.append("  Area object: ").append(areaTrackPerms.size()).append(" tracks\n");
+            report.append("  Database: ").append(dbTrackPerms.size()).append(" tracks\n");
+            
+            // Find tracks in area but not in db
+            for (String track : areaTrackPerms.keySet()) {
+                if (!dbTrackPerms.containsKey(track)) {
+                    report.append("  Track '").append(track).append("' exists in area object but not in database\n");
+                }
+            }
+            
+            // Find tracks in db but not in area
+            for (String track : dbTrackPerms.keySet()) {
+                if (!areaTrackPerms.containsKey(track)) {
+                    report.append("  Track '").append(track).append("' exists in database but not in area object\n");
+                }
+            }
+            
+            report.append("Consistency check complete.\n");
+            
+        } catch (Exception e) {
+            report.append("Error during consistency check: ").append(e.getMessage()).append("\n");
+            logger.error("Error checking permission consistency for area " + areaName, e);
+        }
+        
+        return report.toString();
+    }
+    
+    /**
+     * Get all player permissions for an area directly from the database, bypassing cache
+     * 
+     * @param areaName Name of the area to get permissions for
+     * @return Map of player permissions or null if none found
+     */
+    public Map<String, Map<String, Boolean>> getAllPlayerPermissionsFromDatabase(String areaName) {
+        if (areaName == null) {
+            return null;
+        }
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Getting player permissions directly from database for area: " + areaName);
+        }
+        
+        try {
+            return databaseManager.getAllPlayerPermissions(areaName);
+        } catch (DatabaseException e) {
+            plugin.getLogger().error("Failed to get player permissions from database for area " + areaName, e);
+            return null;
+        }
+    }
+    
+    /**
+     * Forces WAL checkpoint to ensure changes are written to disk
+     * This is useful when making critical permission changes
+     */
+    public void forceWalCheckpoint() throws DatabaseException {
+        if (databaseManager != null) {
+            databaseManager.forceWalCheckpoint();
+        }
+    }
+    
+    @Override
+    public void close() {
+        isShuttingDown.set(true);
+        
+        try {
+            scheduler.shutdown();
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            scheduler.shutdownNow();
+        }
+        
+        databaseManager.close();
     }
 }

@@ -60,13 +60,21 @@ public class PluginLogger implements Logger {
 
     @Override
     public void debug(String message) {
-        // Remove redundant debug mode check since plugin.debug() already handles it
+        // Forward debug messages to info level for visibility
+        if (plugin.isDebugMode()) {
+            info("[Debug] " + message);
+        }
+        // Also log to file with DEBUG level for reference
         log("DEBUG", message);
     }
 
     @Override
     public void debug(String message, Throwable t) {
-        // Remove redundant debug mode check since plugin.debug() already handles it
+        // Forward debug messages to info level for visibility
+        if (plugin.isDebugMode()) {
+            info("[Debug] " + message + (t != null ? ": " + t.getMessage() : ""));
+        }
+        // Also log to file with DEBUG level for reference
         log("DEBUG", message + (t != null ? ": " + t.getMessage() : ""));
     }
 

@@ -395,3 +395,81 @@ groups:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+# AdminAreaProtection Permission Fix
+
+This fix addresses the issue where permissions (player, group, and track) were being reset to default values (false) during area updates. The solution implements direct methods to update permissions without triggering unnecessary area recreation.
+
+## Key Changes Made
+
+### 1. Direct Permission Update Methods
+
+Added direct methods for all permission types:
+
+- `directUpdatePlayerPermissions`: For player-specific permissions
+- `directUpdateGroupPermissions`: For LuckPerms group permissions 
+- `directUpdateTrackPermissions`: For LuckPerms track permissions
+
+These methods:
+- Mark permission operations to prevent interference from other systems
+- Properly handle permission deletion before applying new permissions
+- Use direct database operations when possible
+- Update in-memory objects correctly
+- Verify permission changes to ensure they were applied
+
+### 2. Modified Permission Update Flow
+
+Updated all permission update methods to:
+- Use the direct approach for all permission updates
+- Bypass the regular area update process that was causing permission resets
+- Implement proper transaction boundaries for database operations
+- Prevent unnecessary area recreation
+
+### 3. Improved Error Handling
+
+- Added comprehensive error handling for database operations
+- Added fallback mechanisms when primary operations fail
+- Added detailed debug logging to track permission operations
+
+### 4. Cache Management
+
+- Properly invalidates all relevant caches after permission updates
+- Ensures that fresh data is loaded after operations
+
+## How It Works
+
+1. When permissions are updated, we mark the operation as a permission-only operation
+2. We delete existing permissions for the entity (player, group, or track) in the specific area
+3. We add the new permissions directly to both the database and in-memory objects
+4. We invalidate all caches to ensure fresh data is loaded
+5. We verify that the permissions were saved correctly
+
+This approach prevents unnecessary area recreation during permission updates, which was the root cause of permission resets.
+
+## Testing
+
+To test this fix:
+1. Try updating permissions for players, groups, and tracks in any area
+2. Verify that the permissions are saved correctly and persist
+3. Check the logs to ensure there's no unnecessary area recreation happening
+
+## Cleanup Tasks
+
+The following methods are now unused and should be removed:
+
+1. `savePlayerPermissions(String areaName, String playerName, Map<String, Boolean> permissions)` - Lines ~516-555
+   - Replaced by `directUpdatePlayerPermissions`
+
+2. `handlePermissionOperationInUpdate(Area area)` - Lines ~2373-2410
+   - No longer needed as permission operations are handled directly
+
+3. `getActivePlayerPermissionsBeingUpdated(String areaName)` - Lines ~2410-2430
+   - No longer needed as we use `isPermissionOperationInProgress` directly
+
+4. `hasPlayerPermissions(Area area)` - Lines ~2430-2450
+   - No longer needed with the direct approach
+
+5. `getAllPlayerPermissions(Area area)` - Lines ~2450-2470
+   - No longer needed with the direct approach
+
+Additionally, the call to `handlePermissionOperationInUpdate` in the `updateArea` method has been removed, and the call to `getActivePlayerPermissionsBeingUpdated` in the `recreateArea` method has been replaced with a direct check using `isPermissionOperationInProgress`.

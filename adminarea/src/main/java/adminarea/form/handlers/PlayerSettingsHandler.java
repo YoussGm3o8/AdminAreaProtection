@@ -38,10 +38,26 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             return null;
         }
 
+        // Get the area by name - force a fresh lookup
         Area area = plugin.getArea(areaData.getFormId());
         if (area == null) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
             return null;
+        }
+        
+        // Force refresh area data from database to avoid stale cache
+        try {
+            Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+            if (freshArea != null) {
+                area = freshArea;
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Refreshed area data from database for player permission form");
+                }
+            }
+        } catch (Exception e) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("Failed to refresh area from database: " + e.getMessage());
+            }
         }
 
         FormTrackingData playerData = plugin.getFormIdMap().get(player.getName() + PLAYER_DATA_KEY);
@@ -98,7 +114,27 @@ public class PlayerSettingsHandler extends BaseFormHandler {
     private FormWindowCustom createPlayerPermissionForm(Area area, String playerName) {
         FormWindowCustom form = new FormWindowCustom("Edit " + playerName + " Permissions");
 
-        Map<String, Boolean> currentPerms = area.getPlayerPermissions(playerName);
+        // Get the latest permissions directly from the database via PermissionOverrideManager
+        // instead of relying on potentially stale data in the area object
+        Map<String, Boolean> currentPerms;
+        try {
+            currentPerms = plugin.getPermissionOverrideManager().getPlayerPermissions(area.getName(), playerName);
+            if (currentPerms == null) {
+                currentPerms = new HashMap<>();
+                if (plugin.isDebugMode()) {
+                    plugin.debug("No permissions found in database for player " + playerName + " in area " + area.getName());
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Loaded " + currentPerms.size() + " permissions from database for player " + 
+                          playerName + " in area " + area.getName());
+            }
+        } catch (Exception e) {
+            // Fallback to area object if database access fails
+            currentPerms = area.getPlayerPermissions(playerName);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Failed to get permissions from database, using area object: " + e.getMessage());
+            }
+        }
         
         // Add header with clear instructions
         form.addElement(new ElementLabel(
@@ -176,19 +212,22 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                                     plugin.debug("Deleted all player permissions for area: " + area.getName() + " from permission_overrides database");
                                 }
                                 
-                                // Create new area with cleared player permissions
-                                Area updatedArea = AreaBuilder.fromDTO(area.toDTO())
-                                    .playerPermissions(new HashMap<>())
-                                    .build();
+                                // Create new area with cleared player permissions - FIXED: Use safer AreaBuilder approach
+                                AreaBuilder areaBuilder = AreaBuilder.fromDTO(area.toDTO());
+                                areaBuilder.playerPermissions(new HashMap<>());
+                                // We don't need to explicitly set group or track permissions as they're already part of the DTO
+                                Area updatedArea = areaBuilder.build();
                                 
                                 // Force clear caches in the area
                                 updatedArea.clearCaches();
                                 
-                                // Save the area to database to ensure changes are persisted
-                                plugin.getDatabaseManager().saveArea(updatedArea);
+                                // Use updateArea directly from AreaManager to avoid duplication
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("Using AreaManager.updateArea to update the area without duplication");
+                                }
                                 
-                                // Update area in plugin
-                                plugin.updateArea(updatedArea);
+                                // Call updateArea directly on AreaManager
+                                plugin.getAreaManager().updateArea(updatedArea);
                                 
                                 // Verify the permissions were cleared
                                 if (plugin.isDebugMode()) {
@@ -196,6 +235,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                                     plugin.debug("Verification - player permissions after reset: " + 
                                         (verifyArea != null ? verifyArea.getPlayerPermissions().size() : "null"));
                                 }
+                                
+                                // Make sure we're using the updated area instance
+                                area = plugin.getArea(area.getName());
                                 
                                 player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsReset",
                                     Map.of("area", area.getName())));
@@ -206,6 +248,10 @@ public class PlayerSettingsHandler extends BaseFormHandler {
 
                             // Clean up form data
                             plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
+                            
+                            // Update the editing area reference to ensure consistency
+                            plugin.getFormIdMap().put(player.getName() + "_editing", 
+                                new FormTrackingData(area.getName(), System.currentTimeMillis()));
                             
                             // Return to edit menu
                             plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
@@ -288,10 +334,73 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                 plugin.debug("Updated player permissions map: " + playerPerms);
             }
 
-            // Create updated area with new permissions
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .playerPermissions(playerPerms)
-                .build();
+            // IMPORTANT: Save player permissions to the database FIRST before any area updates
+            try {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Explicitly saving player permissions for player " + targetPlayer + 
+                                " in area " + area.getName());
+                    plugin.debug("  Permission count: " + newPerms.size());
+                    plugin.debug("  Permissions: " + newPerms);
+                }
+                
+                // Mark this as a permission-only operation to prevent area recreation
+                plugin.getAreaManager().markPermissionOperationInProgress(area.getName());
+                
+                // Use the direct method which bypasses area recreation
+                plugin.getPermissionOverrideManager().setPlayerPermissions(
+                    area.getName(), 
+                    targetPlayer, 
+                    newPerms
+                );
+                
+                // Force database checkpoint to ensure persistence
+                plugin.getPermissionOverrideManager().forceWalCheckpoint();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Successfully saved player permissions to PermissionOverrideManager");
+                    
+                    // Verify permissions were saved
+                    Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getPlayerPermissions(
+                        area.getName(), targetPlayer);
+                    plugin.debug("  Verification - retrieved permissions: " + 
+                               (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
+                    plugin.debug("  Verification - permissions content: " + verifyPerms);
+                    
+                    // Debug SQL query directly to see database contents
+                    try {
+                        plugin.debug("  Direct database query for player permissions:");
+                        plugin.getPermissionOverrideManager().debugDumpPlayerPermissions(area.getName(), targetPlayer);
+                    } catch (Exception e) {
+                        plugin.debug("  Failed to execute direct database query: " + e.getMessage());
+                    }
+                }
+                
+                // Force invalidate all caches for this area
+                plugin.getPermissionOverrideManager().invalidateCache(area.getName());
+                plugin.getAreaManager().invalidateAreaCache(area.getName());
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to explicitly save player permissions", e);
+                throw e;
+            }
+
+            // Create updated area with fresh permissions from the database
+            // CRITICAL: Get fresh permissions from the database
+            Map<String, Map<String, Boolean>> freshPlayerPerms = 
+                plugin.getPermissionOverrideManager().getAllPlayerPermissionsFromDatabase(area.getName());
+            
+            if (freshPlayerPerms == null || !freshPlayerPerms.containsKey(targetPlayer)) {
+                // Fallback to our manually created map if database retrieval fails
+                freshPlayerPerms = playerPerms;
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Using manual player permissions map as fallback");
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Using fresh database permissions: " + freshPlayerPerms.size() + " players");
+            }
+            
+            AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+            areaBuilder.playerPermissions(freshPlayerPerms);
+            Area updatedArea = areaBuilder.build();
 
             if (plugin.isDebugMode()) {
                 plugin.debug("Built updated area: " + updatedArea.getName());
@@ -333,7 +442,7 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                     updatedArea.toDTO().enterMessage(),
                     updatedArea.toDTO().leaveMessage(),
                     updatedArea.toDTO().trackPermissions(),
-                    playerPerms, // Use our explicitly created playerPerms map
+                    freshPlayerPerms, // Use our explicitly created playerPerms map
                     updatedArea.toDTO().potionEffects()
                 );
                 
@@ -347,55 +456,41 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                     plugin.debug("Toggle states: " + finalArea.toDTO().toggleStates());
                 }
 
-                // IMPORTANT: Explicitly save player permissions to the permission database first
-                try {
-                    plugin.getPermissionOverrideManager().setPlayerPermissions(
-                        finalArea.getName(), 
-                        targetPlayer, 
-                        newPerms
-                    );
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Explicitly saved player permissions for " + targetPlayer);
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to explicitly save player permissions", e);
-                    throw e;
-                }
-
-                // Update in database first
-                try {
-                    plugin.getDatabaseManager().saveArea(finalArea);
-                    
-                    // Force synchronize permissions to ensure they're saved
-                    plugin.getPermissionOverrideManager().synchronizeFromArea(finalArea);
-                    
-                    // Verify the save
-                    Area verifyArea = plugin.getDatabaseManager().loadArea(area.getName());
-                    if (verifyArea != null && plugin.isDebugMode()) {
-                        plugin.debug("Database save verification:");
-                        plugin.debug("Saved player permissions: " + verifyArea.getPlayerPermissions());
-                        plugin.debug("Expected player permissions: " + playerPerms);
-                        plugin.debug("Toggle states after save: " + verifyArea.toDTO().toggleStates());
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to save area to database", e);
-                    throw e;
+                // Use updateArea() instead of saveArea() to avoid duplication
+                // The updateArea() method will handle database updates and proper cache invalidation
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Using updateArea to update the area without duplication");
                 }
                 
-                // Then update in plugin
-                plugin.updateArea(finalArea);
+                // Call updateArea directly on the AreaManager to ensure proper handling
+                plugin.getAreaManager().updateArea(finalArea);
+                
+                // Finally, unmark the permission operation now that it's complete
+                plugin.getAreaManager().unmarkPermissionOperation(area.getName());
                 
                 if (plugin.isDebugMode()) {
-                    // Verify the update worked by retrieving the area again
-                    Area verifyArea = plugin.getArea(area.getName());
+                    plugin.debug("  Area updated successfully through AreaManager");
+                    
+                    // Verify the area was updated correctly
+                    Area verifyArea = plugin.getArea(finalArea.getName());
                     if (verifyArea != null) {
-                        plugin.debug("Verification - area player permissions after update: " + verifyArea.getPlayerPermissions());
-                        plugin.debug("Verification - permissions for " + targetPlayer + ": " + verifyArea.getPlayerPermissions(targetPlayer));
+                        Map<String, Map<String, Boolean>> verifyPlayerPerms = verifyArea.getPlayerPermissions();
+                        plugin.debug("  Verification - area player permissions: " + 
+                                   (verifyPlayerPerms != null ? verifyPlayerPerms.size() : "null") + " players");
+                        
+                        if (verifyPlayerPerms != null && verifyPlayerPerms.containsKey(targetPlayer)) {
+                            plugin.debug("  Verification - permissions for " + targetPlayer + ": " + 
+                                       verifyPlayerPerms.get(targetPlayer).size() + " permissions");
+                        } else {
+                            plugin.debug("  Verification - player " + targetPlayer + " not found in permissions");
+                        }
                     } else {
-                        plugin.debug("Verification failed - area not found after update");
+                        plugin.debug("  Verification - area not found: " + finalArea.getName());
                     }
                 }
+                
+                // Update our reference to use the correct area
+                area = finalArea;
                 
                 player.sendMessage(plugin.getLanguageManager().get("messages.form.playerPermissionsUpdated",
                     Map.of("player", targetPlayer, "area", area.getName())));
@@ -409,7 +504,22 @@ public class PlayerSettingsHandler extends BaseFormHandler {
 
             // Clear player selection and return to edit menu
             plugin.getFormIdMap().remove(player.getName() + PLAYER_DATA_KEY);
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+            
+            // Make sure we're using the updated area reference in the form tracking data
+            // This ensures the edit menu shows the correct area without any duplication in cache
+            plugin.getFormIdMap().put(player.getName() + "_editing", 
+                new FormTrackingData(area.getName(), System.currentTimeMillis()));
+            
+            // IMPORTANT: Force reload the area from database to avoid duplication in cache
+            Area refreshedArea = plugin.getDatabaseManager().loadArea(area.getName());
+            if (refreshedArea != null) {
+                area = refreshedArea;
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Using freshly loaded area from database to avoid duplication");
+                }
+            }
+                
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling player permissions response", e);
@@ -419,6 +529,13 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             handleCancel(player);
         }
+
+        // Force flush permissions to disk
+        plugin.getPermissionOverrideManager().forceFlushPermissions();
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("  Forced permissions to be flushed to disk");
+        }
     }
 
     @Override
@@ -426,6 +543,6 @@ public class PlayerSettingsHandler extends BaseFormHandler {
         // Clean up all form data
         plugin.getFormIdMap().remove(player.getName() + PLAYER_DATA_KEY);
         plugin.getFormIdMap().remove(player.getName() + "_resetIndex");
-        plugin.getGuiManager().openMainMenu(player);
+        cleanup(player);
     }
 }

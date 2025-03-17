@@ -52,40 +52,60 @@ public class BasicSettingsHandler extends BaseFormHandler {
             return null;
         }
 
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.basicSettings.title", 
-            Map.of("area", area.getName())));
-        
-        // Add general settings section
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.general")));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.basicSettings.labels.name"),
-            plugin.getLanguageManager().get("gui.basicSettings.labels.namePlaceholder"),
-            area.getName()
-        ));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.basicSettings.labels.priority"),
-            plugin.getLanguageManager().get("gui.basicSettings.labels.priorityPlaceholder"),
-            String.valueOf(area.getPriority())
-        ));
-        form.addElement(new ElementToggle(
-            plugin.getLanguageManager().get("gui.basicSettings.labels.showTitle"),
-            area.toDTO().showTitle()
-        ));
-        
-        // Add display settings section
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.display")));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.basicSettings.labels.enterMessage"),
-            plugin.getLanguageManager().get("gui.basicSettings.labels.enterPlaceholder"),
-            area.toDTO().enterMessage()
-        ));
-        form.addElement(new ElementInput(
-            plugin.getLanguageManager().get("gui.basicSettings.labels.leaveMessage"),
-            plugin.getLanguageManager().get("gui.basicSettings.labels.leavePlaceholder"),
-            area.toDTO().leaveMessage()
-        ));
-        
-        return form;
+        try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Reloaded area from database for basic settings form");
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database", e);
+            }
+            
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.basicSettings.title", 
+                Map.of("area", area.getName())));
+            
+            // Add general settings section
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.general")));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.name"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.namePlaceholder"),
+                area.getName()
+            ));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.priority"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.priorityPlaceholder"),
+                String.valueOf(area.getPriority())
+            ));
+            form.addElement(new ElementToggle(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.showTitle"),
+                area.toDTO().showTitle()
+            ));
+            
+            // Add display settings section
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.display")));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.enterMessage"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.enterPlaceholder"),
+                area.toDTO().enterMessage()
+            ));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.leaveMessage"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.leavePlaceholder"),
+                area.toDTO().leaveMessage()
+            ));
+            
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating basic settings form", e);
+            return null;
+        }
     }
 
     @Override
@@ -127,7 +147,7 @@ public class BasicSettingsHandler extends BaseFormHandler {
                     return;
                 }
             } catch (NumberFormatException e) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.priority.notNumber"));
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.area.priority.notNumber"));
                 plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
                 return;
             }

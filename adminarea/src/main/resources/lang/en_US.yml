@@ -6,16 +6,16 @@ messages:
   reload: "§aConfiguration reloaded successfully."
   noPermission: "§cYou don't have permission to do this."
   positionsNotSet: "{prefix}§cYou need to set both positions first."
-  
+  areaNotFound: "{prefix}§cArea '{area}' not found."
   # Area related messages
   area:
-    notFound: "{prefix}§cArea '{area}' not found."
     exists: "{prefix}§cAn area with the name {area} already exists."
     globalExists: "{prefix}§cA global area already exists for world {world}: {area}"
     created: "{prefix}§aArea §e{area}§a created successfully in world §7{world}§a at priority §e{priority}"
     deleted: "{prefix}§aArea §e{area}§a deleted successfully. World: §7{world}"
     updated: "{prefix}§aArea §e{area}§a updated successfully. Changed {count} settings."
     copied: "{prefix}§aArea §e{area}§a copied successfully."
+    noChanges: "{prefix}§cNo changes were made to the area."
     list:
       empty: "{prefix}§cNo protected areas found."
       header: "§2Protected Areas:"
@@ -26,11 +26,14 @@ messages:
       success: "{prefix}Started visualization for area: {area}"
       complete: "{prefix}§aVisualization stopped for area '{area}'."
       tooLarge: "{prefix}§cThis area is too large to visualize (over 1,000,000 blocks)."
+      notInArea: "§7You are not in any protected area."
+      currentLocation: "§2You are currently in the following area:\n"
     stats:
       header: "{prefix}§2Statistics for area '{area}':"
       general: "§7Size: {size}\n§7Priority: {priority}"
       activity: "§7Visits: {visits}\n§7Blocks broken: {blocks_broken}\n§7Blocks placed: {blocks_placed}\n§7PvP fights: {pvp_fights}\n§7Container accesses: {container_accesses}"
-
+    currentLocationmessages:
+      protectedAreaEntry: "§2You are currently in the following area:\n§7{area}\n§7World: {world}\n§7Priority: {priority}"
   # Debug messages
   debug:
     enabled: "{prefix}§aDebug mode enabled."
@@ -42,15 +45,6 @@ messages:
   # Missing messages found in AreaCommand
   noProtectedAreas: "{prefix}§cNo protected areas found."
   protectedAreasHeader: "§2Protected Areas:"
-  usage:
-    toggle: "§cUsage: /area toggle <on|off> <toggleName>"
-  error:
-    invalidToggle: "§cInvalid toggle: {toggle}"
-    toggleUpdateFailed: "§cFailed to update toggle state"
-  toggleUpdated: "§aToggle {toggle} {state}"
-  toggleList:
-    header: "§2Available Toggles:"
-    usage: "§7Use /area toggle <on|off> <toggleName>"
   permissions:
     createArea: "{prefix}§cYou don't have permission to create areas"
     listAreas: "{prefix}§cYou don't have permission to list areas"
@@ -88,6 +82,7 @@ messages:
     vehicleBreak: "{prefix}§cYou cannot destroy vehicles in {area}"
     vehiclePlace: "{prefix}§cYou cannot place vehicles in {area}"
     vehicleEnter: "{prefix}§cYou cannot enter vehicles in {area}"
+    vehicleExit: "{prefix}§cYou cannot exit vehicles in {area}"
     vehicleDamage: "{prefix}§cYou cannot damage vehicles in {area}"
     redstone: "{prefix}§cRedstone is not allowed in {area}"
     fire: "{prefix}§cFire is not allowed in {area}"
@@ -96,18 +91,24 @@ messages:
     pistons: "{prefix}§cPistons are not allowed in {area}"
     hangingBreak: "{prefix}§cYou cannot break hanging items in {area}"
     blockSpread: "{prefix}§cBlock spreading is not allowed in {area}"
+    plantGrowth: "{prefix}§cPlant growth is not allowed in {area}"
+    farmlandTrampling: "{prefix}§cYou cannot trample farmland in {area}"
     breeding: "{prefix}§cBreeding animals is not allowed in {area}"
     taming: "{prefix}§cTaming animals is not allowed in {area}"
     projectile: "{prefix}§cShooting projectiles is not allowed in {area}"
     itemRotation: "{prefix}§cYou cannot rotate items in frames in {area}"
     potionEffect: "{prefix}§c{effect} potion effect is not allowed in {area}"
     monsterTarget: "{prefix}§cMonsters in this area cannot target players"
+    monsterSpawn: "{prefix}§cMonster spawning is not allowed in {area}"
+    animalSpawn: "{prefix}§cAnimal spawning is not allowed in {area}"
     denied: "{prefix}§cThis area is protected"
     enderPearl: "{prefix}§cEnderpearls are not allowed in {area}"
     bucket: "{prefix}§cYou cannot use buckets in {area}"
     door: "{prefix}§cYou cannot open doors in {area}"
     noCreativeFlight: "{prefix}§cYou cannot fly in {area} with creative flight, add a permission to the player to allow it"
     noFlight: "{prefix}§cYou cannot fly in {area}"
+    animalSpawn: "{prefix}§cYou cannot spawn animals in {area}"
+    xpDrop: "{prefix}§cYour xp was not dropped in {area}!"
   commands:
     playerOnly: "{prefix}§cThis command can only be used in-game"
     usage: "§eUsage: /area <create|edit|delete|list|wand>"
@@ -124,19 +125,15 @@ messages:
       delete: "{prefix}§e/area delete <name> §7- Delete area"
       list: "{prefix}§e/area list §7- List all areas"
       merge: "{prefix}§e/area merge <area1> <area2> §7- Merge areas"
-      visualize: "{prefix}§e/area visualize <name> §7- Show boundaries"
-      here: "{prefix}§e/area here §7- Set positions to current"
+      visualize: "{prefix}§e/area visualize <n> §7- Show boundaries"
+      here: "{prefix}§e/area here §7- Show what area you're currently in"
       expand: "{prefix}§e/area expand <dir> <amount> §7- Expand selection"
       stats: "{prefix}§e/area stats <name> [export|reset] §7- View area statistics"
       reload: "{prefix}§e/area reload §7- Reload plugin configuration"
+      cachereload: "§e/area cache-reload [areaName] §7- Force reload area toggle states from database"
       undo: "{prefix}§e/area undo §7- Undo last selection"
       clear: "{prefix}§e/area clear §7- Clear selection points"
       debug: "{prefix}§e/area debug [on|off] §7- Toggle debug mode"
-      toggle: "{prefix}§e/area toggle <on|off|list> [permission] §7- Toggle area permissions"
-      toggleHeader: "{prefix}§2Toggle Commands:"
-      toggleArea: "{prefix}§e/area toggle <toggle> §7- Toggle area protection"
-      toggleList: "{prefix}§e/area toggle list §7- List available toggles"
-      toggleCategory: "{prefix}§e/area toggle category <n> §7- Toggle all in category"
       bypass: "{prefix}§e/area bypass §7- Toggle bypass mode"
       reset: "{prefix}§e/area reset §7- Reset form state if forms are stuck"
     usage:
@@ -434,10 +431,12 @@ gui:
       allowAnimalSpawn: "Controls passive mob spawning"
       allowDamageEntities: "Controls whether {player} can damage entities"
       allowBreeding: "Controls whether {player} can breed animals"
+      allowFarmlandTrampling: "Controls whether farmland can be trampled by players or mobs"
       allowMonsterTarget: "Controls whether monsters can target {player}"
       allowLeashing: "Controls whether {player} can use leads on entities"
       allowTaming: "Controls whether {player} can tame animals"
       allowShootProjectile: "Controls whether {player} can shoot projectiles"
+      allowProjectile: "Controls whether {player} can shoot projectiles"
       allowItemDrop: "Controls whether {player} can drop items"
       allowItemPickup: "Controls whether {player} can pick up items"
       allowXPDrop: "Controls whether experience orbs drop"
@@ -455,7 +454,12 @@ gui:
       allowFlight: "Controls whether {player} can fly"
       allowEnderPearl: "Controls whether {player} can use ender pearls"
       allowChorusFruit: "Controls whether {player} can use chorus fruit"
+      showEffectMessages: "Controls whether {player} sees messages about potion effects being applied or removed"
       allowHangingBreak: "Controls whether {player} can break hanging items like item frames"
+      allowPlantGrowth: "Controls whether plants can grow"
+      allowFarmlandTrampling: "Controls whether farmland can be trampled"
+      allowVehicleExit: "Controls whether {player} can exit vehicles"
+      
       
       # Potion effect toggles
       allowPotionSpeed: "Applies Speed effect to players in this area with configurable strength"
@@ -564,7 +568,7 @@ gui:
     header:
       groups: "§2Configure Group Permissions\n§7Select a group to edit its permissions"
       tracks: "§2Configure Track Permissions\n§7Select a track to edit permissions for all groups in it"
-      permissions: "§2Configure Permissions\n§7Toggle permissions for {target}"
+      permissions: "§2Configure Permissions\n§7Toggle permissions for Luckperms Groups"
     labels:
       allGroups: "All Groups"
       selectGroup: "Select Group"

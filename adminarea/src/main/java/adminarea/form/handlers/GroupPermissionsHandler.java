@@ -173,10 +173,12 @@ public class GroupPermissionsHandler extends BaseFormHandler {
             Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
             updatedGroupPerms.put(groupName, newPerms);
 
-            // Create updated area using builder
-            Area updatedArea = AreaBuilder.fromDTO(currentDTO)
-                .groupPermissions(updatedGroupPerms)
-                .build();
+            // Create updated area using builder - FIXED: Ensure we preserve all permission types
+            AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+            areaBuilder.groupPermissions(updatedGroupPerms);
+            // We don't need to explicitly set player or track permissions as they're already part of the DTO
+            // and will be preserved by the fromDTO() method
+            Area updatedArea = areaBuilder.build();
 
             // Fire event
             LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, newPerms);
@@ -185,6 +187,12 @@ public class GroupPermissionsHandler extends BaseFormHandler {
             if (!event.isCancelled()) {
                 // IMPORTANT: Explicitly save group permissions to the permission database first
                 try {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Explicitly saving group permissions for group " + groupName + " in area " + updatedArea.getName());
+                        plugin.debug("  Permission count: " + newPerms.size());
+                        plugin.debug("  Permissions: " + newPerms);
+                    }
+                    
                     plugin.getPermissionOverrideManager().setGroupPermissions(
                         updatedArea.getName(), 
                         groupName, 
@@ -192,7 +200,13 @@ public class GroupPermissionsHandler extends BaseFormHandler {
                     );
                     
                     if (plugin.isDebugMode()) {
-                        plugin.debug("Explicitly saved group permissions for " + groupName);
+                        plugin.debug("  Successfully saved group permissions to PermissionOverrideManager");
+                        
+                        // Verify permissions were saved
+                        Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
+                            updatedArea.getName(), groupName);
+                        plugin.debug("  Verification - retrieved permissions: " + 
+                                    (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
                     }
                 } catch (Exception e) {
                     plugin.getLogger().error("Failed to explicitly save group permissions", e);
@@ -201,10 +215,43 @@ public class GroupPermissionsHandler extends BaseFormHandler {
                 
                 // Save area to database
                 try {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Saving updated area to database: " + updatedArea.getName());
+                    }
+                    
                     plugin.getDatabaseManager().saveArea(updatedArea);
                     
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Area saved successfully");
+                    }
+                    
                     // Force synchronize permissions to ensure they're saved
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Now synchronizing all permissions from area to database");
+                    }
+                    
                     plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Synchronization complete");
+                        
+                        // Verify area was updated correctly
+                        Area verifyArea = plugin.getArea(updatedArea.getName());
+                        if (verifyArea != null) {
+                            Map<String, Map<String, Boolean>> groupPerms = verifyArea.getGroupPermissions();
+                            plugin.debug("  Verification - area group permissions: " + 
+                                        (groupPerms != null ? groupPerms.size() : "null") + " groups");
+                            
+                            if (groupPerms != null && groupPerms.containsKey(groupName)) {
+                                plugin.debug("  Verification - permissions for " + groupName + ": " + 
+                                           groupPerms.get(groupName).size() + " permissions");
+                            } else {
+                                plugin.debug("  Verification - group " + groupName + " not found in permissions");
+                            }
+                        } else {
+                            plugin.debug("  Verification - area not found: " + updatedArea.getName());
+                        }
+                    }
                 } catch (Exception e) {
                     plugin.getLogger().error("Failed to save area to database", e);
                     throw e;
@@ -230,6 +277,6 @@ public class GroupPermissionsHandler extends BaseFormHandler {
     @Override
     public void handleCancel(Player player) {
         plugin.getFormIdMap().remove(player.getName() + "_group");
-        plugin.getGuiManager().openMainMenu(player);
+        cleanup(player);
     }
 } 

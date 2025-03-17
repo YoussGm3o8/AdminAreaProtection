@@ -1,6 +1,7 @@
 package adminarea.listeners;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.area.Area;
 import adminarea.event.MonsterTargetEvent;
 import cn.nukkit.Player;
 import cn.nukkit.entity.Entity;
@@ -15,10 +16,13 @@ import cn.nukkit.event.EventPriority;
 import cn.nukkit.event.Listener;
 import cn.nukkit.event.entity.*;
 import cn.nukkit.event.player.PlayerInteractEntityEvent;
+import cn.nukkit.event.player.PlayerInteractEvent;
 import cn.nukkit.item.Item;
+import cn.nukkit.item.ItemSpawnEgg;
 import cn.nukkit.level.Position;
 import io.micrometer.core.instrument.Timer;
 import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
+import cn.nukkit.block.Block;
 
 import java.util.List;
 import java.util.Map;
@@ -166,7 +170,8 @@ public class EntityListener implements Listener {
             // Handle fall damage if it's enabled/disabled in configuration
             if (event.getCause() == EntityDamageEvent.DamageCause.FALL && victim instanceof Player player) {
                 Position pos = victim.getPosition();
-                if (protectionListener.handleProtection(pos, player, "cancelFallDamage")) {
+                // Check if fall damage is NOT allowed (inverted logic)
+                if (!protectionListener.handleProtection(pos, player, "allowFallDamage")) {
                     event.setCancelled(true);
                     if (plugin.isDebugMode()) {
                         plugin.debug("Cancelled fall damage for player " + player.getName());
@@ -188,6 +193,8 @@ public class EntityListener implements Listener {
                 
                 if (targetEvent.isCancelled() || shouldCheckProtection(damager, player, "allowMonsterTarget")) {
                     event.setCancelled(true);
+                    // Send a message to the player that monster targeting is disabled
+                    protectionListener.sendProtectionMessage(player, "messages.protection.monsterTarget");
                     return;
                 }
             }
@@ -308,15 +315,48 @@ public class EntityListener implements Listener {
                 // Check for TNT entities and remove them immediately in protected areas
                 String entityType = entity.getClass().getSimpleName();
                 if (entityType.equals("EntityPrimedTNT")) {
-                    if (protectionListener.handleProtection(pos, null, "allowTNT")) {
-                        // Remove the TNT entity immediately
+                    // Debug the TNT permission check
+                    if (plugin.isDebugMode()) {
+                        Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                        if (area != null) {
+                            plugin.debug("TNT check in area: " + area.getName());
+                            plugin.debug("TNT toggle state from cache: " + area.getToggleState("allowTNT"));
+                            
+                            // Try direct database reload for debugging
+                            try {
+                                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                                if (freshArea != null) {
+                                    plugin.debug("TNT toggle state directly from DB: " + 
+                                        freshArea.toDTO().toggleStates().optBoolean("gui.permissions.toggles.allowTNT", false));
+                                }
+                            } catch (Exception e) {
+                                plugin.debug("Failed to check DB state: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // Don't force clear caches for every TNT entity - this was causing performance issues
+                    // Only clear cache if we suspect it might be out of date
+                    Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                    
+                    // Check if TNT is allowed in this area
+                    // If handleProtection returns true, it means TNT is NOT allowed (protection is enabled)
+                    boolean tntNotAllowed = protectionListener.handleProtection(pos, null, "allowTNT");
+                    
+                    if (tntNotAllowed) {
+                        // Remove the TNT entity immediately if not allowed
                         entity.close();
                         
                         if (plugin.isDebugMode()) {
                             plugin.debug("Removed primed TNT entity at " + 
-                                pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
+                                pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
+                                " in area " + (area != null ? area.getName() : "none"));
                         }
                         return;
+                    } else if (plugin.isDebugMode()) {
+                        plugin.debug("Allowed TNT to spawn at " + 
+                            pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
+                            " in area " + (area != null ? area.getName() : "none"));
                     }
                 }
 
@@ -507,8 +547,11 @@ public class EntityListener implements Listener {
         try {
             Position pos = player.getPosition();
             
-            // Check both cancelFallDamage and allowFlying for fall damage cancellation
-            if (protectionListener.handleProtection(pos, player, "cancelFallDamage") || 
+            // Check if fall damage is NOT allowed or if flying is allowed
+            // Note: We need to invert allowFallDamage because:
+            // - If allowFallDamage is true, we should NOT cancel the event (let fall damage occur)
+            // - If allowFallDamage is false, we SHOULD cancel the event (prevent fall damage)
+            if (!protectionListener.handleProtection(pos, player, "allowFallDamage") || 
                 protectionListener.handleProtection(pos, player, "allowFlying")) {
                 event.setCancelled(true);
                 
@@ -622,5 +665,52 @@ public class EntityListener implements Listener {
         }
         
         return true;
+    }
+
+    /**
+     * Handle spawn egg usage to ensure it respects the animal spawn permission
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onSpawnEggUse(PlayerInteractEvent event) {
+        // Only handle right clicks on blocks
+        if (event.getAction() != PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        
+        Player player = event.getPlayer();
+        
+        // Skip if player is bypassing protection
+        if (plugin.isBypassing(player.getName())) {
+            return;
+        }
+        
+        // Check if the player is using a spawn egg
+        if (player.getInventory().getItemInHand() instanceof ItemSpawnEgg) {
+            // Get the position where the entity would be spawned
+            Block block = event.getBlock();
+            Position spawnPos = new Position(
+                block.x + 0.5, 
+                block.y + 1.0, 
+                block.z + 0.5, 
+                block.level
+            );
+            
+            // Check if animal spawning is allowed at this position
+            if (protectionListener.handleProtection(spawnPos, player, "allowAnimalSpawn")) {
+                // Cancel the event if not allowed
+                event.setCancelled(true);
+                
+                // Send message to player
+                protectionListener.sendProtectionMessage(
+                    player, 
+                    "messages.protection.animalSpawn"
+                );
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented spawn egg usage by " + player.getName() + 
+                        " at " + spawnPos.getFloorX() + "," + spawnPos.getFloorY() + "," + spawnPos.getFloorZ());
+                }
+            }
+        }
     }
 }

@@ -187,20 +187,11 @@ public class FormResponseListener implements Listener {
 
     private void handleFormResponse(PlayerFormRespondedEvent event, IFormHandler handler, String formId) {
         if (event.getResponse() instanceof FormResponseCustom) {
-            if (plugin.isDebugMode()) {
-                FormResponseCustom response = (FormResponseCustom) event.getResponse();
-                plugin.debug("[Form] Custom form response data:");
-                response.getResponses().forEach((key, value) -> 
-                    plugin.debug(String.format("  %s: %s", key, value)));
-            }
             handleCustomForm(event, handler, formId);
         } else if (event.getResponse() instanceof FormResponseSimple) {
-            if (plugin.isDebugMode()) {
-                FormResponseSimple response = (FormResponseSimple) event.getResponse();
-                plugin.debug(String.format("[Form] Simple form response - Button: %d", 
-                    response.getClickedButtonId()));
-            }
             handleSimpleForm(event, handler);
+        } else {
+            plugin.getLogger().error("Unknown form response type: " + event.getResponse().getClass().getName());
         }
     }
 
@@ -259,7 +250,8 @@ public class FormResponseListener implements Listener {
         } catch (Exception e) {
             plugin.getLogger().error("Error handling simple form response", e);
             event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            plugin.getGuiManager().openMainMenu(event.getPlayer());
+            // Don't automatically open main menu
+            ensureFormDataCleanup(event.getPlayer().getName());
         }
     }
 

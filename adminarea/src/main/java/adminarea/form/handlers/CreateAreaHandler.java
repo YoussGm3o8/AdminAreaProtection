@@ -83,7 +83,7 @@ public class CreateAreaHandler extends BaseFormHandler {
             try {
                 coords = areaValidationUtils.extractCoordinatesFromForm(response, POS1_X_INDEX, isGlobal);
             } catch (IllegalArgumentException e) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.selection.invalid", 
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.area.selection.invalid", 
                     Map.of("error", e.getMessage())));
                 plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
                 return;
@@ -139,7 +139,30 @@ public class CreateAreaHandler extends BaseFormHandler {
             }
             
             // Save the area
-            plugin.saveArea(area);
+            if (plugin.isDebugMode()) {
+                plugin.debug("Saving area to database: " + area.getName());
+            }
+            
+            try {
+                // Save directly to the database
+                plugin.getDatabaseManager().saveArea(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area saved successfully to database");
+                }
+                
+                // Explicitly add to memory through area manager
+                plugin.getAreaManager().addArea(area);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area added to memory cache: " + area.getName());
+                    plugin.debug("Area cache size: " + plugin.getAreaManager().getAllAreas().size());
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to save area to database", e);
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotSaved"));
+                return;
+            }
             
             player.sendMessage(plugin.getLanguageManager().get("messages.area.created",
                 Map.of("area", area.getName(),
@@ -221,9 +244,9 @@ public class CreateAreaHandler extends BaseFormHandler {
             if (selection == null) {
                 // Use default whole-world coordinates if no selection
                 selection = Map.of(
-                    "x1", -30000000, "x2", 30000000,
+                    "x1", -29000000, "x2", 29000000,
                     "y1", -64, "y2", 320, 
-                    "z1", -30000000, "z2", 30000000
+                    "z1", -29000000, "z2", 29000000
                 );
             }
 
@@ -341,6 +364,8 @@ public class CreateAreaHandler extends BaseFormHandler {
 
     @Override
     protected void cleanup(Player player) {
+        super.cleanup(player);
+        // Additional cleanup specific to CreateAreaHandler
         // Clean up ALL form tracking data
         plugin.getFormIdMap().remove(player.getName());
         plugin.getFormIdMap().remove(player.getName() + "_editing");

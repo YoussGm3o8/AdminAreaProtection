@@ -2,8 +2,6 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.area.AreaBuilder;
-import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
@@ -18,6 +16,7 @@ import org.json.JSONObject;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.ArrayList;
 
 public class BuildingSettingsHandler extends BaseFormHandler {
 
@@ -40,72 +39,156 @@ public class BuildingSettingsHandler extends BaseFormHandler {
     public FormWindow createForm(Player player, Area area) {
         if (area == null) return null;
 
-        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.buildingSettings.title", 
-            Map.of("area", area.getName())));
-        
-        // Add header with clear instructions
-        form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.buildingSettings.header")));
-        
-        // Get area settings
-        AreaDTO dto = area.toDTO();
-        JSONObject settings = dto.settings();
-
-        // Add toggles for this category
-        List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.BUILDING);
-        if (toggles != null) {
-            for (PermissionToggle toggle : toggles) {
-                String description = plugin.getLanguageManager().get(
-                    "gui.permissions.toggles." + toggle.getPermissionNode());
-                form.addElement(new ElementToggle(
-                    plugin.getLanguageManager().get("gui.permissions.toggle.format", 
-                        Map.of("name", toggle.getDisplayName(), "description", description)),
-                    settings.optBoolean(toggle.getPermissionNode(), toggle.getDefaultValue())
-                ));
+        try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Reloaded area from database for building settings form");
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database", e);
             }
+            
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.buildingSettings.title", 
+                Map.of("area", area.getName())));
+            
+            // Add header with clear instructions
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.buildingSettings.header")));
+            
+            // Get area toggle states directly from the area object
+            if (plugin.isDebugMode()) {
+                plugin.debug("Creating building settings form for area: " + area.getName());
+            }
+
+            // Add toggles for this category
+            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.BUILDING);
+            if (toggles != null) {
+                for (PermissionToggle toggle : toggles) {
+                    String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
+                    String description = plugin.getLanguageManager().get(
+                        "gui.permissions.toggles." + toggle.getPermissionNode());
+                    
+                    // Get current toggle state with default fallback
+                    boolean currentValue = area.getToggleState(permissionNode);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Toggle " + toggle.getDisplayName() + " (" + permissionNode + ") value: " + currentValue);
+                    }
+                    
+                    form.addElement(new ElementToggle(
+                        plugin.getLanguageManager().get("gui.permissions.toggle.format", 
+                            Map.of("name", toggle.getDisplayName(), "description", description)),
+                        currentValue
+                    ));
+                }
+            }
+            
+            return form;
+        } catch (Exception e) {
+            plugin.getLogger().error("Error creating building settings form", e);
+            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError", 
+                Map.of("error", e.getMessage())));
+            return null;
         }
-        
-        return form;
     }
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
-        try {
-            Area area = getEditingArea(player);
-            if (area == null) return;
+        if (response == null) {
+            handleCancel(player);
+            return;
+        }
 
-            Map<String, Boolean> toggleChanges = new HashMap<>();
-            List<PermissionToggle> buildingToggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.BUILDING);
-            if (buildingToggles == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidCategory"));
-                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+        try {
+            // Get the area being edited
+            String areaName = plugin.getFormIdMap().get(player.getName() + "_editing").getFormId();
+            Area area = plugin.getArea(areaName);
+            
+            if (area == null) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+                handleCancel(player);
                 return;
             }
-
-            int index = 1;
-            for (PermissionToggle toggle : buildingToggles) {
-                String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
-                boolean currentValue = area.getToggleState(permissionNode);
-                boolean newValue = response.getToggleResponse(index++);
-                
-                // Only track changes, don't apply yet
-                if (currentValue != newValue) {
-                    toggleChanges.put(permissionNode, newValue);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing building settings form response for area: " + area.getName());
+            }
+            
+            Map<String, Boolean> toggleStates = new HashMap<>();
+            Map<String, Boolean> changedToggleStates = new HashMap<>();
+            List<String> changedToggles = new ArrayList<>();
+            
+            // Process toggle states for building-related permissions
+            List<PermissionToggle> buildingToggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.BUILDING);
+            int changedCount = 0;
+            
+            if (buildingToggles != null) {
+                for (int i = 0; i < buildingToggles.size(); i++) {
+                    PermissionToggle toggle = buildingToggles.get(i);
+                    int toggleIndex = i + 1; // Offset for element index
+                    
+                    String toggleKey = normalizePermissionNode(toggle.getPermissionNode());
+                    
+                    // Get the current value from area
+                    boolean currentValue = area.getToggleState(toggleKey);
+                    
+                    // Get the new value from the response
+                    boolean newValue = response.getToggleResponse(toggleIndex);
+                    
+                    // If they differ, count as changed
+                    if (currentValue != newValue) {
+                        changedCount++;
+                        
+                        // For debugging
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Will change toggle " + toggleKey + " from " + currentValue + " to " + newValue);
+                        }
+                        
+                        // Track the changed toggle
+                        changedToggles.add(toggleKey);
+                        
+                        // Add to changed toggle states map (only the ones that changed)
+                        changedToggleStates.put(toggleKey, newValue);
+                    }
+                    
+                    // Add to complete toggle states map (for reference)
+                    toggleStates.put(toggleKey, newValue);
                 }
             }
             
-            // Use the standardized method to update toggles
-            int changedSettings = updateAreaToggles(area, toggleChanges);
-            
-            // Use the standardized method to update the area and notify the player
-            updateAreaAndNotifyPlayer(player, area, changedSettings, FormIds.EDIT_AREA, "building");
-
-        } catch (Exception e) {
-            plugin.getLogger().error("Error handling building settings", e);
-            if (plugin.isDebugMode()) {
-                e.printStackTrace();
+            if (plugin.isDebugMode() && changedCount > 0) {
+                plugin.debug("Updating " + changedCount + " toggle states for area: " + area.getName());
+                plugin.debug("Changed toggle states: " + changedToggleStates);
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("No toggle states changed for area: " + area.getName());
             }
+            
+            // Only update if something actually changed
+            if (changedCount > 0) {
+                // Update the toggle states in memory
+                int updatedCount = updateAreaToggles(area, changedToggleStates);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Updated " + updatedCount + " toggle states via updateAreaToggles");
+                }
+                
+                // Update the area and notify the player
+                updateAreaAndNotifyPlayer(player, area, updatedCount, FormIds.EDIT_AREA, "building");
+            } else {
+                // No changes, just return to the edit area form
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+            }
+            
+        } catch (Exception e) {
+            plugin.getLogger().error("Error handling building settings form response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            plugin.getGuiManager().openMainMenu(player);
+            handleCancel(player);
         }
     }
 

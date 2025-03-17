@@ -41,15 +41,31 @@ public class SpecialSettingsHandler extends BaseFormHandler {
         if (area == null) return null;
 
         try {
+            // Force reload the area from the database to ensure we have the latest data
+            try {
+                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
+                if (freshArea != null) {
+                    // Use the fresh area
+                    area = freshArea;
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Reloaded area from database for special settings form");
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reload area from database", e);
+            }
+            
             FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.specialSettings.title", 
                 Map.of("area", area.getName())));
             
             // Add header with clear instructions
             form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.specialSettings.header")));
             
-            // Get area settings
-            AreaDTO dto = area.toDTO();
-            JSONObject settings = dto.settings();
+            // Get area toggle states directly from the area object
+            if (plugin.isDebugMode()) {
+                plugin.debug("Creating special settings form for area: " + area.getName());
+            }
 
             // Add toggles for this category
             List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(PermissionToggle.Category.SPECIAL);
@@ -58,10 +74,18 @@ public class SpecialSettingsHandler extends BaseFormHandler {
                     String permissionNode = normalizePermissionNode(toggle.getPermissionNode());
                     String description = plugin.getLanguageManager().get(
                         "gui.permissions.toggles." + toggle.getPermissionNode());
+                    
+                    // Get current toggle state with default fallback
+                    boolean currentValue = area.getToggleState(permissionNode);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Toggle " + toggle.getDisplayName() + " (" + permissionNode + ") value: " + currentValue);
+                    }
+                    
                     form.addElement(new ElementToggle(
-                        plugin.getLanguageManager().get("gui.permissions.toggle.format", 
+                        plugin.getLanguageManager().get("gui.permissions.toggle.format",
                             Map.of("name", toggle.getDisplayName(), "description", description)),
-                        settings.optBoolean(permissionNode, toggle.getDefaultValue())
+                        currentValue
                     ));
                 }
             }
@@ -129,4 +153,4 @@ public class SpecialSettingsHandler extends BaseFormHandler {
         }
         return plugin.getArea(areaData.getFormId());
     }
-} 
+}
