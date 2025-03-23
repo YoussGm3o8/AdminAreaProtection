@@ -242,11 +242,10 @@ public class CreateAreaHandler extends BaseFormHandler {
             // Check for valid selection first
             Map<String, Object> selection = plugin.getPlayerSelection(player); 
             if (selection == null) {
-                // Use default whole-world coordinates if no selection
                 selection = Map.of(
-                    "x1", -29000000, "x2", 29000000,
+                    "x1", 0, "x2", 0,
                     "y1", -64, "y2", 320, 
-                    "z1", -29000000, "z2", 29000000
+                    "z1", 0, "z2", 0
                 );
             }
 

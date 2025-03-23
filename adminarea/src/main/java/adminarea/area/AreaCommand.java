@@ -404,7 +404,7 @@ public class AreaCommand extends Command {
             AreaDTO.Bounds bounds = area.toDTO().bounds();
             long volume = bounds.volume();
             if (volume > 1000000) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.area.tooLargeToVisualize"));
+                player.sendMessage(plugin.getLanguageManager().get("messages.area.visualize.tooLarge"));
                 return true;
             }
 
@@ -946,7 +946,7 @@ public class AreaCommand extends Command {
         
         if (player.hasPermission("adminarea.command.area.admin")) {
             player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.reload"));
-            player.sendMessage("messages.commands.help.cachereload");
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.help.cachereload"));
         }
     }
 

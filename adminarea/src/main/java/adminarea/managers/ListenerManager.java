@@ -3,6 +3,7 @@ package adminarea.managers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.listeners.EntityListener;
 import adminarea.listeners.EnvironmentListener;
+import adminarea.listeners.ExperienceListener;
 import adminarea.listeners.ItemListener;
 import adminarea.listeners.PlayerEffectListener;
 import adminarea.listeners.ProtectionListener;
@@ -29,6 +30,7 @@ public class ListenerManager {
     private EnvironmentListener environmentListener;
     private EntityListener entityListener;
     private WandListener wandListener;
+    private ExperienceListener experienceListener;
 
     /**
      * Creates a new ListenerManager and initializes all listeners
@@ -65,6 +67,10 @@ public class ListenerManager {
             
             entityListener = new EntityListener(plugin, protectionListener);
             listeners.add(entityListener);
+            
+            // Register the ExperienceListener
+            experienceListener = new ExperienceListener(plugin, protectionListener);
+            listeners.add(experienceListener);
             
             // Set the entity listener reference in the protection listener
             // to connect the breeding checks
@@ -106,6 +112,11 @@ public class ListenerManager {
             protectionListener.cleanup();
         }
         
+        // Cleanup ExperienceListener cache
+        if (experienceListener != null) {
+            experienceListener.cleanup();
+        }
+        
         // Reload player effects
         if (playerEffectListener != null) {
             playerEffectListener.reloadEffects();
@@ -127,6 +138,11 @@ public class ListenerManager {
         
         if (wandListener != null) {
             wandListener.cleanup();
+        }
+        
+        // Cleanup ExperienceListener
+        if (experienceListener != null) {
+            experienceListener.cleanup();
         }
         
         // Clear the entity handler's cache
@@ -190,6 +206,15 @@ public class ListenerManager {
      */
     public ItemListener getItemListener() {
         return itemListener;
+    }
+    
+    /**
+     * Gets the experience listener
+     * 
+     * @return The experience listener
+     */
+    public ExperienceListener getExperienceListener() {
+        return experienceListener;
     }
     
     /**

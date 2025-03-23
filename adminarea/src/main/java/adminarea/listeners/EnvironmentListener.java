@@ -19,6 +19,13 @@ import io.micrometer.core.instrument.Timer;
 import cn.nukkit.Player;
 import cn.nukkit.event.player.PlayerInteractEvent;
 import cn.nukkit.event.entity.EntityInteractEvent;
+import cn.nukkit.event.inventory.InventoryMoveItemEvent;
+import cn.nukkit.blockentity.BlockEntity;
+import cn.nukkit.blockentity.BlockEntityHopper;
+import cn.nukkit.blockentity.BlockEntityDispenser;
+import cn.nukkit.blockentity.BlockEntityDropper;
+import cn.nukkit.inventory.Inventory;
+import cn.nukkit.inventory.InventoryHolder;
 
 public class EnvironmentListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
@@ -397,6 +404,124 @@ public class EnvironmentListener implements Listener {
                         block.x + "," + block.y + "," + block.z);
                 }
             }
+        }
+    }
+
+    /**
+     * Prevents the use of bonemeal on grass and saplings if plant growth is protected
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onBonemealUse(PlayerInteractEvent event) {
+        if (event.getAction() != PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK || event.getItem() == null) {
+            return;
+        }
+        
+        // Check if the item is bonemeal (ID 351, damage 15 for bonemeal in Nukkit)
+        if (event.getItem().getId() == 351 && event.getItem().getDamage() == 15) {
+            Block targetBlock = event.getBlock();
+            if (targetBlock == null) return;
+            
+            // Check if target is grass or sapling
+            boolean isGrassOrSapling = targetBlock.getId() == BlockID.GRASS || 
+                                     targetBlock.getId() == BlockID.TALL_GRASS ||
+                                     (targetBlock.getId() >= BlockID.SAPLING && 
+                                      targetBlock.getId() <= BlockID.SAPLING + 5);
+            
+            if (isGrassOrSapling) {
+                if (shouldCheckProtection(targetBlock, "allowPlantGrowth")) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented bonemeal use on " + 
+                            targetBlock.getName() + " at " + 
+                            targetBlock.x + "," + targetBlock.y + "," + targetBlock.z);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle inventory movement events (hoppers, droppers, etc.)
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onInventoryMoveItem(InventoryMoveItemEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Get source and destination inventories
+            Inventory sourceInv = event.getInventory();
+            Inventory targetInv = event.getTargetInventory();
+            
+            // Skip if not container inventories
+            if (sourceInv == null || targetInv == null) {
+                return;
+            }
+            
+            // Check if this involves a hopper
+            InventoryHolder sourceHolder = sourceInv.getHolder();
+            InventoryHolder targetHolder = targetInv.getHolder();
+            
+            // Skip if inventory holders aren't block entities
+            if (!(sourceHolder instanceof BlockEntity) && !(targetHolder instanceof BlockEntity)) {
+                return;
+            }
+            
+            // Check for hoppers
+            boolean sourceIsHopper = sourceHolder instanceof BlockEntityHopper;
+            boolean targetIsHopper = targetHolder instanceof BlockEntityHopper;
+            
+            if (sourceIsHopper || targetIsHopper) {
+                // Get the hopper's position
+                BlockEntity hopperEntity = sourceIsHopper ? 
+                    (BlockEntity)sourceHolder : (BlockEntity)targetHolder;
+                
+                Position hopperPos = new Position(
+                    hopperEntity.getX(), 
+                    hopperEntity.getY(), 
+                    hopperEntity.getZ(), 
+                    hopperEntity.getLevel()
+                );
+                
+                // Check if hopper operation is allowed
+                if (shouldCheckProtection(hopperPos.getLevelBlock(), "allowHopper")) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented hopper transfer at " + 
+                            hopperPos.getFloorX() + "," + hopperPos.getFloorY() + "," + hopperPos.getFloorZ());
+                    }
+                    return;
+                }
+            }
+            
+            // Check for dispensers/droppers
+            boolean sourceIsDispenser = sourceHolder instanceof BlockEntityDispenser || sourceHolder instanceof BlockEntityDropper;
+            boolean targetIsDispenser = targetHolder instanceof BlockEntityDispenser || targetHolder instanceof BlockEntityDropper;
+            
+            if (sourceIsDispenser || targetIsDispenser) {
+                // Get the dispenser's position
+                BlockEntity dispenserEntity = sourceIsDispenser ? 
+                    (BlockEntity)sourceHolder : (BlockEntity)targetHolder;
+                
+                Position dispenserPos = new Position(
+                    dispenserEntity.getX(), 
+                    dispenserEntity.getY(), 
+                    dispenserEntity.getZ(), 
+                    dispenserEntity.getLevel()
+                );
+                
+                // Check if dispenser operation is allowed
+                if (shouldCheckProtection(dispenserPos.getLevelBlock(), "allowDispenser")) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented dispenser transfer at " + 
+                            dispenserPos.getFloorX() + "," + dispenserPos.getFloorY() + "," + dispenserPos.getFloorZ());
+                    }
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "inventory_move_check");
         }
     }
 

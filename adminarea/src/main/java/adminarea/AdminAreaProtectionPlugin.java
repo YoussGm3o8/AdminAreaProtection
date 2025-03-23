@@ -859,7 +859,25 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          */
         public void debug(String message) {
             if (debugMode) {
-                getLogger().info("[Debug] " + message);
+                // Use string format with direct console output to avoid logger issues
+                String debugMessage = "[Debug] " + message;
+                System.out.println("[" + getName() + "] " + debugMessage);
+                
+                // Only try logging if not already in a potential recursive situation
+                try {
+                    // Use a special system property to prevent recursive calls
+                    if (!"true".equals(System.getProperty("adminarea.debug.recursion"))) {
+                        System.setProperty("adminarea.debug.recursion", "true");
+                        try {
+                            getLogger().info(debugMessage);
+                        } finally {
+                            System.clearProperty("adminarea.debug.recursion");
+                        }
+                    }
+                } catch (Exception e) {
+                    // Ignore any errors during logging
+                    System.out.println("[AdminAreaProtection] Error logging debug message: " + e.getMessage());
+                }
             }
         }
 

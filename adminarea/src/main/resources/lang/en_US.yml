@@ -108,7 +108,14 @@ messages:
     noCreativeFlight: "{prefix}§cYou cannot fly in {area} with creative flight, add a permission to the player to allow it"
     noFlight: "{prefix}§cYou cannot fly in {area}"
     animalSpawn: "{prefix}§cYou cannot spawn animals in {area}"
+    fallDamage: "{prefix}§cYou cannot take fall damage in {area}"
     xpDrop: "{prefix}§cYour xp was not dropped in {area}!"
+    chorusFruit: "{prefix}§cChorus fruit teleportation is not allowed in {area}"
+    armorStand: "{prefix}§cYou cannot interact with armor stands in {area}"
+    hopper: "{prefix}§cHoppers are not allowed to function in {area}"
+    dispenser: "{prefix}§cDispensers and droppers are not allowed to function in {area}"
+    iceForm: "{prefix}§cIce is not allowed to form in {area}"
+    snowForm: "{prefix}§cSnow is not allowed to form in {area}"
   commands:
     playerOnly: "{prefix}§cThis command can only be used in-game"
     usage: "§eUsage: /area <create|edit|delete|list|wand>"
@@ -117,25 +124,25 @@ messages:
     delete: "§cUsage: /area delete <areaName>"
     help:
       header: "{prefix}§2Area Protection Commands:"
-      pos1: "{prefix}§e/area pos1 §7- Set first position"
-      pos2: "{prefix}§e/area pos2 §7- Set second position"
-      wand: "{prefix}§e/area wand §7- Get selection wand"
-      create: "{prefix}§e/area create [global] §7- Create new area"
-      edit: "{prefix}§e/area edit <name> §7- Edit area"
-      delete: "{prefix}§e/area delete <name> §7- Delete area"
-      list: "{prefix}§e/area list §7- List all areas"
-      merge: "{prefix}§e/area merge <area1> <area2> §7- Merge areas"
-      visualize: "{prefix}§e/area visualize <n> §7- Show boundaries"
-      here: "{prefix}§e/area here §7- Show what area you're currently in"
-      expand: "{prefix}§e/area expand <dir> <amount> §7- Expand selection"
-      stats: "{prefix}§e/area stats <name> [export|reset] §7- View area statistics"
-      reload: "{prefix}§e/area reload §7- Reload plugin configuration"
+      pos1: "§e/area pos1 §7- Set first position"
+      pos2: "§e/area pos2 §7- Set second position"
+      wand: "§e/area wand §7- Get selection wand"
+      create: "§e/area create [global] §7- Create new area"
+      edit: "§e/area edit <name> §7- Edit area"
+      delete: "§e/area delete <name> §7- Delete area"
+      list: "§e/area list §7- List all areas"
+      merge: "§e/area merge <area1> <area2> §7- Merge areas"
+      visualize: "§e/area visualize <n> §7- Show boundaries"
+      here: "§e/area here §7- Show what area you're currently in"
+      expand: "§e/area expand <dir> <amount> §7- Expand selection"
+      stats: "§e/area stats <name> [export|reset] §7- View area statistics"
+      reload: "§e/area reload §7- Reload plugin configuration"
       cachereload: "§e/area cache-reload [areaName] §7- Force reload area toggle states from database"
-      undo: "{prefix}§e/area undo §7- Undo last selection"
-      clear: "{prefix}§e/area clear §7- Clear selection points"
-      debug: "{prefix}§e/area debug [on|off] §7- Toggle debug mode"
-      bypass: "{prefix}§e/area bypass §7- Toggle bypass mode"
-      reset: "{prefix}§e/area reset §7- Reset form state if forms are stuck"
+      undo: "§e/area undo §7- Undo last selection"
+      clear: "§e/area clear §7- Clear selection points"
+      debug: "§e/area debug [on|off] §7- Toggle debug mode"
+      bypass: "§e/area bypass §7- Toggle bypass mode"
+      reset: "§e/area reset §7- Reset form state if forms are stuck"
     usage:
       expand: "{prefix}§cUsage: /area expand <direction> <amount>"
       merge: "{prefix}§cUsage: /area merge <area1> <area2>"
@@ -166,26 +173,26 @@ messages:
     notInArea: "§cYou are not in a protected area"
 
   form:
-    playerPermissionsUpdated: "§aPlayer permissions updated successfully"
-    groupPermissionsUpdated: "§aGroup permissions updated successfully"
-    permissionsUpdated: "§aPermissions updated successfully"
-    permissionsReset: "§aPermissions reset successfully"
-    playerPermissionsReset: "§aPlayer permissions reset successfully"
+    playerPermissionsUpdated: "§aPlayer permissions successfully updated"
+    groupPermissionsUpdated: "§aGroup permissions successfully updated"
+    permissionsUpdated: "§aPermissions successfully updated"
+    permissionsReset: "§aPermissions successfully reset"
+    playerPermissionsReset: "§aPlayer permissions have been reset successfully"
     permissionsListEmpty: "§cNo permissions found"
     noChanges: "{prefix}§eNo settings were changed"
-    trackAndGroupPermissionsUpdated: "{prefix}§aUpdated permissions for track '{track}' in area '{area}', affecting {groupCount} groups"
-    trackAndSingleGroupPermissionsUpdated: "{prefix}§aUpdated permissions for track '{track}' in area '{area}', affecting group '{group}'"
+    trackAndGroupPermissionsUpdated: "{prefix}§aUpdated track permissions for '{track}' in area '{area}', affecting {groupCount} groups"
+    trackAndSingleGroupPermissionsUpdated: "{prefix}§aUpdated track permissions for '{track}' in area '{area}', affecting group '{group}'"
     trackPermissionsUpdated: "{prefix}§aUpdated track permissions for '{track}' in area '{area}'"
     selectTrack: "{prefix}§cPlease select a track"
     permissionUpdateCancelled: "{prefix}§cPermission update was cancelled by another plugin"
     invalidSession: "{prefix}§cYour form session has expired. Please try again."
     error:
-      generic: "{prefix}§cAn error occurred. Please try doing /area reset or report this to the developer."
+      generic: "{prefix}§cAn error occurred. Please try running /area reset or report this to the developer."
       stateReset: "{prefix}§aForm state has been reset. You can now open forms again."
       failedToUpdatePermissions: "{prefix}§cFailed to update permissions. Please try again or contact an administrator."
       noAreaSelected: "{prefix}§cNo area is currently selected for editing."
-      areaNotFound: "{prefix}§cThe selected area could not be found."
-      playerNotFound: "{prefix}§cThe specified player could not be found."
+      areaNotFound: "{prefix}§cThe selected area was not found."
+      playerNotFound: "{prefix}§cThe specified player was not found."
       invalidPermission: "{prefix}§cInvalid permission toggle: {toggle}"
       
   # Player permission specific messages
@@ -197,7 +204,7 @@ messages:
     list:
       header: "{prefix}§2Custom permissions for {player} in {area}:"
       entry: "§7- {permission}: {value}"
-      empty: "{prefix}§7No custom permissions set"
+      empty: "{prefix}§7No custom permissions have been set"
     error:
       invalidPlayer: "{prefix}§cInvalid player name"
       noPermissions: "{prefix}§cNo permissions to update"
@@ -206,8 +213,8 @@ messages:
       failedToResetPermissions: "{prefix}§cFailed to reset player permissions. Please try again."
 
   effect:
-    applied: "{prefix}§a{effect} effect (level {strength}) applied from area {area}"
-    removed: "{prefix}§e{effect} effect from area {area} has worn off"
+    applied: "{prefix}§aEffect {effect} (level {strength}) applied from area {area}"
+    removed: "{prefix}§eEffect {effect} from area {area} has expired"
 
 # Form validation messages
 validation:
@@ -353,7 +360,7 @@ gui:
       createArea: "§aCreate Area\n§8Create a new protected area"
       editArea: "§eEdit Area\n§8Modify an existing area"
       deleteArea: "§cDelete Area\n§8Remove a protected area"
-      pluginSettings: "§bSettings\n§8Configure plugin options"
+      pluginSettings: "§bSettings\n§8Configure plugin parameters"
       back: "§8« Back"
 
   # Plugin Settings
@@ -638,6 +645,20 @@ gui:
     title: "Entity Settings: {area}"
     header: "§2Configure Entity Permissions\n§8Toggle settings below"
 
+  # Player Settings Form
+  playerSettings:
+    title: "Player Permissions - {area}"
+    playerTitle: "Edit {player} Permissions"
+    header: "§2Configure Player Permissions\n§7Select a player or enter a name manually"
+    playerHeader: "§2Player Permissions for {player}\n§7These permissions will override track and group permissions.\n§7Area permission changes will reset these settings."
+    labels:
+      onlinePlayers: "Online Players"
+      defaultOption: "-- Select Player --"
+      manualEntry: "Or enter player name manually:"
+      playerNamePlaceholder: "Player name"
+      existingPermissions: "\n§6Players with Custom Permissions:"
+      resetAllPermissions: "\n§cReset All Player Permissions\n§7This will clear all player-specific permissions"
+
 # Area titles and messages
 titles:
   enter:
@@ -663,3 +684,4 @@ potionEffect:
     set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
     outOfRange: "{prefix}§cStrength value must be between 0 and 10"
     invalid: "{prefix}§cInvalid strength value, must be a number"
+

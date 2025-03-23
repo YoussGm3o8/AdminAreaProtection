@@ -64,12 +64,14 @@ public class PlayerSettingsHandler extends BaseFormHandler {
         
         if (playerData == null) {
             // Show player selection form with dropdown and manual input
-            FormWindowCustom form = new FormWindowCustom("Player Permissions - " + area.getName());
+            FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get(
+                "gui.playerSettings.title", 
+                Map.of("area", area.getName())));
             
             int elementIndex = 0;
             
             // Add header with instructions
-            form.addElement(new ElementLabel("§2Configure Player Permissions\n§7Select a player or enter a name manually"));
+            form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.playerSettings.header")));
             elementIndex++;
             
             // Add dropdown with online players
@@ -77,18 +79,21 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                 .stream()
                 .map(Player::getName)
                 .collect(Collectors.toList()));
-            onlinePlayers.add(0, "-- Select Player --"); // Add default option
-            form.addElement(new ElementDropdown("Online Players", onlinePlayers));
+            onlinePlayers.add(0, plugin.getLanguageManager().get("gui.playerSettings.labels.defaultOption")); // Add default option
+            form.addElement(new ElementDropdown(plugin.getLanguageManager().get("gui.playerSettings.labels.onlinePlayers"), onlinePlayers));
             elementIndex++;
             
             // Add manual input option
-            form.addElement(new ElementInput("Or enter player name manually:", "Player name", ""));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.playerSettings.labels.manualEntry"), 
+                plugin.getLanguageManager().get("gui.playerSettings.labels.playerNamePlaceholder"), 
+                ""));
             elementIndex++;
 
             // Add list of players with existing permissions
             Map<String, Map<String, Boolean>> existingPerms = area.getPlayerPermissions();
             if (!existingPerms.isEmpty()) {
-                form.addElement(new ElementLabel("\n§6Players with Custom Permissions:"));
+                form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.playerSettings.labels.existingPermissions")));
                 elementIndex++;
                 StringBuilder playerList = new StringBuilder("§7");
                 for (String playerName : existingPerms.keySet()) {
@@ -99,7 +104,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
             }
 
             // Add reset all permissions button
-            form.addElement(new ElementToggle("\n§cReset All Player Permissions\n§7This will clear all player-specific permissions", false));
+            form.addElement(new ElementToggle(
+                plugin.getLanguageManager().get("gui.playerSettings.labels.resetAllPermissions"), 
+                false));
             // Store the reset toggle index for later use
             plugin.getFormIdMap().put(player.getName() + "_resetIndex", 
                 new FormTrackingData(String.valueOf(elementIndex), System.currentTimeMillis()));
@@ -112,7 +119,9 @@ public class PlayerSettingsHandler extends BaseFormHandler {
     }
 
     private FormWindowCustom createPlayerPermissionForm(Area area, String playerName) {
-        FormWindowCustom form = new FormWindowCustom("Edit " + playerName + " Permissions");
+        FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get(
+            "gui.playerSettings.playerTitle", 
+            Map.of("player", playerName)));
 
         // Get the latest permissions directly from the database via PermissionOverrideManager
         // instead of relying on potentially stale data in the area object
@@ -138,9 +147,8 @@ public class PlayerSettingsHandler extends BaseFormHandler {
         
         // Add header with clear instructions
         form.addElement(new ElementLabel(
-            "§2Player Permissions for " + playerName + "\n" +
-            "§7These permissions will override track and group permissions.\n" +
-            "§7Area permission changes will reset these settings."
+            plugin.getLanguageManager().get("gui.playerSettings.playerHeader", 
+            Map.of("player", playerName))
         ));
         
         // Add toggles for player-relevant permissions
@@ -284,7 +292,8 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                 
                 // Validate player selection
                 if (selectedPlayer == null || selectedPlayer.trim().isEmpty()) {
-                    player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
+                    player.sendMessage(plugin.getLanguageManager().get("messages.form.noChanges"));
+                    plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
                     return;
                 }
 

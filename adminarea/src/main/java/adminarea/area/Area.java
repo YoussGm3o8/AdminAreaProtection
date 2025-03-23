@@ -1304,8 +1304,11 @@ public final class Area {
         }
         
         try {
-            // Directly save to PermissionOverrideManager with forced flag to ensure saving even if no changes detected
-            plugin.getPermissionOverrideManager().setTrackPermissions(this, trackName, permissions, true);
+            // Check if we're already in a synchronization operation to prevent recursion
+            if (!processingSet.contains("sync_operation:" + name)) {
+                // Directly save to PermissionOverrideManager with forced flag to ensure saving even if no changes detected
+                plugin.getPermissionOverrideManager().setTrackPermissions(this, trackName, permissions, true);
+            }
             
             // Update local cache
             if (trackPermissions != null) {
@@ -2052,5 +2055,14 @@ public final class Area {
      */
     public static Set<String> getPermissionOperations() {
         return permissionOperations.get();
+    }
+    
+    /**
+     * Get direct access to the ThreadLocal that tracks permission operations
+     * This is used to avoid potential recursion issues
+     * @return The ThreadLocal instance
+     */
+    public static ThreadLocal<Set<String>> getPermissionOperationsThreadLocal() {
+        return permissionOperations;
     }
 }

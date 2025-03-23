@@ -403,15 +403,31 @@ public class EntityListener implements Listener {
     public void onEntityInteract(PlayerInteractEntityEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            Entity entity = event.getEntity();
             Player player = event.getPlayer();
+            Entity entity = event.getEntity();
             
-            if (!(entity instanceof EntityLiving)) {
+            // Skip if player is bypassing protection
+            if (plugin.isBypassing(player.getName())) {
                 return;
             }
             
-            // Check if this is a MobPlugin animal
-            if (entity instanceof nukkitcoders.mobplugin.entities.animal.Animal animal) {
+            // Check for armor stand interaction
+            if (entity.getClass().getSimpleName().equals("EntityArmorStand")) {
+                // Check if player can interact with armor stands in this area
+                if (shouldCheckProtection(entity, player, "allowArmorStand")) {
+                    event.setCancelled(true);
+                    protectionListener.sendProtectionMessage(player, "messages.protection.armorStand");
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented armor stand interaction by " + player.getName() + 
+                                   " at " + entity.getX() + "," + entity.getY() + "," + entity.getZ());
+                    }
+                    return;
+                }
+            }
+            
+            // Check breeding
+            if (entity instanceof EntityAnimal animal) {
                 // Check for taming attempt
                 if (isTamingAttempt(entity, player)) {
                     // Check if animal is already tamed using MobPlugin's methods
@@ -433,10 +449,12 @@ public class EntityListener implements Listener {
                 
                 // Check for breeding attempt
                 if (isBreedingAttempt(entity, player)) {
-                    // Check if animal can be bred using MobPlugin's methods
+                    // Check if animal can breed
                     boolean canBreed = true;
                     try {
-                        if (animal.isBaby() || animal.getClass().getMethod("inLove").invoke(animal) == Boolean.TRUE) {
+                        // Use reflection to access isBaby method
+                        if ((Boolean)animal.getClass().getMethod("isBaby").invoke(animal) ||
+                            animal.getClass().getMethod("inLove").invoke(animal) == Boolean.TRUE) {
                             canBreed = false;
                         }
                     } catch (Exception ignored) {

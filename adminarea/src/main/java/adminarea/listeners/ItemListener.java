@@ -60,17 +60,9 @@ public class ItemListener implements Listener {
                 return;
             }
             
-            // Get area at position directly rather than using shouldCancel() for better performance
-            Area area = plugin.getHighestPriorityArea(
-                dropPos.getLevel().getName(),
-                dropPos.getX(),
-                dropPos.getY(),
-                dropPos.getZ()
-            );
-            
-            // Check permission using the permission checker
-            boolean shouldCancel = area != null && 
-                !plugin.getPermissionOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemDrop");
+            // Use the protectionListener.handleProtection method directly
+            // Note: handleProtection returns true if protection should be applied (action blocked)
+            boolean shouldCancel = protectionListener.handleProtection(dropPos, player, "allowItemDrop");
             
             // Cache result
             itemActionCache.put(cacheKey, shouldCancel);
@@ -78,6 +70,12 @@ public class ItemListener implements Listener {
             if (shouldCancel) {
                 event.setCancelled(true);
                 protectionListener.sendProtectionMessage(player, "messages.protection.itemDrop");
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Blocked item drop by " + player.getName() + 
+                                " at " + dropPos.getFloorX() + "," + dropPos.getFloorY() + "," + 
+                                dropPos.getFloorZ());
+                }
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "item_drop_check");
@@ -110,17 +108,9 @@ public class ItemListener implements Listener {
                     return;
                 }
                 
-                // Get area at position directly
-                Area area = plugin.getHighestPriorityArea(
-                    itemPos.getLevel().getName(),
-                    itemPos.getX(),
-                    itemPos.getY(),
-                    itemPos.getZ()
-                );
-                
-                // Check permission using the permission checker
-                boolean shouldCancel = area != null && 
-                    !plugin.getPermissionOverrideManager().getPermissionChecker().isAllowed(player, area, "allowItemPickup");
+                // Use the protectionListener.handleProtection method directly
+                // Note: handleProtection returns true if protection should be applied (action blocked)
+                boolean shouldCancel = protectionListener.handleProtection(itemPos, player, "allowItemPickup");
                 
                 // Cache result
                 itemActionCache.put(cacheKey, shouldCancel);
@@ -128,6 +118,12 @@ public class ItemListener implements Listener {
                 if (shouldCancel) {
                     event.setCancelled(true);
                     protectionListener.sendProtectionMessage(player, "messages.protection.itemPickup");
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Blocked item pickup by " + player.getName() + 
+                                    " at " + itemPos.getFloorX() + "," + itemPos.getFloorY() + "," + 
+                                    itemPos.getFloorZ());
+                    }
                 }
             }
         } finally {

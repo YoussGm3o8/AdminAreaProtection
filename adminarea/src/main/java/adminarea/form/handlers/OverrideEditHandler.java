@@ -64,9 +64,16 @@ public class OverrideEditHandler extends BaseFormHandler {
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
+        // Check for null response (form closed without submitting)
+        if (response == null) {
+            handleCancel(player);
+            return;
+        }
+        
         try {
             if (!player.hasPermission("adminarea.luckperms.edit")) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.noPermission"));
+                handleCancel(player);
                 return;
             }
 
@@ -75,6 +82,7 @@ public class OverrideEditHandler extends BaseFormHandler {
 
             if (areaData == null || groupData == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.form.invalidSession"));
+                handleCancel(player);
                 return;
             }
 
@@ -83,6 +91,7 @@ public class OverrideEditHandler extends BaseFormHandler {
 
             if (area == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
+                handleCancel(player);
                 return;
             }
 
@@ -150,16 +159,39 @@ public class OverrideEditHandler extends BaseFormHandler {
             
             player.sendMessage(plugin.getLanguageManager().get("messages.form.permissionOverridesUpdated"));
             
+            // Clean up form tracking data before opening the next form
+            plugin.getFormIdMap().remove(player.getName() + "_group");
+            
             plugin.getGuiManager().openLuckPermsGroupList(player, updatedArea);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error processing override edit form", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error"));
+            handleCancel(player);
         }
     }
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        throw new UnsupportedOperationException("Override edit form does not use simple responses");
+        handleCancel(player);
+    }
+    
+    @Override
+    public void handleCancel(Player player) {
+        // Clean up form data
+        FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
+        plugin.getFormIdMap().remove(player.getName() + "_group");
+        
+        // If we have a valid area, go back to the group list
+        if (areaData != null) {
+            Area area = plugin.getArea(areaData.getFormId());
+            if (area != null) {
+                plugin.getGuiManager().openLuckPermsGroupList(player, area);
+                return;
+            }
+        }
+        
+        // If we don't have a valid area, perform standard cleanup
+        cleanup(player);
     }
 }

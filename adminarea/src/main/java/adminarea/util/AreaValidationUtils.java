@@ -282,7 +282,7 @@ public class AreaValidationUtils {
             int maxSize = plugin.getConfigManager().getInt("area.maxSize", 10000);
             if (sizeX > maxSize || sizeY > maxSize || sizeZ > maxSize) {
                 if (player != null) {
-                    player.sendMessage(plugin.getLanguageManager().get("validation.area.selection.tooLarge",
+                    player.sendMessage(plugin.getLanguageManager().get("validation.area.bounds.tooLarge",
                         Map.of("max", String.valueOf(maxSize))));
                     if (formId != null) {
                         plugin.getGuiManager().openFormById(player, formId, null);
@@ -452,7 +452,7 @@ public class AreaValidationUtils {
         int maxSize = plugin.getConfigManager().getInt("area.maxSize", 10000);
         if (sizeX > maxSize || sizeY > maxSize || sizeZ > maxSize) {
             if (player != null) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.selection.tooLarge",
+                player.sendMessage(plugin.getLanguageManager().get("validation.area.bounds.tooLarge",
                     Map.of("max", String.valueOf(maxSize))));
                 if (formId != null) {
                     plugin.getGuiManager().openFormById(player, formId, null);

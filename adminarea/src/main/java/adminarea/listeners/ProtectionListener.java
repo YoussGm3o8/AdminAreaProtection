@@ -201,17 +201,15 @@ public class ProtectionListener implements Listener {
         plugin.debug("Permission check result for " + normalizedPermission + ": " + (allowed ? "ALLOWED" : "DENIED"));
         plugin.debug("Protection decision: " + (shouldProtect ? "BLOCK" : "ALLOW"));
         
-        // If protection should be applied, send a message to the player
-        if (shouldProtect) {
-            // Get the appropriate message key based on the permission
-            // Use the original permission name (not normalized) to get the correct message key
+        // No longer automatically send messages here - each event handler should decide
+        // whether to send a message when protection is applied
+        if (shouldProtect && plugin.isDebugMode()) {
+            // Get the appropriate message key based on the permission for debug logging only
             String originalPermission = permission;
             if (normalizedPermission.startsWith("gui.permissions.toggles.")) {
                 originalPermission = normalizedPermission.replace("gui.permissions.toggles.", "");
             }
             String messageKey = getProtectionMessageKey(originalPermission);
-            
-            sendProtectionMessage(player, messageKey);
             
             // Log the denial for debugging
             plugin.debug("Protection applied: " + messageKey + " (permission: " + normalizedPermission + ")");
@@ -290,6 +288,21 @@ public class ProtectionListener implements Listener {
                 return "messages.protection.monsterSpawn";
             case "allowAnimalSpawn":
                 return "messages.protection.animalSpawn";
+            case "allowFallDamage":
+                return "messages.protection.fallDamage";
+            // Add new permission message mappings
+            case "allowChorusFruit":
+                return "messages.protection.chorusFruit";
+            case "allowArmorStand":
+                return "messages.protection.armorStand";
+            case "allowHopper":
+                return "messages.protection.hopper";
+            case "allowDispenser":
+                return "messages.protection.dispenser";
+            case "allowIceForm":
+                return "messages.protection.iceForm";
+            case "allowSnowForm":
+                return "messages.protection.snowForm";
             default:
                 if (plugin.isDebugMode()) {
                     plugin.debug("No specific message key found for permission: " + permission + 
@@ -342,13 +355,18 @@ public class ProtectionListener implements Listener {
         // Use LanguageManager to get the localized message
         String message = plugin.getLanguageManager().get(messageKey, Map.of("area", areaName));
         
-        // Send the message and update the last warning time
-        player.sendMessage(message);
-        lastWarningTime.put(playerName, now);
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Sent protection message: " + messageKey + " to " + playerName + 
-                       " for area: " + areaName);
+        // Only send the message if it's related to an action, not just being in an area
+        if (!messageKey.equals("messages.protection.denied")) {
+            // Send the message and update the last warning time
+            player.sendMessage(message);
+            lastWarningTime.put(playerName, now);
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Sent protection message: " + messageKey + " to " + playerName + 
+                          " for area: " + areaName);
+            }
+        } else if (plugin.isDebugMode()) {
+            plugin.debug("Suppressed generic protection message for " + playerName);
         }
     }
 
@@ -470,17 +488,74 @@ public class ProtectionListener implements Listener {
                 event.setCancelled(true);
                 sendProtectionMessage(player, getProtectionMessageKey("allowBlockPlace"));
                 
-                // Force a block update to clear any client-side liquid predictions
-                Block block = event.getBlockClicked();
-                block.getLevel().sendBlocks(new Player[]{player}, new Block[]{block});
+                // Get both the clicked block and the target block where liquid would be placed
+                Block clickedBlock = event.getBlockClicked();
+                Block targetBlock = clickedBlock.getSide(event.getBlockFace());
                 
-                // Schedule a delayed update to ensure client sync
-                plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
-                    block.getLevel().sendBlocks(new Player[]{player}, new Block[]{block});
-                }, 1); // 1 tick delay
+                // Force blocks update to clear any client-side liquid predictions
+                clickedBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{clickedBlock});
+                if (targetBlock != null) {
+                    targetBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{targetBlock});
+                }
+                
+                // Create final references for the task
+                final Block finalClickedBlock = clickedBlock;
+                final Block finalTargetBlock = targetBlock;
+                
+                // Schedule a delayed update to ensure reliable client sync
+                plugin.getServer().getScheduler().scheduleDelayedTask(new cn.nukkit.scheduler.Task() {
+                    @Override
+                    public void onRun(int currentTick) {
+                        // Re-sync both blocks to ensure client and server are in sync
+                        finalClickedBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{finalClickedBlock});
+                        if (finalTargetBlock != null) {
+                            finalTargetBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{finalTargetBlock});
+                        }
+                        
+                        // For water/lava, sync a larger area to be safe (3x3x3 around target)
+                        syncLiquidArea(player, finalTargetBlock);
+                    }
+                }, 2); // 2 tick delay
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Prevented bucket empty by " + player.getName() + 
+                        " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ());
+                }
             }
         } catch (Exception e) {
             plugin.getLogger().error("Error handling bucket empty", e);
+        }
+    }
+    
+    /**
+     * Syncs a 3x3x3 area around a liquid block to prevent client-side desync
+     * @param player The player to sync blocks for
+     * @param center The center block of the area
+     */
+    private void syncLiquidArea(Player player, Block center) {
+        if (center == null || center.getLevel() == null || player == null) {
+            return;
+        }
+        
+        List<Block> blocksToSync = new ArrayList<>();
+        
+        // Sync a 3x3x3 area around the target block
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                for (int z = -1; z <= 1; z++) {
+                    Block block = center.getLevel().getBlock(
+                        center.getFloorX() + x,
+                        center.getFloorY() + y,
+                        center.getFloorZ() + z
+                    );
+                    blocksToSync.add(block);
+                }
+            }
+        }
+        
+        // Send all blocks at once for efficiency
+        if (!blocksToSync.isEmpty()) {
+            center.getLevel().sendBlocks(new Player[]{player}, blocksToSync.toArray(new Block[0]));
         }
     }
 
@@ -492,62 +567,56 @@ public class ProtectionListener implements Listener {
                 Block block = event.getBlock();
                 Player player = event.getPlayer();
                 
-                // Enhanced bucket interaction handling
-                int itemId = player.getInventory().getItemInHand().getId();
-                if (itemId == 325 || // Empty bucket
-                    itemId == 326 || // Water bucket
-                    itemId == 327) {
-                    
-                    // Get the clicked block position
-                    Position pos = new Position(block.x, block.y, block.z, block.level);
-                    
-                    // Get the position where liquid would be placed (adjacent to clicked face)
-                    Position placePos = getAdjacentPosition(pos, event.getFace().getIndex());
-                    
-                    // Check protection at both positions
-                    boolean clickedProtected = handleProtection(pos, player, "allowBlockBreak");
-                    boolean placeProtected = handleProtection(placePos, player, "allowBlockPlace");
-                    
-                    if (clickedProtected || placeProtected) {
-                        // Cancel the event immediately
-                        event.setCancelled(true);
-                        
-                        // Force client to sync the block
-                        block.getLevel().sendBlocks(new Player[]{player}, new Block[]{block});
-                        
-                        // Also sync adjacent block to prevent client-side liquid prediction
-                        Block adjacentBlock = block.getSide(event.getFace());
-                        if (adjacentBlock != null) {
-                            adjacentBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{adjacentBlock});
-                        }
-                        
-                        // Schedule another update after a tick for reliable client sync
-                        plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
-                            block.getLevel().sendBlocks(new Player[]{player}, new Block[]{block});
-                            if (adjacentBlock != null) {
-                                adjacentBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{adjacentBlock});
-                            }
-                        }, 1);
-                        
-                        // Send message to player
-                        sendProtectionMessage(player, getProtectionMessageKey("allowBlockBreak"));
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Prevented bucket interaction by " + player.getName() + 
-                                " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ());
-                        }
-                        
-                        plugin.getPerformanceMonitor().stopTimer(sample, "player_interact_bucket_check");
-                        return;
-                    }
-                }
-                
                 // Check door interaction first (new check)
                 if (isDoor(block)) {
                     Position pos = new Position(block.x, block.y, block.z, block.level);
                     if (handleProtection(pos, player, "allowDoors")) {
+                        // Cancel the event before any client-side animation can start
                         event.setCancelled(true);
+                        
+                        // Send protection message
                         sendProtectionMessage(player, getProtectionMessageKey("allowDoors"));
+                        
+                        // Get all relevant door blocks
+                        List<Block> doorBlocks = new ArrayList<>();
+                        doorBlocks.add(block);
+                        
+                        // For full-height doors, get the other half
+                        if (block.getId() != Block.TRAPDOOR && 
+                            block.getId() != Block.IRON_TRAPDOOR && 
+                            !block.getClass().getSimpleName().contains("Trapdoor") &&
+                            !block.getClass().getSimpleName().contains("Gate")) {
+                            
+                            // Check the block above (top half of door)
+                            Block doorTop = block.getLevel().getBlock(block.add(0, 1, 0));
+                            if (isDoor(doorTop)) {
+                                doorBlocks.add(doorTop);
+                            }
+                            
+                            // Also check block below (in case this is the top half)
+                            Block doorBottom = block.getLevel().getBlock(block.add(0, -1, 0));
+                            if (isDoor(doorBottom)) {
+                                doorBlocks.add(doorBottom);
+                            }
+                        }
+                        
+                        // Immediately sync the door blocks to prevent any animation
+                        block.getLevel().sendBlocks(new Player[]{player}, doorBlocks.toArray(new Block[0]));
+                        
+                        // Schedule a secondary sync to ensure client state matches server
+                        plugin.getServer().getScheduler().scheduleDelayedTask(new cn.nukkit.scheduler.Task() {
+                            @Override
+                            public void onRun(int currentTick) {
+                                // Re-sync all door blocks again to be absolutely sure
+                                block.getLevel().sendBlocks(new Player[]{player}, doorBlocks.toArray(new Block[0]));
+                            }
+                        }, 1); // Just 1 tick delay for quick response
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Prevented door interaction by " + player.getName() + 
+                                " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ());
+                        }
+                        
                         return;
                     }
                 }
@@ -597,14 +666,34 @@ public class ProtectionListener implements Listener {
                 event.setCancelled(true);
                 sendProtectionMessage(player, getProtectionMessageKey("allowBlockBreak"));
                 
-                // Sync the block to client to prevent visual desync
+                // Get both blocks
                 Block clickedBlock = event.getBlockClicked();
                 Block targetBlock = clickedBlock.getSide(event.getBlockFace());
                 
+                // Immediately sync blocks to client
                 clickedBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{clickedBlock});
                 if (targetBlock != null) {
                     targetBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{targetBlock});
                 }
+                
+                // Create final references for task
+                final Block finalClickedBlock = clickedBlock;
+                final Block finalTargetBlock = targetBlock;
+                
+                // Schedule a delayed sync for reliability
+                plugin.getServer().getScheduler().scheduleDelayedTask(new cn.nukkit.scheduler.Task() {
+                    @Override
+                    public void onRun(int currentTick) {
+                        // Re-sync both blocks
+                        finalClickedBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{finalClickedBlock});
+                        if (finalTargetBlock != null) {
+                            finalTargetBlock.getLevel().sendBlocks(new Player[]{player}, new Block[]{finalTargetBlock});
+                        }
+                        
+                        // For liquids, sync a larger area
+                        syncLiquidArea(player, finalTargetBlock);
+                    }
+                }, 2); // 2 tick delay
                 
                 if (plugin.isDebugMode()) {
                     plugin.debug("Prevented bucket fill by " + player.getName() + 
@@ -721,6 +810,42 @@ public class ProtectionListener implements Listener {
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "entity_damage_check");
+        }
+    }
+
+    /**
+     * Handles general entity damage events, including fall damage
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onEntityDamage(EntityDamageEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            Entity entity = event.getEntity();
+            
+            // Only handle player fall damage
+            if (entity instanceof Player player && event.getCause() == EntityDamageEvent.DamageCause.FALL) {
+                // Skip if player is bypassing protection
+                if (plugin.isBypassing(player.getName())) {
+                    return;
+                }
+                
+                Position pos = player.getPosition();
+                Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                
+                // Check if the area prevents fall damage
+                if (area != null && !area.getToggleState("allowFallDamage")) {
+                    event.setCancelled(true);
+                    sendProtectionMessage(player, getProtectionMessageKey("allowFallDamage"));
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented fall damage for " + player.getName() + 
+                                   " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ() +
+                                   " in area " + area.getName());
+                    }
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "fall_damage_check");
         }
     }
 
@@ -1805,56 +1930,12 @@ public class ProtectionListener implements Listener {
         }
     }
 
-    // Map to store player XP before death
-    private final Map<String, Integer> playerXPBeforeDeath = new ConcurrentHashMap<>();
-
     /**
      * Handles player death to preserve XP
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPlayerDeath(PlayerDeathEvent event) {
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try {
-            Player player = event.getEntity();
-            Position pos = player.getPosition();
-            Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
-            
-            // Clear any previous stored XP to prevent stale data
-            playerXPBeforeDeath.remove(player.getName());
-            
-            // Only store and preserve XP if in an area that disables XP drops
-            if (area != null && !area.getToggleState("allowXPDrop")) {
-                // Store the player's XP level and progress
-                int currentLevel = player.getExperienceLevel();
-                float currentProgress = player.getExperience();
-                int totalXp = calculateTotalExperience(currentLevel, currentProgress);
-                
-                // Store the total XP instead of just the level
-                playerXPBeforeDeath.put(player.getName(), totalXp);
-                
-                // Set "keepExperience" to true to ensure the game preserves XP automatically
-                // This prevents the need for us to manually restore it
-                event.setKeepExperience(true);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("XP preserved: Stored total XP " + totalXp + 
-                                " (level " + currentLevel + ", progress " + currentProgress + ") " +
-                                "for player " + player.getName() + 
-                                " in area " + area.getName() + " (XP drops disabled)");
-                    plugin.debug("Saved " + totalXp + " XP for player " + player.getName() + " to be restored on respawn");
-                }
-            } else if (plugin.isDebugMode()) {
-                if (area == null) {
-                    plugin.debug("XP not preserved: Player " + player.getName() + 
-                                " died outside of any protected area");
-                } else {
-                    plugin.debug("XP not preserved: Player " + player.getName() + 
-                                " died in area " + area.getName() + " (XP drops enabled)");
-                }
-            }
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "player_death_xp_handler");
-        }
+        // This functionality is now directly handled by ExperienceListener using Nukkit's native preservation
     }
 
     /**
@@ -1862,100 +1943,7 @@ public class ProtectionListener implements Listener {
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPlayerRespawn(PlayerRespawnEvent event) {
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try {
-            Player player = event.getPlayer();
-            String playerName = player.getName();
-            
-            // We'll only use the stored XP if the player has zero XP after respawn
-            // This indicates that the game's auto-preservation didn't work
-            Integer storedXp = playerXPBeforeDeath.remove(playerName);
-            if (storedXp != null) {
-                // Schedule XP restoration with a longer delay to ensure player is fully spawned
-                plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
-                    // Make sure player is still online
-                    if (player.isOnline()) {
-                        // Check the player's current XP - should NOT be 0 if keepExperience worked
-                        int currentXp = calculateTotalExperience(player.getExperienceLevel(), player.getExperience());
-                        
-                        // Only restore XP if player has lost it
-                        if (currentXp < 1) {
-                            // Force reset experience to 0 first
-                            player.setExperience(0, 0);
-                            
-                            // Set the total experience directly, overriding any current value
-                            setPlayerTotalExperience(player, storedXp);
-                            
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("XP restored: Set total XP to " + storedXp + 
-                                            " for player " + playerName);
-                            }
-                        } else if (plugin.isDebugMode()) {
-                            plugin.debug("Player " + playerName + " already has " + currentXp + 
-                                        " XP after respawn, no restoration needed");
-                        }
-                    }
-                }, 20);
-            }
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "player_respawn_xp_handler");
-        }
-    }
-    
-    /**
-     * Calculates the total experience based on level and progress
-     */
-    private int calculateTotalExperience(int level, float progress) {
-        // Calculate XP required for the current level
-        int xpForLevel = 0;
-        for (int i = 0; i < level; i++) {
-            xpForLevel += getExpToLevel(i);
-        }
-        
-        // Add the progress towards the next level
-        int xpForNextLevel = getExpToLevel(level);
-        int currentLevelProgress = Math.round(xpForNextLevel * progress);
-        
-        return xpForLevel + currentLevelProgress;
-    }
-    
-    /**
-     * Sets a player's total experience
-     */
-    private void setPlayerTotalExperience(Player player, int totalExp) {
-        // Reset player's experience
-        player.setExperience(0, 0);
-        
-        // Calculate the level and progress
-        int level = 0;
-        int xpForNextLevel = getExpToLevel(level);
-        int remainingXp = totalExp;
-        
-        // Calculate the level based on total XP
-        while (remainingXp >= xpForNextLevel) {
-            remainingXp -= xpForNextLevel;
-            level++;
-            xpForNextLevel = getExpToLevel(level);
-        }
-        
-        // Calculate the progress towards the next level
-        float progress = (float) remainingXp / xpForNextLevel;
-        
-        // Set the experience level and progress
-        player.setExperience(Math.round(progress * 100), level);
-    }
-    
-    /**
-     * Gets the experience required to level up
-     */
-    private int getExpToLevel(int level) {
-        if (level <= 15) {
-            return 2 * level + 7;
-        } else if (level <= 30) {
-            return 5 * level - 38;
-        } else {
-            return 9 * level - 158;
-        }
+        // This functionality is now directly handled by Nukkit's native XP preservation
     }
 
     protected boolean isContainer(Block block) {

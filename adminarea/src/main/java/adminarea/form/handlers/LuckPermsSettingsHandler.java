@@ -171,12 +171,27 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
 
             if (areaData == null) {
                 player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.invalidSession"));
+                handleCancel(player);
                 return;
             }
 
             Area area = plugin.getArea(areaData.getFormId());
             if (area == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
+                handleCancel(player);
+                return;
+            }
+
+            // Check if there's already a permission operation in progress for this area
+            // This helps avoid infinite loops and conflicts with other operations
+            if (plugin.getAreaManager().isPermissionOperationInProgress(area.getName())) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Permission operation already in progress for area " + area.getName() + 
+                                ", unable to process form response safely");
+                }
+                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.operationInProgress",
+                    Map.of("area", area.getName())));
+                handleCancel(player);
                 return;
             }
 
@@ -189,6 +204,7 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
                 if (selectedIndex == 0) {
                     // User didn't select a valid track
                     player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.noTrackSelected"));
+                    handleCancel(player);
                     return;
                 }
                 
@@ -213,253 +229,266 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
                 return;
             }
             
-            // Process permissions for track
-            Map<String, Boolean> newPerms = new HashMap<>();
-            int startIndex = 2; // Skip header and dropdown
+            // Add protection markers to prevent recursive operations
+            plugin.getAreaManager().markPermissionOperationInProgress(area.getName());
             
-            for (int i = 0; i < PermissionToggle.getPlayerToggles().length; i++) {
-                PermissionToggle toggle = PermissionToggle.getPlayerToggles()[i];
-                Boolean value = response.getToggleResponse(startIndex + i);
-                newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
-            }
-
-            // Update track permissions
-            String trackName = trackData.getFormId();
-            Map<String, Map<String, Boolean>> trackPerms = new HashMap<>(currentDTO.trackPermissions());
-            Map<String, Boolean> oldPerms = trackPerms.getOrDefault(trackName, new HashMap<>());
-            trackPerms.put(trackName, newPerms);
-            
-            // Create updated area - FIXED: Use separate AreaBuilder to preserve all permission types
-            AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
-            areaBuilder.trackPermissions(trackPerms);
-            // We don't need to explicitly set player or group permissions as they're already part of the DTO
-            // and will be preserved by the fromDTO() method
-            Area updatedArea = areaBuilder.build();
-            
-            // Get selected group option
-            int selectedGroupIndex = response.getDropdownResponse(1).getElementID();
-            List<String> trackGroups = plugin.getGroupsByTrack(trackName);
-            List<String> groupsToUpdate = new ArrayList<>();
-            
-            if (selectedGroupIndex == 0) {
-                // "All Groups" selected - update all groups in track
-                groupsToUpdate.addAll(trackGroups);
-            } else if (selectedGroupIndex <= trackGroups.size()) {
-                // Single group selected
-                groupsToUpdate.add(trackGroups.get(selectedGroupIndex - 1));
-            }
-            
-            // Update group permissions
-            if (!groupsToUpdate.isEmpty()) {
-                Map<String, Map<String, Boolean>> groupPerms = new HashMap<>(currentDTO.groupPermissions());
-                
-                for (String group : groupsToUpdate) {
-                    Map<String, Boolean> currentGroupPerms = groupPerms.getOrDefault(group, new HashMap<>());
-                    Map<String, Boolean> mergedPerms = new HashMap<>(newPerms);
-                    
-                    // Add any existing group permissions that aren't in the track permissions
-                    for (Map.Entry<String, Boolean> entry : currentGroupPerms.entrySet()) {
-                        if (!mergedPerms.containsKey(entry.getKey())) {
-                            mergedPerms.put(entry.getKey(), entry.getValue());
-                        }
-                    }
-                    
-                    groupPerms.put(group, mergedPerms);
-                }
-                
-                // Update the area with merged group permissions - FIXED: Use proper AreaBuilder approach
-                AreaBuilder updateBuilder = AreaBuilder.fromDTO(updatedArea.toDTO());
-                updateBuilder.groupPermissions(groupPerms);
-                // We don't need to explicitly set player or track permissions as they're already in the DTO
-                updatedArea = updateBuilder.build();
-            }
-            
-            // Fire event
-            LuckPermsTrackChangeEvent event = new LuckPermsTrackChangeEvent(
-                area, trackName, "track_permission_update", oldPerms.getOrDefault("adminarea.enter", false), newPerms.getOrDefault("adminarea.enter", false));
-            plugin.getServer().getPluginManager().callEvent(event);
-            
-            // IMPORTANT: Explicitly save track permissions to the permission database first
             try {
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Explicitly saving track permissions for track " + trackName + 
-                                " in area " + updatedArea.getName());
-                    plugin.debug("  Permission count: " + newPerms.size());
-                    plugin.debug("  Permissions: " + newPerms);
+                // Process permissions for track
+                Map<String, Boolean> newPerms = new HashMap<>();
+                int startIndex = 2; // Skip header and dropdown
+                
+                for (int i = 0; i < PermissionToggle.getPlayerToggles().length; i++) {
+                    PermissionToggle toggle = PermissionToggle.getPlayerToggles()[i];
+                    Boolean value = response.getToggleResponse(startIndex + i);
+                    newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
+                }
+
+                // Update track permissions
+                String trackName = trackData.getFormId();
+                Map<String, Map<String, Boolean>> trackPerms = new HashMap<>(currentDTO.trackPermissions());
+                Map<String, Boolean> oldPerms = trackPerms.getOrDefault(trackName, new HashMap<>());
+                trackPerms.put(trackName, newPerms);
+                
+                // Create updated area - FIXED: Use separate AreaBuilder to preserve all permission types
+                AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+                areaBuilder.trackPermissions(trackPerms);
+                // We don't need to explicitly set player or group permissions as they're already part of the DTO
+                // and will be preserved by the fromDTO() method
+                Area updatedArea = areaBuilder.build();
+                
+                // Get selected group option
+                int selectedGroupIndex = response.getDropdownResponse(1).getElementID();
+                List<String> trackGroups = plugin.getGroupsByTrack(trackName);
+                List<String> groupsToUpdate = new ArrayList<>();
+                
+                if (selectedGroupIndex == 0) {
+                    // "All Groups" selected - update all groups in track
+                    groupsToUpdate.addAll(trackGroups);
+                } else if (selectedGroupIndex <= trackGroups.size()) {
+                    // Single group selected
+                    groupsToUpdate.add(trackGroups.get(selectedGroupIndex - 1));
                 }
                 
-                // Force clear the cache before saving
-                plugin.getPermissionOverrideManager().invalidateTrackPermissions(updatedArea.getName(), trackName);
-                
-                // Save directly to database
-                plugin.getPermissionOverrideManager().setTrackPermissions(
-                    updatedArea.getName(), 
-                    trackName, 
-                    newPerms
-                );
-                
-                // Execute a database checkpoint to ensure changes are persisted
-                try (Connection conn = plugin.getPermissionOverrideManager().getConnection();
-                     Statement stmt = conn.createStatement()) {
-                    stmt.execute("PRAGMA wal_checkpoint(FULL)");
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Executed WAL checkpoint to ensure changes are persisted");
-                    }
-                }
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Successfully saved track permissions to PermissionOverrideManager");
-                    
-                    // Verify permissions were saved
-                    Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getTrackPermissions(
-                        updatedArea.getName(), trackName);
-                    plugin.debug("  Verification - retrieved track permissions: " + 
-                               (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
-                }
-                
-                // If we're updating group permissions too, save those explicitly
+                // Update group permissions
                 if (!groupsToUpdate.isEmpty()) {
-                    Map<String, Map<String, Boolean>> groupPerms = updatedArea.getGroupPermissions();
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Also updating " + groupsToUpdate.size() + " groups from track update");
-                    }
+                    Map<String, Map<String, Boolean>> groupPerms = new HashMap<>(currentDTO.groupPermissions());
                     
                     for (String group : groupsToUpdate) {
-                        Map<String, Boolean> groupPermMap = groupPerms.get(group);
-                        if (groupPermMap != null) {
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("  Saving group permissions for " + group);
-                                plugin.debug("    Permission count: " + groupPermMap.size());
+                        Map<String, Boolean> currentGroupPerms = groupPerms.getOrDefault(group, new HashMap<>());
+                        Map<String, Boolean> mergedPerms = new HashMap<>(newPerms);
+                        
+                        // Add any existing group permissions that aren't in the track permissions
+                        for (Map.Entry<String, Boolean> entry : currentGroupPerms.entrySet()) {
+                            if (!mergedPerms.containsKey(entry.getKey())) {
+                                mergedPerms.put(entry.getKey(), entry.getValue());
                             }
-                            
-                            // Force clear cache before saving
-                            plugin.getPermissionOverrideManager().invalidateGroupPermissions(updatedArea.getName(), group);
-                            
-                            // Save directly to database
-                            plugin.getPermissionOverrideManager().setGroupPermissions(
-                                updatedArea.getName(),
-                                group,
-                                groupPermMap
-                            );
-                            
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("    Successfully saved group permissions");
-                                
-                                // Verify permissions were saved
-                                Map<String, Boolean> verifyGroupPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
-                                    updatedArea.getName(), group);
-                                plugin.debug("    Verification - retrieved group permissions: " + 
-                                           (verifyGroupPerms != null ? verifyGroupPerms.size() : "null") + " permissions");
-                            }
-                        } else if (plugin.isDebugMode()) {
-                            plugin.debug("  No permissions found for group: " + group);
+                        }
+                        
+                        groupPerms.put(group, mergedPerms);
+                    }
+                    
+                    // Update the area with merged group permissions - FIXED: Use proper AreaBuilder approach
+                    AreaBuilder updateBuilder = AreaBuilder.fromDTO(updatedArea.toDTO());
+                    updateBuilder.groupPermissions(groupPerms);
+                    // We don't need to explicitly set player or track permissions as they're already in the DTO
+                    updatedArea = updateBuilder.build();
+                }
+                
+                // Fire event
+                LuckPermsTrackChangeEvent event = new LuckPermsTrackChangeEvent(
+                    area, trackName, "track_permission_update", oldPerms.getOrDefault("adminarea.enter", false), newPerms.getOrDefault("adminarea.enter", false));
+                plugin.getServer().getPluginManager().callEvent(event);
+                
+                // IMPORTANT: Explicitly save track permissions to the permission database first
+                try {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Explicitly saving track permissions for track " + trackName + 
+                                    " in area " + updatedArea.getName());
+                        plugin.debug("  Permission count: " + newPerms.size());
+                        plugin.debug("  Permissions: " + newPerms);
+                    }
+                    
+                    // Force clear the cache before saving
+                    plugin.getPermissionOverrideManager().invalidateTrackPermissions(updatedArea.getName(), trackName);
+                    
+                    // Save directly to database
+                    plugin.getPermissionOverrideManager().setTrackPermissions(
+                        updatedArea.getName(), 
+                        trackName, 
+                        newPerms
+                    );
+                    
+                    // Execute a database checkpoint to ensure changes are persisted
+                    try (Connection conn = plugin.getPermissionOverrideManager().getConnection();
+                         Statement stmt = conn.createStatement()) {
+                        stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Executed WAL checkpoint to ensure changes are persisted");
                         }
                     }
-                }
-                
-                // Invalidate all area caches
-                plugin.getPermissionOverrideManager().invalidateCache(updatedArea.getName());
-                plugin.getAreaManager().invalidateAreaCache(updatedArea.getName());
-                
-            } catch (Exception e) {
-                plugin.getLogger().error("Failed to explicitly save track/group permissions", e);
-                throw e;
-            }
-            
-            // Save area to database
-            try {
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Saving updated area to database: " + updatedArea.getName());
-                }
-                
-                plugin.getDatabaseManager().saveArea(updatedArea);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Area saved successfully");
-                }
-                
-                // Force synchronize permissions to ensure they're saved
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Now synchronizing all permissions from area to database");
-                }
-                
-                plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("  Synchronization complete");
                     
-                    // Verify area was updated correctly
-                    Area verifyArea = plugin.getArea(updatedArea.getName());
-                    if (verifyArea != null) {
-                        Map<String, Map<String, Boolean>> verifyTrackPerms = verifyArea.getTrackPermissions();
-                        plugin.debug("  Verification - area track permissions: " + 
-                                   (verifyTrackPerms != null ? verifyTrackPerms.size() : "null") + " tracks");
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Successfully saved track permissions to PermissionOverrideManager");
                         
-                        if (verifyTrackPerms != null && verifyTrackPerms.containsKey(trackName)) {
-                            plugin.debug("  Verification - permissions for track " + trackName + ": " + 
-                                       verifyTrackPerms.get(trackName).size() + " permissions");
-                        } else {
-                            plugin.debug("  Verification - track " + trackName + " not found in permissions");
+                        // Verify permissions were saved
+                        Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getTrackPermissions(
+                            updatedArea.getName(), trackName);
+                        plugin.debug("  Verification - retrieved track permissions: " + 
+                                   (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
+                    }
+                    
+                    // If we're updating group permissions too, save those explicitly
+                    if (!groupsToUpdate.isEmpty()) {
+                        Map<String, Map<String, Boolean>> groupPerms = updatedArea.getGroupPermissions();
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Also updating " + groupsToUpdate.size() + " groups from track update");
                         }
                         
-                        // Also verify any updated groups
-                        if (!groupsToUpdate.isEmpty()) {
-                            Map<String, Map<String, Boolean>> verifyGroupPerms = verifyArea.getGroupPermissions();
-                            plugin.debug("  Verification - area group permissions: " + 
-                                       (verifyGroupPerms != null ? verifyGroupPerms.size() : "null") + " groups");
+                        for (String group : groupsToUpdate) {
+                            Map<String, Boolean> groupPermMap = groupPerms.get(group);
+                            if (groupPermMap != null) {
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("  Saving group permissions for " + group);
+                                    plugin.debug("    Permission count: " + groupPermMap.size());
+                                }
+                                
+                                // Force clear cache before saving
+                                plugin.getPermissionOverrideManager().invalidateGroupPermissions(updatedArea.getName(), group);
+                                
+                                // Save directly to database
+                                plugin.getPermissionOverrideManager().setGroupPermissions(
+                                    updatedArea.getName(),
+                                    group,
+                                    groupPermMap
+                                );
+                                
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("    Successfully saved group permissions");
+                                    
+                                    // Verify permissions were saved
+                                    Map<String, Boolean> verifyGroupPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
+                                        updatedArea.getName(), group);
+                                    plugin.debug("    Verification - retrieved group permissions: " + 
+                                               (verifyGroupPerms != null ? verifyGroupPerms.size() : "null") + " permissions");
+                                }
+                            } else if (plugin.isDebugMode()) {
+                                plugin.debug("  No permissions found for group: " + group);
+                            }
+                        }
+                    }
+                    
+                    // Invalidate all area caches
+                    plugin.getPermissionOverrideManager().invalidateCache(updatedArea.getName());
+                    plugin.getAreaManager().invalidateAreaCache(updatedArea.getName());
+                    
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to explicitly save track/group permissions", e);
+                    throw e;
+                } finally {
+                    // Ensure we always unmark the permission operation
+                    plugin.getAreaManager().unmarkPermissionOperation(area.getName());
+                }
+                
+                // Save area to database
+                try {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Saving updated area to database: " + updatedArea.getName());
+                    }
+                    
+                    plugin.getDatabaseManager().saveArea(updatedArea);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Area saved successfully");
+                    }
+                    
+                    // Force synchronize permissions to ensure they're saved
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Now synchronizing all permissions from area to database");
+                    }
+                    
+                    plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("  Synchronization complete");
+                        
+                        // Verify area was updated correctly
+                        Area verifyArea = plugin.getArea(updatedArea.getName());
+                        if (verifyArea != null) {
+                            Map<String, Map<String, Boolean>> verifyTrackPerms = verifyArea.getTrackPermissions();
+                            plugin.debug("  Verification - area track permissions: " + 
+                                       (verifyTrackPerms != null ? verifyTrackPerms.size() : "null") + " tracks");
                             
-                            for (String group : groupsToUpdate) {
-                                if (verifyGroupPerms != null && verifyGroupPerms.containsKey(group)) {
-                                    plugin.debug("  Verification - permissions for group " + group + ": " + 
-                                               verifyGroupPerms.get(group).size() + " permissions");
-                                } else {
-                                    plugin.debug("  Verification - group " + group + " not found in permissions");
+                            if (verifyTrackPerms != null && verifyTrackPerms.containsKey(trackName)) {
+                                plugin.debug("  Verification - permissions for track " + trackName + ": " + 
+                                           verifyTrackPerms.get(trackName).size() + " permissions");
+                            } else {
+                                plugin.debug("  Verification - track " + trackName + " not found in permissions");
+                            }
+                            
+                            // Also verify any updated groups
+                            if (!groupsToUpdate.isEmpty()) {
+                                Map<String, Map<String, Boolean>> verifyGroupPerms = verifyArea.getGroupPermissions();
+                                plugin.debug("  Verification - area group permissions: " + 
+                                           (verifyGroupPerms != null ? verifyGroupPerms.size() : "null") + " groups");
+                                
+                                for (String group : groupsToUpdate) {
+                                    if (verifyGroupPerms != null && verifyGroupPerms.containsKey(group)) {
+                                        plugin.debug("  Verification - permissions for group " + group + ": " + 
+                                                   verifyGroupPerms.get(group).size() + " permissions");
+                                    } else {
+                                        plugin.debug("  Verification - group " + group + " not found in permissions");
+                                    }
                                 }
                             }
+                        } else {
+                            plugin.debug("  Verification - area not found: " + updatedArea.getName());
                         }
-                    } else {
-                        plugin.debug("  Verification - area not found: " + updatedArea.getName());
                     }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to save area to database", e);
+                    throw e;
                 }
+                
+                // Update in plugin
+                plugin.updateArea(updatedArea);
+                
+                // Notify player of updated permissions
+                if (groupsToUpdate.size() > 1) {
+                    player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.trackUpdated",
+                        Map.of(
+                            "track", trackName,
+                            "area", area.getName(),
+                            "count", String.valueOf(groupsToUpdate.size())
+                        )
+                    ));
+                } else if (groupsToUpdate.size() == 1) {
+                    player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.groupUpdated",
+                        Map.of(
+                            "group", groupsToUpdate.get(0),
+                            "area", area.getName()
+                        )
+                    ));
+                }
+
+                // Clear selection data and return to edit menu
+                plugin.getFormIdMap().remove(player.getName() + TRACK_DATA_KEY);
+                plugin.getFormIdMap().remove(player.getName() + GROUP_DATA_KEY);
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+
+                // Force flush permissions to disk
+                plugin.getPermissionOverrideManager().forceFlushPermissions();
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("  Forced permissions to be flushed to disk");
+                }
+
             } catch (Exception e) {
-                plugin.getLogger().error("Failed to save area to database", e);
+                // Ensure we unmark the permission operation if there's an error
+                plugin.getAreaManager().unmarkPermissionOperation(area.getName());
                 throw e;
             }
             
-            // Update in plugin
-            plugin.updateArea(updatedArea);
-            
-            // Notify player of updated permissions
-            if (groupsToUpdate.size() > 1) {
-                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.trackUpdated",
-                    Map.of(
-                        "track", trackName,
-                        "area", area.getName(),
-                        "count", String.valueOf(groupsToUpdate.size())
-                    )
-                ));
-            } else if (groupsToUpdate.size() == 1) {
-                player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.groupUpdated",
-                    Map.of(
-                        "group", groupsToUpdate.get(0),
-                        "area", area.getName()
-                    )
-                ));
-            }
-
-            // Clear selection data and return to edit menu
-            plugin.getFormIdMap().remove(player.getName() + TRACK_DATA_KEY);
-            plugin.getFormIdMap().remove(player.getName() + GROUP_DATA_KEY);
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
-
-            // Force flush permissions to disk
-            plugin.getPermissionOverrideManager().forceFlushPermissions();
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("  Forced permissions to be flushed to disk");
-            }
-
         } catch (Exception e) {
             plugin.getLogger().error("Error handling LuckPerms settings response", e);
             player.sendMessage(plugin.getLanguageManager().get("gui.luckperms.messages.error.updateFailed",
@@ -470,13 +499,26 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
 
     @Override
     protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        throw new UnsupportedOperationException("LuckPerms settings form does not use simple responses");
+        handleCancel(player);
     }
 
     @Override
     public void handleCancel(Player player) {
+        // Clean up form data
+        FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
         plugin.getFormIdMap().remove(player.getName() + TRACK_DATA_KEY);
         plugin.getFormIdMap().remove(player.getName() + GROUP_DATA_KEY);
+        
+        // If we have a valid area, go back to the edit area form
+        if (areaData != null) {
+            Area area = plugin.getArea(areaData.getFormId());
+            if (area != null) {
+                plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+                return;
+            }
+        }
+        
+        // If we don't have a valid area, perform standard cleanup
         cleanup(player);
     }
 } 

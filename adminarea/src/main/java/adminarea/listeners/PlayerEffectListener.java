@@ -801,4 +801,36 @@ public class PlayerEffectListener implements Listener {
             return 9 * level - 158;
         }
     }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPlayerTeleport(PlayerTeleportEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+        try {
+            // Only handle chorus fruit teleportation
+            if (event.getCause() == PlayerTeleportEvent.TeleportCause.CHORUS_FRUIT) {
+                Player player = event.getPlayer();
+                
+                // Skip if player is bypassing protection
+                if (plugin.isBypassing(player.getName())) {
+                    return;
+                }
+                
+                // Check the target location for protection
+                Position target = event.getTo();
+                
+                // Check if chorus fruit teleportation is allowed in this area
+                if (protectionListener.handleProtection(target, player, "allowChorusFruit")) {
+                    event.setCancelled(true);
+                    protectionListener.sendProtectionMessage(player, "messages.protection.chorusFruit");
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Prevented chorus fruit teleportation for " + player.getName() + 
+                                   " at " + target.getFloorX() + "," + target.getFloorY() + "," + target.getFloorZ());
+                    }
+                }
+            }
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "chorus_fruit_teleport_check");
+        }
+    }
 }

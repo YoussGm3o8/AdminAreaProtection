@@ -47,7 +47,7 @@ public class ExperienceListener implements Listener {
         
         // Check if XP pickup is allowed in the area
         Position pos = player.getPosition();
-        boolean canPickup = protectionListener.handleProtection(pos, player, "allowXPPickup");
+        boolean canPickup = !protectionListener.handleProtection(pos, player, "allowXPPickup");
         
         // Update the player's ability to pick up XP
         if (player.canPickupXP() != canPickup) {
@@ -61,22 +61,37 @@ public class ExperienceListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlayerDeath(PlayerDeathEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             Player player = event.getEntity();
             Position pos = player.getPosition();
             
-            // Check if XP drops are allowed in this area
+            // Use Nukkit's built-in XP preservation when allowXPDrop is disabled
+            // Note: handleProtection returns true if protection should be applied (action blocked)
             if (protectionListener.handleProtection(pos, player, "allowXPDrop")) {
-                // Force keep XP instead of dropping it
-                // The game will handle restoring XP automatically, so we don't need to save it
+                // Set Nukkit to preserve XP
                 event.setKeepExperience(true);
                 
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Set keepExperience flag to true for player " + player.getName() + 
-                        " - XP will be preserved by game rules");
+                    plugin.debug("XP preserved: Using Nukkit's built-in preservation for player " + 
+                        player.getName() + " (level: " + player.getExperienceLevel() + 
+                        ", progress: " + player.getExperience() + ")");
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("XP not preserved: Player " + player.getName() + 
+                        " died in area where XP drops are allowed");
+            }
+            
+            // Check if we should keep inventory when item drops are disabled
+            if (protectionListener.handleProtection(pos, player, "allowItemDrop")) {
+                // If item drops are protected (not allowed), keep inventory
+                event.setKeepInventory(true);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Inventory preserved: Player " + player.getName() + 
+                        " died in area where item drops are not allowed");
                 }
             }
         } finally {
@@ -85,40 +100,10 @@ public class ExperienceListener implements Listener {
     }
     
     /**
-     * Calculate the total experience based on level and progress
-     * 
-     * @param level The experience level
-     * @param progress The progress to the next level (0.0-1.0)
-     * @return The total experience points
+     * Cleanup method to be called when the plugin is disabled or reloaded
+     * Clears all cached data to prevent memory leaks
      */
-    private int calculateTotalExperience(int level, float progress) {
-        int totalXp = 0;
-        
-        // XP for complete levels - using more accurate Nukkit formula
-        for (int i = 0; i < level; i++) {
-            totalXp += getExpToLevel(i);
-        }
-        
-        // Add partial level progress
-        int currentLevelXp = getExpToLevel(level);
-        totalXp += Math.round(currentLevelXp * progress);
-        
-        return totalXp;
-    }
-    
-    /**
-     * Get the experience required to reach the next level
-     * 
-     * @param level The current level
-     * @return The experience required
-     */
-    private int getExpToLevel(int level) {
-        if (level >= 30) {
-            return 112 + (level - 30) * 9;
-        } else if (level >= 15) {
-            return 37 + (level - 15) * 5;
-        } else {
-            return 7 + level * 2;
-        }
+    public void cleanup() {
+        lastXpPickupCheck.clear();
     }
 }

@@ -358,8 +358,7 @@ public class AreaManager implements IAreaManager {
         }
         
         // Check if this is a permission-only operation
-        boolean isPermissionOperation = isPermissionOperationInProgress(area.getName()) || 
-                                       plugin.getPermissionOverrideManager().isPermissionOnlyOperation();
+        boolean isPermissionOperation = isPermissionOperationInProgress(area.getName());
         
         if (isPermissionOperation) {
             if (plugin.isDebugMode()) {
@@ -1438,8 +1437,7 @@ public class AreaManager implements IAreaManager {
         
         // Check if this is a permission-only operation by checking both flags
         // This ensures we detect active permission operations correctly
-        boolean isPermissionOperation = isPermissionOperationInProgress(area.getName()) ||
-                                      plugin.getPermissionOverrideManager().isPermissionOnlyOperation();
+        boolean isPermissionOperation = isPermissionOperationInProgress(area.getName());
                                       
         if (isPermissionOperation) {
             if (plugin.isDebugMode()) {
@@ -2263,14 +2261,17 @@ public class AreaManager implements IAreaManager {
     public void markPermissionOperationInProgress(String areaName) {
         if (areaName == null || areaName.isEmpty()) return;
         
-        // Add to the set of active permission operations
-        Set<String> permOps = Area.getPermissionOperations();
-        if (permOps != null) {
-            String key = areaName.toLowerCase() + "_permissions";
-            permOps.add(key);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Marked permission operation in progress for area: " + areaName);
+        // Access ThreadLocal directly to prevent potential recursion
+        ThreadLocal<Set<String>> permissionOperationsLocal = Area.getPermissionOperationsThreadLocal();
+        if (permissionOperationsLocal != null) {
+            Set<String> permOps = permissionOperationsLocal.get();
+            if (permOps != null) {
+                String key = areaName.toLowerCase() + "_permissions";
+                permOps.add(key);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Marked permission operation in progress for area: " + areaName);
+                }
             }
         }
     }
@@ -2284,14 +2285,18 @@ public class AreaManager implements IAreaManager {
     public void unmarkPermissionOperation(String areaName) {
         if (areaName == null || areaName.isEmpty()) return;
         
-        // Remove from the set of active permission operations
-        Set<String> permOps = Area.getPermissionOperations();
-        if (permOps != null) {
-            String key = areaName.toLowerCase() + "_permissions";
-            permOps.remove(key);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Unmarked permission operation for area: " + areaName);
+        // Access ThreadLocal directly to prevent potential recursion
+        // Instead of: Set<String> permOps = Area.getPermissionOperations();
+        ThreadLocal<Set<String>> permissionOperations = Area.getPermissionOperationsThreadLocal();
+        if (permissionOperations != null) {
+            Set<String> permOps = permissionOperations.get();
+            if (permOps != null) {
+                String key = areaName.toLowerCase() + "_permissions";
+                permOps.remove(key);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Unmarked permission operation for area: " + areaName);
+                }
             }
         }
     }
@@ -2305,16 +2310,14 @@ public class AreaManager implements IAreaManager {
     public boolean isPermissionOperationInProgress(String areaName) {
         if (areaName == null || areaName.isEmpty()) return false;
         
-        // Check overall permission operation status
-        if (plugin.getPermissionOverrideManager().isPermissionOnlyOperation()) {
-            return true;
-        }
-        
-        // Check area-specific permission operations
-        Set<String> permOps = Area.getPermissionOperations();
-        if (permOps != null && !permOps.isEmpty()) {
-            String key = areaName.toLowerCase() + "_permissions";
-            return permOps.contains(key);
+        // Check area-specific permission operations with direct ThreadLocal access
+        ThreadLocal<Set<String>> permissionOperationsLocal = Area.getPermissionOperationsThreadLocal();
+        if (permissionOperationsLocal != null) {
+            Set<String> permOps = permissionOperationsLocal.get();
+            if (permOps != null && !permOps.isEmpty()) {
+                String key = areaName.toLowerCase() + "_permissions";
+                return permOps.contains(key);
+            }
         }
         
         return false;
@@ -2348,13 +2351,21 @@ public class AreaManager implements IAreaManager {
             return false;
         }
         
+        boolean markedOperation = false;
         try {
-            // First mark that we're in a permission-only operation to prevent other systems from interfering
-            markPermissionOperationInProgress(areaName);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for " + 
-                          playerName + " in area " + areaName);
+            // Check if the operation is already in progress to prevent recursion
+            if (!isPermissionOperationInProgress(areaName)) {
+                // First mark that we're in a permission-only operation to prevent other systems from interfering
+                markPermissionOperationInProgress(areaName);
+                markedOperation = true;
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for " + 
+                              playerName + " in area " + areaName);
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Permission operation already in progress for " + areaName + ", skipping recursive operation");
+                return false;
             }
             
             // 1. Delete existing permissions first to ensure clean state
@@ -2471,8 +2482,10 @@ public class AreaManager implements IAreaManager {
             
             return success;
         } finally {
-            // Always clean up the permission operation markers
-            unmarkPermissionOperation(areaName);
+            // Only unmark if we were the ones who marked it
+            if (markedOperation) {
+                unmarkPermissionOperation(areaName);
+            }
         }
     }
     
@@ -2490,13 +2503,21 @@ public class AreaManager implements IAreaManager {
             return false;
         }
         
+        boolean markedOperation = false;
         try {
-            // First mark that we're in a permission-only operation to prevent other systems from interfering
-            markPermissionOperationInProgress(areaName);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for group " + 
-                          groupName + " in area " + areaName);
+            // Check if the operation is already in progress to prevent recursion
+            if (!isPermissionOperationInProgress(areaName)) {
+                // First mark that we're in a permission-only operation to prevent other systems from interfering
+                markPermissionOperationInProgress(areaName);
+                markedOperation = true;
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for group " + 
+                              groupName + " in area " + areaName);
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Permission operation already in progress for " + areaName + ", skipping recursive operation");
+                return false;
             }
             
             // 1. Delete existing permissions first to ensure clean state
@@ -2572,8 +2593,10 @@ public class AreaManager implements IAreaManager {
             
             return success;
         } finally {
-            // Always clean up the permission operation markers
-            unmarkPermissionOperation(areaName);
+            // Only unmark if we were the ones who marked it
+            if (markedOperation) {
+                unmarkPermissionOperation(areaName);
+            }
         }
     }
     
@@ -2591,13 +2614,21 @@ public class AreaManager implements IAreaManager {
             return false;
         }
         
+        boolean markedOperation = false;
         try {
-            // First mark that we're in a permission-only operation to prevent other systems from interfering
-            markPermissionOperationInProgress(areaName);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for track " + 
-                          trackName + " in area " + areaName);
+            // Check if the operation is already in progress to prevent recursion
+            if (!isPermissionOperationInProgress(areaName)) {
+                // First mark that we're in a permission-only operation to prevent other systems from interfering
+                markPermissionOperationInProgress(areaName);
+                markedOperation = true;
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Direct update of " + permissionUpdates.size() + " permissions for track " + 
+                              trackName + " in area " + areaName);
+                }
+            } else if (plugin.isDebugMode()) {
+                plugin.debug("Permission operation already in progress for " + areaName + ", skipping recursive operation");
+                return false;
             }
             
             // 1. Delete existing permissions first to ensure clean state
@@ -2673,8 +2704,10 @@ public class AreaManager implements IAreaManager {
             
             return success;
         } finally {
-            // Always clean up the permission operation markers
-            unmarkPermissionOperation(areaName);
+            // Only unmark if we were the ones who marked it
+            if (markedOperation) {
+                unmarkPermissionOperation(areaName);
+            }
         }
     }
     
@@ -2708,8 +2741,7 @@ public class AreaManager implements IAreaManager {
 
     // Recreate an area from its DTO
     public Area recreateArea(AreaDTO dto) {
-        boolean isPermissionOperation = plugin.getPermissionOverrideManager().isPermissionOnlyOperation() || 
-                                      isPermissionOperationInProgress(dto.name());
+        boolean isPermissionOperation = isPermissionOperationInProgress(dto.name());
         
         if (isPermissionOperation) {
             plugin.getLogger().info("[Debug] Skipping area recreation during permission operation for: " + dto.name());

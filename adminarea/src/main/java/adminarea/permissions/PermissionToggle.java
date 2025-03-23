@@ -27,99 +27,151 @@ import com.google.gson.reflect.TypeToken;
 public class PermissionToggle implements AutoCloseable {
     private final AdminAreaProtectionPlugin plugin;
     private Connection dbConnection;
-        private final Map<String, Map<String, Boolean>> playerToggles;
-        private final Map<String, Map<String, Boolean>> groupToggles;
-        private final Map<String, Set<String>> groupMembership;
-        private final Map<String, Boolean> defaultToggles;
-        private final ScheduledExecutorService scheduler;
-        private final Cache<String, Boolean> toggleCache;
-        private final Path backupPath;
+    private final Map<String, Map<String, Boolean>> playerToggles;
+    private final Map<String, Map<String, Boolean>> groupToggles;
+    private final Map<String, Set<String>> groupMembership;
+    private final Map<String, Boolean> defaultToggles;
+    private final ScheduledExecutorService scheduler;
+    private final Cache<String, Boolean> toggleCache;
+    private final Path backupPath;
+    
+    private static final int CACHE_SIZE = 1000;
+    private static final long CACHE_DURATION = TimeUnit.MINUTES.toMillis(10);
+    private static final String DB_FILE = "permission_toggles.db";
+
+    private final String displayName;
+    private final String permissionNode;
+    private final boolean defaultValue;
+    private final Category category; // Add category field
+
+    // Constructor for form toggle usage - remove SQLException
+    public PermissionToggle(String displayName, String permissionNode, boolean defaultValue, Category category) {
+        this.plugin = null; // Not needed for form toggles
+        this.dbConnection = null; // Remove database connection for form toggles
+        this.displayName = displayName;
+        this.permissionNode = permissionNode;
+        this.defaultValue = defaultValue;
+        this.category = category;
         
-        private static final int CACHE_SIZE = 1000;
-        private static final long CACHE_DURATION = TimeUnit.MINUTES.toMillis(10);
-        private static final String DB_FILE = "permission_toggles.db";
-    
-        private final String displayName;
-        private final String permissionNode;
-        private final boolean defaultValue;
-        private final Category category; // Add category field
-    
-        // Constructor for form toggle usage - remove SQLException
-        public PermissionToggle(String displayName, String permissionNode, boolean defaultValue, Category category) {
-            this.plugin = null; // Not needed for form toggles
-            this.dbConnection = null; // Remove database connection for form toggles
-            this.displayName = displayName;
-            this.permissionNode = permissionNode;
-            this.defaultValue = defaultValue;
-            this.category = category;
-            
-            // Initialize remaining fields to null/empty as they're not needed for form toggles
-            this.playerToggles = null;
-            this.groupToggles = null;
-            this.groupMembership = null;
-            this.defaultToggles = null;
-            this.scheduler = null;
-            this.toggleCache = null;
-            this.backupPath = null;
-        }
-    
-        // Original constructor for permission management
-        public PermissionToggle(AdminAreaProtectionPlugin plugin) throws SQLException {
-            this.plugin = plugin;
-            this.playerToggles = new ConcurrentHashMap<>();
-            this.groupToggles = new ConcurrentHashMap<>();
-            this.groupMembership = new ConcurrentHashMap<>();
-            this.defaultToggles = new ConcurrentHashMap<>();
-            this.scheduler = Executors.newScheduledThreadPool(1);
-            this.toggleCache = new Cache<>(CACHE_SIZE, CACHE_DURATION);
-            this.backupPath = plugin.getDataFolder().toPath().resolve("toggle_backups");
-            this.displayName = null; // Not needed for permission management
-            this.permissionNode = null; // Not needed for permission management
-            this.defaultValue = false; // Not needed for permission management
-            this.category = null; // Not needed for permission management
-            
-            Path dbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
-            this.dbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-            initializeDatabase();
-            loadDefaultToggles();
-            setupScheduledTasks();
-        }
-    
-        private void initializeDatabase() throws SQLException {
-            Path dbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
-            dbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-        
-        try (Statement stmt = dbConnection.createStatement()) {
-            // Create tables
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS player_toggles (
-                    player_id TEXT NOT NULL,
-                    permission TEXT NOT NULL,
-                    state BOOLEAN NOT NULL,
-                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (player_id, permission)
-                )
-            """);
-            
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS group_toggles (
-                    group_id TEXT NOT NULL,
-                    permission TEXT NOT NULL,
-                    state BOOLEAN NOT NULL,
-                    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (group_id, permission)
-                )
-            """);
-            
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS group_membership (
-                    player_id TEXT NOT NULL,
-                    group_id TEXT NOT NULL,
-                    PRIMARY KEY (player_id, group_id)
-                )
-            """);
-        }
+        // Initialize remaining fields to null/empty as they're not needed for form toggles
+        this.playerToggles = null;
+        this.groupToggles = null;
+        this.groupMembership = null;
+        this.defaultToggles = null;
+        this.scheduler = null;
+        this.toggleCache = null;
+        this.backupPath = null;
     }
+
+    // Original constructor for permission management
+    public PermissionToggle(AdminAreaProtectionPlugin plugin) throws SQLException {
+        this.plugin = plugin;
+        this.playerToggles = new ConcurrentHashMap<>();
+        this.groupToggles = new ConcurrentHashMap<>();
+        this.groupMembership = new ConcurrentHashMap<>();
+        this.defaultToggles = new ConcurrentHashMap<>();
+        this.scheduler = Executors.newScheduledThreadPool(1);
+        this.toggleCache = new Cache<>(CACHE_SIZE, CACHE_DURATION);
+        this.backupPath = plugin.getDataFolder().toPath().resolve("toggle_backups");
+        this.displayName = null; // Not needed for permission management
+        this.permissionNode = null; // Not needed for permission management
+        this.defaultValue = false; // Not needed for permission management
+        this.category = null; // Not needed for permission management
+        
+        Path dbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
+        this.dbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+        initializeDatabase();
+        loadDefaultToggles();
+        setupScheduledTasks();
+    }
+
+    private void initializeDatabase() throws SQLException {
+        Path dbPath = plugin.getDataFolder().toPath().resolve(DB_FILE);
+        dbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
+    
+    try (Statement stmt = dbConnection.createStatement()) {
+        // Create tables
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS player_toggles (
+                player_id TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                state BOOLEAN NOT NULL,
+                last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (player_id, permission)
+            )
+        """);
+        
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS group_toggles (
+                group_id TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                state BOOLEAN NOT NULL,
+                last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_id, permission)
+            )
+        """);
+        
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS group_membership (
+                player_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                PRIMARY KEY (player_id, group_id)
+            )
+        """);
+        
+        // Initialize default toggles after table creation
+        initializeDefaultToggles();
+    }
+}
+
+/**
+ * Initialize default toggle values in the database
+ * This ensures all toggles (including showEffectMessages) are properly set up
+ */
+private void initializeDefaultToggles() {
+    try {
+        // Check if we need to initialize the default toggles (only on first run)
+        try (PreparedStatement stmt = dbConnection.prepareStatement(
+                "SELECT COUNT(*) FROM group_toggles WHERE group_id = 'default'")) {
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next() && rs.getInt(1) == 0) {
+                // No default toggles exist, initialize them all
+                for (PermissionToggle toggle : getDefaultToggles()) {
+                    String permissionNode = toggle.getPermissionNode();
+                    // Ensure the permission node has the proper prefix
+                    if (!permissionNode.startsWith("gui.permissions.toggles.")) {
+                        permissionNode = "gui.permissions.toggles." + permissionNode;
+                    }
+                    
+                    try (PreparedStatement insertStmt = dbConnection.prepareStatement(
+                            "INSERT OR IGNORE INTO group_toggles (group_id, permission, state) VALUES ('default', ?, ?)")) {
+                        insertStmt.setString(1, permissionNode);
+                        insertStmt.setBoolean(2, toggle.getDefaultValue());
+                        insertStmt.executeUpdate();
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Initialized default toggle: " + permissionNode + " = " + toggle.getDefaultValue());
+                        }
+                    }
+                }
+                
+                // Explicitly ensure showEffectMessages is included
+                try (PreparedStatement insertStmt = dbConnection.prepareStatement(
+                        "INSERT OR IGNORE INTO group_toggles (group_id, permission, state) VALUES ('default', ?, ?)")) {
+                    insertStmt.setString(1, "gui.permissions.toggles.showEffectMessages");
+                    insertStmt.setBoolean(2, true);
+                    insertStmt.executeUpdate();
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Explicitly initialized showEffectMessages toggle in database with default value: true");
+                    }
+                }
+            }
+        }
+    } catch (SQLException e) {
+        plugin.getLogger().error("Failed to initialize default toggles", e);
+    }
+}
 
     private void setupScheduledTasks() {
         // Schedule periodic cache cleanup
@@ -265,6 +317,75 @@ public class PermissionToggle implements AutoCloseable {
                 plugin.getLogger().error("Failed to load default toggles", e);
             }
         }
+        
+        // Ensure critical toggles are always present in database
+        ensureCriticalTogglesExist();
+    }
+    
+    /**
+     * Ensures critical toggles are properly initialized in the database
+     * This method fixes issues where some toggles might be missing from the database
+     */
+    private void ensureCriticalTogglesExist() {
+        try {
+            // Get a list of all defined toggles
+            List<PermissionToggle> allToggles = getDefaultToggles();
+            
+            // Check if each toggle exists in the database
+            for (PermissionToggle toggle : allToggles) {
+                String toggleName = toggle.getPermissionNode();
+                // Ensure the toggle name has the proper prefix
+                if (!toggleName.startsWith("gui.permissions.toggles.")) {
+                    toggleName = "gui.permissions.toggles." + toggleName;
+                }
+                
+                // Check if this toggle exists in any group's toggles in the database
+                try (PreparedStatement stmt = dbConnection.prepareStatement(
+                    "SELECT COUNT(*) FROM group_toggles WHERE permission = ?")) {
+                    stmt.setString(1, toggleName);
+                    ResultSet rs = stmt.executeQuery();
+                    if (rs.next() && rs.getInt(1) == 0) {
+                        // Toggle doesn't exist in group_toggles, add default to default group
+                        try (PreparedStatement insertStmt = dbConnection.prepareStatement(
+                            "INSERT OR IGNORE INTO group_toggles (group_id, permission, state) VALUES ('default', ?, ?)")) {
+                            insertStmt.setString(1, toggleName);
+                            insertStmt.setBoolean(2, toggle.getDefaultValue());
+                            insertStmt.executeUpdate();
+                            
+                            plugin.debug("Initialized missing toggle in database: " + toggleName + 
+                                       " = " + toggle.getDefaultValue());
+                        }
+                    }
+                }
+            }
+            
+            // Specifically ensure the showEffectMessages toggle exists (the toggle we're fixing)
+            String showEffectToggleName = "gui.permissions.toggles.showEffectMessages";
+            boolean defaultValue = true;
+            
+            try (PreparedStatement stmt = dbConnection.prepareStatement(
+                "SELECT COUNT(*) FROM group_toggles WHERE permission = ?")) {
+                stmt.setString(1, showEffectToggleName);
+                ResultSet rs = stmt.executeQuery();
+                if (rs.next() && rs.getInt(1) == 0) {
+                    // showEffectMessages toggle doesn't exist in group_toggles, add it
+                    try (PreparedStatement insertStmt = dbConnection.prepareStatement(
+                        "INSERT OR IGNORE INTO group_toggles (group_id, permission, state) VALUES ('default', ?, ?)")) {
+                        insertStmt.setString(1, showEffectToggleName);
+                        insertStmt.setBoolean(2, defaultValue);
+                        insertStmt.executeUpdate();
+                        
+                        plugin.debug("Explicitly initialized showEffectMessages toggle in database with default value: " + defaultValue);
+                    }
+                    
+                    // Also add to default toggles map in memory
+                    defaultToggles.put(showEffectToggleName, defaultValue);
+                }
+            }
+            
+        } catch (SQLException e) {
+            plugin.getLogger().error("Failed to initialize critical toggles", e);
+        }
     }
 
     protected void backup() {
@@ -402,75 +523,75 @@ public class PermissionToggle implements AutoCloseable {
         List<PermissionToggle> toggles = new ArrayList<>();
         
         // Building toggles
-    toggles.add(new PermissionToggle("Allow Building", PERM_BUILD, false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow General Interaction", PERM_INTERACT, true, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Armor Stand Access", "allowArmorStand", false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Hanging Break", "allowHangingBreak", false, Category.BUILDING));
-    toggles.add(new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING));
-    
-    // Redstone & Mechanics
-    toggles.add(new PermissionToggle("Allow Redstone", "allowRedstone", true, Category.TECHNICAL));
-    toggles.add(new PermissionToggle("Allow Pistons", "allowPistons", true, Category.TECHNICAL));
-    toggles.add(new PermissionToggle("Allow Hoppers", "allowHopper", true, Category.TECHNICAL));
-    toggles.add(new PermissionToggle("Allow Dispensers", "allowDispenser", true, Category.TECHNICAL));
-    
-    // Environment
-    toggles.add(new PermissionToggle("Allow Fire Spread", "allowFire", false, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Plant Growth", "allowPlantGrowth", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Farmland Trampling", "allowFarmlandTrampling", false, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Block Gravity", "allowBlockGravity", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Ice Form/Melt", "allowIceForm", true, Category.ENVIRONMENT));
-    toggles.add(new PermissionToggle("Allow Snow Form/Melt", "allowSnowForm", true, Category.ENVIRONMENT));
-    
-    // Entities
-    toggles.add(new PermissionToggle("Allow PvP", "allowPvP", false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Monster Spawning", PERM_MOB_SPAWN, false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Animal Taming", "allowTaming", true, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Entity Leashing", "allowLeashing", true, Category.ENTITY));
-    
-    // Items & Drops
-    toggles.add(new PermissionToggle("Allow Item Drops", "allowItemDrop", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Item Pickup", "allowItemPickup", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow XP Drops", "allowXPDrop", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow XP Pickup", "allowXPPickup", true, Category.SPECIAL));
-    
-    // Explosions & Protection
-    toggles.add(new PermissionToggle("Allow TNT", "allowTNT", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Creeper", "allowCreeper", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Bed Explosions", "allowBedExplosion", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL));
-    
-    // Vehicles
-    toggles.add(new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Vehicle Exit", "allowVehicleExit", true, Category.SPECIAL));
-    
-    // Player Effects
-    toggles.add(new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Flight", "allowFlight", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Ender Pearl", "allowEnderPearl", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Allow Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL));
-    toggles.add(new PermissionToggle("Show Effect Messages", "showEffectMessages", true, Category.SPECIAL));
-    
-    // Add shooting projectile toggle alongside other entity controls
-    toggles.add(new PermissionToggle("Allow Shoot Projectile", "allowShootProjectile", true, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY));
-    toggles.add(new PermissionToggle("Allow Entity Leashing", "allowLeashing", true, Category.ENTITY));
-    
-    return toggles;
-}
+        toggles.add(new PermissionToggle("Allow Building", PERM_BUILD, false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Breaking", PERM_BREAK, false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow General Interaction", PERM_INTERACT, true, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Container Access", "allowContainer", false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Item Frame Rotation", "allowItemRotation", false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Armor Stand Access", "allowArmorStand", false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Hanging Break", "allowHangingBreak", false, Category.BUILDING));
+        toggles.add(new PermissionToggle("Allow Door Interaction", "allowDoors", false, Category.BUILDING));
+        
+        // Redstone & Mechanics
+        toggles.add(new PermissionToggle("Allow Redstone", "allowRedstone", true, Category.TECHNICAL));
+        toggles.add(new PermissionToggle("Allow Pistons", "allowPistons", true, Category.TECHNICAL));
+        toggles.add(new PermissionToggle("Allow Hoppers", "allowHopper", true, Category.TECHNICAL));
+        toggles.add(new PermissionToggle("Allow Dispensers", "allowDispenser", true, Category.TECHNICAL));
+        
+        // Environment
+        toggles.add(new PermissionToggle("Allow Fire Spread", "allowFire", false, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Liquid Flow", "allowLiquid", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Block Spread", "allowBlockSpread", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Plant Growth", "allowPlantGrowth", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Farmland Trampling", "allowFarmlandTrampling", false, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Leaf Decay", "allowLeafDecay", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Block Gravity", "allowBlockGravity", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Ice Form/Melt", "allowIceForm", true, Category.ENVIRONMENT));
+        toggles.add(new PermissionToggle("Allow Snow Form/Melt", "allowSnowForm", true, Category.ENVIRONMENT));
+        
+        // Entities
+        toggles.add(new PermissionToggle("Allow PvP", "allowPvP", false, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Monster Spawning", PERM_MOB_SPAWN, false, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Animal Spawning", "allowAnimalSpawn", true, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Entity Damage", "allowDamageEntities", false, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Animal Breeding", "allowBreeding", true, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Animal Taming", "allowTaming", true, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Entity Leashing", "allowLeashing", true, Category.ENTITY));
+        
+        // Items & Drops
+        toggles.add(new PermissionToggle("Allow Item Drops", "allowItemDrop", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Item Pickup", "allowItemPickup", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow XP Drops", "allowXPDrop", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow XP Pickup", "allowXPPickup", true, Category.SPECIAL));
+        
+        // Explosions & Protection
+        toggles.add(new PermissionToggle("Allow TNT", "allowTNT", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Creeper", "allowCreeper", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Bed Explosions", "allowBedExplosion", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Crystal Explosions", "allowCrystalExplosion", false, Category.SPECIAL));
+        
+        // Vehicles
+        toggles.add(new PermissionToggle("Allow Vehicle Place", "allowVehiclePlace", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Vehicle Break", PERM_VEHICLE_BREAK, false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Vehicle Enter", "allowVehicleEnter", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Vehicle Exit", "allowVehicleExit", true, Category.SPECIAL));
+        
+        // Player Effects
+        toggles.add(new PermissionToggle("Allow Fall Damage", "allowFallDamage", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Hunger", "allowHunger", true, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Flight", "allowFlight", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Ender Pearl", "allowEnderPearl", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Allow Chorus Fruit", "allowChorusFruit", false, Category.SPECIAL));
+        toggles.add(new PermissionToggle("Show Effect Messages", "showEffectMessages", true, Category.SPECIAL));
+        
+        // Add shooting projectile toggle alongside other entity controls
+        toggles.add(new PermissionToggle("Allow Shoot Projectile", "allowShootProjectile", true, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Monster Target", "allowMonsterTarget", false, Category.ENTITY));
+        toggles.add(new PermissionToggle("Allow Entity Leashing", "allowLeashing", true, Category.ENTITY));
+        
+        return toggles;
+    }
 
 
     // Returns the default player-relevant toggles for LuckPerms overrides

@@ -313,10 +313,73 @@ public class PermissionOverrideManager implements AutoCloseable {
         }
         
         try {
-            // Use the direct method to avoid area recreation
+            // Check if there's already a permission operation in progress
+            if (plugin.getAreaManager().isPermissionOperationInProgress(areaName)) {
+                // If an operation is already in progress, apply the permissions directly to the database
+                // instead of using directUpdateTrackPermissions which would skip the operation
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Permission operation already in progress for area " + areaName + 
+                              ", applying track permissions directly to database");
+                }
+                
+                // CRITICAL FIX: Don't get the area and call setTrackPermissions, which would cause recursion.
+                // Instead, save directly to the database and update caches
+                
+                // 1. Save directly to database
+                databaseManager.saveTrackPermissions(areaName, trackName, new HashMap<>(permissions));
+                
+                // 2. Update cache
+                String cacheKey = PermissionCache.createTrackKey(areaName, trackName);
+                permissionCache.cacheTrackPermissions(cacheKey, new HashMap<>(permissions));
+                
+                // 3. Invalidate area caches
+                plugin.getAreaManager().invalidateAreaCache(areaName);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Directly saved track permissions to database, bypassing Area object calls");
+                }
+                
+                // Success - no need to throw an exception
+                return;
+            }
+            
+            // Normal path - use the direct method to avoid area recreation
             boolean success = plugin.getAreaManager().directUpdateTrackPermissions(areaName, trackName, permissions);
             
             if (!success) {
+                // Before throwing an exception, verify if the permissions were actually applied
+                // This could happen if another thread already applied the permissions
+                Area area = plugin.getArea(areaName);
+                if (area != null) {
+                    Map<String, Boolean> currentPerms = area.getTrackPermissions(trackName);
+                    if (currentPerms != null && !currentPerms.isEmpty()) {
+                        // Permissions exist, so they might have been applied by another thread
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Track permissions already exist for " + trackName + 
+                                      " in area " + areaName + ", verifying consistency");
+                        }
+                        
+                        // Check if all requested permissions are set correctly
+                        boolean allMatch = true;
+                        for (Map.Entry<String, Boolean> entry : permissions.entrySet()) {
+                            Boolean currentValue = currentPerms.get(entry.getKey());
+                            if (currentValue == null || !currentValue.equals(entry.getValue())) {
+                                allMatch = false;
+                                break;
+                            }
+                        }
+                        
+                        if (allMatch) {
+                            // All permissions match, so no need to throw an exception
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("All track permissions match expected values, operation successful");
+                            }
+                            return;
+                        }
+                    }
+                }
+                
+                // If we get here, the permissions weren't applied correctly
                 throw new DatabaseException("Failed to update track permissions using direct method");
             }
             
@@ -963,29 +1026,40 @@ public class PermissionOverrideManager implements AutoCloseable {
     /**
      * Synchronize permissions from an area to the database
      */
-    public void synchronizeFromArea(Area area) throws DatabaseException {
+    public void synchronizeFromArea(Area area) {
         if (area == null) {
             return;
         }
-        
-        String areaName = area.getName();
-        
-        // Prevent recursion - check if we're already synchronizing this area
-        String syncKey = "sync_from:" + areaName;
-        Set<String> processingSet = PROCESSING_PERMISSIONS.get();
-        
-        if (processingSet.contains(syncKey)) {
-            if (plugin.isDebugMode()) {
-                plugin.debug("Preventing recursive synchronization from area " + areaName);
+
+        String syncKey = "sync_operation:" + area.getName();
+        Set<String> processingSet = area.getPermissionOperations();
+        boolean shouldRemove = false;
+
+        if (!processingSet.contains(syncKey)) {
+            processingSet.add(syncKey);
+            shouldRemove = true;
+            
+            try {
+                // Get permissions from area
+                Map<String, Map<String, Boolean>> playerPerms = area.getPlayerPermissions();
+                Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
+                Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
+                
+                // Synchronize to database
+                try {
+                    synchronizePermissions(area, SyncDirection.TO_DATABASE);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Synchronized permissions from area " + area.getName() + " to database");
+                    }
+                } catch (DatabaseException e) {
+                    plugin.getLogger().error("Failed to synchronize permissions from area " + area.getName(), e);
+                }
+            } finally {
+                if (shouldRemove) {
+                    processingSet.remove(syncKey);
+                }
             }
-            return;
-        }
-        
-        processingSet.add(syncKey);
-        try {
-            synchronizePermissions(area, SyncDirection.TO_DATABASE);
-        } finally {
-            processingSet.remove(syncKey);
         }
     }
     
