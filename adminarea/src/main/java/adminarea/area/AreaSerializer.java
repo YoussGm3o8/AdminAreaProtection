@@ -31,6 +31,8 @@ public class AreaSerializer {
         data.put("permissions", dto.permissions().toMap());
         data.put("enterMessage", dto.enterMessage());
         data.put("leaveMessage", dto.leaveMessage());
+        data.put("enterTitle", dto.enterTitle());
+        data.put("leaveTitle", dto.leaveTitle());
         data.put("trackPermissions", dto.trackPermissions());
         data.put("playerPermissions", dto.playerPermissions());
         data.put("potionEffects", dto.potionEffects().toMap());
@@ -98,6 +100,8 @@ public class AreaSerializer {
             permissions,
             (String) data.getOrDefault("enterMessage", ""),
             (String) data.getOrDefault("leaveMessage", ""),
+            (String) data.getOrDefault("enterTitle", ""),
+            (String) data.getOrDefault("leaveTitle", ""),
             (Map<String, Map<String, Boolean>>) data.getOrDefault("trackPermissions", new HashMap<>()),
             (Map<String, Map<String, Boolean>>) data.getOrDefault("playerPermissions", new HashMap<>()),
             potionEffects

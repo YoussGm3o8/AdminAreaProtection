@@ -20,6 +20,8 @@ public record AreaDTO(
     Permissions permissions,
     String enterMessage,
     String leaveMessage,
+    String enterTitle,
+    String leaveTitle,
     Map<String, Map<String, Boolean>> trackPermissions,
     Map<String, Map<String, Boolean>> playerPermissions,
     JSONObject potionEffects
@@ -246,6 +248,8 @@ public record AreaDTO(
         inheritedToggleStates = inheritedToggleStates != null ? inheritedToggleStates : new JSONObject();
         enterMessage = enterMessage != null ? enterMessage : "";
         leaveMessage = leaveMessage != null ? leaveMessage : "";
+        enterTitle = enterTitle != null ? enterTitle : "";
+        leaveTitle = leaveTitle != null ? leaveTitle : "";
         trackPermissions = trackPermissions != null ? trackPermissions : new HashMap<>();
         playerPermissions = playerPermissions != null ? playerPermissions : new HashMap<>();
         potionEffects = potionEffects != null ? potionEffects : new JSONObject();

@@ -22,6 +22,7 @@ messages:
       entry: "§7- {area}\n  §7Мир: {world}\n  §7Приоритет: {priority}\n  §7Размер: {size} блоков"
     merge:
       success: "{prefix}Области успешно объединены в: {area}"
+      withFlags: "{prefix}§aОбъединены области в '{area}' с {count} объединенными разрешениями"
     visualize:
       success: "{prefix}Начата визуализация для области: {area}"
       complete: "{prefix}§aВизуализация остановлена для области '{area}'."
@@ -71,7 +72,7 @@ messages:
 
   # Protection messages
   protection:
-    blockBreak: "{prefix}§cВы не можете ломать блоки в {area}!"
+    blockBreak: "{prefix}§cВы не можете ломать блоки в {area}"
     blockPlace: "{prefix}§cВы не можете размещать блоки в {area}"
     interact: "{prefix}§cВы не можете взаимодействовать с этим в {area}"
     container: "{prefix}§cВы не можете получить доступ к контейнерам в {area}"
@@ -161,6 +162,8 @@ messages:
     invalidArguments: "§cНеверные аргументы: {args}"
     databaseError: "§cОшибка базы данных: {error}"
     worldNotFound: "§cМир '{world}' не найден"
+    differentWorlds: "§cОбласти должны быть в одном мире"
+    cannotMergeGlobal: "§cГлобальные области не могут быть объединены"
     positionsCrossWorld: "§cПозиции должны быть в одном мире"
     selectionTooSmall: "§cВыделение слишком маленькое (минимум: {min} блоков)"
     selectionTooLarge: "§cВыделение слишком большое (максимум: {max} блоков)"
@@ -518,6 +521,10 @@ gui:
       enterPlaceholder: "Сообщение, показываемое при входе в область"
       leaveMessage: "Сообщение При Выходе"
       leavePlaceholder: "Сообщение, показываемое при выходе из области"
+      enterTitle: "Заголовок При Входе"
+      enterTitlePlaceholder: "Заголовок, показываемый при входе в область"
+      leaveTitle: "Заголовок При Выходе"
+      leaveTitlePlaceholder: "Заголовок, показываемый при выходе из области"
       protection: "\n§2Настройки Защиты\n§8Настройте разрешения области"
       categoryHeader: "\n§6Настройки {category}"
 

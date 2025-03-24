@@ -21,6 +21,7 @@ import org.json.JSONObject;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
+import adminarea.permissions.PermissionToggle;
 
 public class AreaCommand extends Command {
 
@@ -315,6 +316,12 @@ public class AreaCommand extends Command {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.differentWorlds"));
                 return true;
             }
+            
+            // Check if either area is a global area (cannot merge global areas)
+            if (area1.isGlobal() || area2.isGlobal()) {
+                player.sendMessage(plugin.getLanguageManager().get("messages.error.cannotMergeGlobal"));
+                return true;
+            }
 
             // Create new area name
             String newName = area1.getName() + "_" + area2.getName();
@@ -342,24 +349,39 @@ public class AreaCommand extends Command {
                 .priority(Math.max(dto1.priority(), dto2.priority()))
                 .showTitle(dto1.showTitle() || dto2.showTitle());
 
+            // Get toggle states from both areas
+            Map<String, Boolean> toggleMap1 = perms1.toMap();
+            Map<String, Boolean> toggleMap2 = perms2.toMap();
+            
+            // Get all permission toggles from the PermissionToggle class
+            List<adminarea.permissions.PermissionToggle> allToggles = adminarea.permissions.PermissionToggle.getDefaultToggles();
+            int mergedTogglesCount = 0;
+            
             // Use most restrictive settings if configured
             boolean useMostRestrictive = plugin.getConfigManager().getBoolean("areaSettings.useMostRestrictiveMerge", true);
             
-            if (useMostRestrictive) {
-                // Apply most restrictive permissions
-                builder.setPermission("allowBlockBreak", perms1.allowBlockBreak() && perms2.allowBlockBreak())
-                      .setPermission("allowBlockPlace", perms1.allowBlockPlace() && perms2.allowBlockPlace())
-                      .setPermission("allowPvP", perms1.allowPvP() && perms2.allowPvP())
-                      .setPermission("allowInteract", perms1.allowInteract() && perms2.allowInteract())
-                      .setPermission("allowContainer", perms1.allowContainer() && perms2.allowContainer());
-            } else {
-                // Use settings from higher priority area
-                AreaDTO.Permissions primary = dto1.priority() >= dto2.priority() ? perms1 : perms2;
-                builder.setPermission("allowBlockBreak", primary.allowBlockBreak())
-                      .setPermission("allowBlockPlace", primary.allowBlockPlace())
-                      .setPermission("allowPvP", primary.allowPvP())
-                      .setPermission("allowInteract", primary.allowInteract())
-                      .setPermission("allowContainer", primary.allowContainer());
+            // Process all toggle permissions based on the merge strategy
+            for (adminarea.permissions.PermissionToggle toggle : allToggles) {
+                String permKey = toggle.getPermissionNode();
+                boolean value;
+                
+                if (useMostRestrictive) {
+                    // For most restrictive, AND the values (false is more restrictive)
+                    boolean value1 = toggleMap1.getOrDefault(permKey, toggle.getDefaultValue());
+                    boolean value2 = toggleMap2.getOrDefault(permKey, toggle.getDefaultValue());
+                    value = value1 && value2;
+                } else {
+                    // Use value from higher priority area, defaulting to the other area if not present
+                    if (dto1.priority() >= dto2.priority()) {
+                        value = toggleMap1.getOrDefault(permKey, toggleMap2.getOrDefault(permKey, toggle.getDefaultValue()));
+                    } else {
+                        value = toggleMap2.getOrDefault(permKey, toggleMap1.getOrDefault(permKey, toggle.getDefaultValue()));
+                    }
+                }
+                
+                // Set the permission in the new area
+                builder.setPermission(permKey, value);
+                mergedTogglesCount++;
             }
 
             // Build and save merged area
@@ -370,8 +392,17 @@ public class AreaCommand extends Command {
             plugin.getAreaManager().removeArea(area1);
             plugin.getAreaManager().removeArea(area2);
 
-            player.sendMessage(plugin.getLanguageManager().get("success.area.merge.success",
-                Map.of("area", mergedArea.getName())));
+            // Use appropriate success message based on the language file
+            Map<String, String> placeholders = new HashMap<>();
+            placeholders.put("area", mergedArea.getName());
+            placeholders.put("count", String.valueOf(mergedTogglesCount));
+            
+            // Check if withFlags message exists, use it if available
+            if (plugin.getLanguageManager().getRaw("success.area.merge.withFlags") != null) {
+                player.sendMessage(plugin.getLanguageManager().get("success.area.merge.withFlags", placeholders));
+            } else {
+                player.sendMessage(plugin.getLanguageManager().get("success.area.merge.success", placeholders));
+            }
 
             return true;
         } catch (Exception e) {

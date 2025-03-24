@@ -21,8 +21,10 @@ public class BasicSettingsHandler extends BaseFormHandler {
     private static final int NAME_INDEX = 1;
     private static final int PRIORITY_INDEX = 2;
     private static final int SHOW_TITLE_INDEX = 3;
-    private static final int ENTER_MESSAGE_INDEX = 5;
-    private static final int LEAVE_MESSAGE_INDEX = 6;
+    private static final int ENTER_TITLE_INDEX = 5;
+    private static final int ENTER_MESSAGE_INDEX = 6;
+    private static final int LEAVE_TITLE_INDEX = 7;
+    private static final int LEAVE_MESSAGE_INDEX = 8;
     
     private final AreaValidationUtils areaValidationUtils;
 
@@ -63,6 +65,20 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 plugin.getLogger().error("Failed to reload area from database", e);
             }
             
+            // Get title values from areaTitles.yml if available
+            String enterTitle = area.toDTO().enterTitle();
+            String enterMessage = area.toDTO().enterMessage();
+            String leaveTitle = area.toDTO().leaveTitle();
+            String leaveMessage = area.toDTO().leaveMessage();
+            
+            // Check if we have custom titles configured in areaTitles.yml
+            if (plugin.getConfigManager().hasAreaTitleConfig(area.getName())) {
+                enterTitle = plugin.getConfigManager().getAreaTitleText(area.getName(), "enter", "main", enterTitle);
+                enterMessage = plugin.getConfigManager().getAreaTitleText(area.getName(), "enter", "subtitle", enterMessage);
+                leaveTitle = plugin.getConfigManager().getAreaTitleText(area.getName(), "leave", "main", leaveTitle);
+                leaveMessage = plugin.getConfigManager().getAreaTitleText(area.getName(), "leave", "subtitle", leaveMessage);
+            }
+            
             FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.basicSettings.title", 
                 Map.of("area", area.getName())));
             
@@ -86,14 +102,24 @@ public class BasicSettingsHandler extends BaseFormHandler {
             // Add display settings section
             form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.basicSettings.sections.display")));
             form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.enterTitle"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.enterTitlePlaceholder"),
+                enterTitle
+            ));
+            form.addElement(new ElementInput(
                 plugin.getLanguageManager().get("gui.basicSettings.labels.enterMessage"),
                 plugin.getLanguageManager().get("gui.basicSettings.labels.enterPlaceholder"),
-                area.toDTO().enterMessage()
+                enterMessage
+            ));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.basicSettings.labels.leaveTitle"),
+                plugin.getLanguageManager().get("gui.basicSettings.labels.leaveTitlePlaceholder"),
+                leaveTitle
             ));
             form.addElement(new ElementInput(
                 plugin.getLanguageManager().get("gui.basicSettings.labels.leaveMessage"),
                 plugin.getLanguageManager().get("gui.basicSettings.labels.leavePlaceholder"),
-                area.toDTO().leaveMessage()
+                leaveMessage
             ));
             
             return form;
@@ -116,14 +142,29 @@ public class BasicSettingsHandler extends BaseFormHandler {
             String oldName = area.getName();
             int oldPriority = area.getPriority();
             boolean oldShowTitle = area.toDTO().showTitle();
+            
+            // Get old title values from area or areaTitles.yml if available
+            String oldEnterTitle = area.toDTO().enterTitle();
             String oldEnterMessage = area.toDTO().enterMessage();
+            String oldLeaveTitle = area.toDTO().leaveTitle();
             String oldLeaveMessage = area.toDTO().leaveMessage();
+            
+            // Check if we have custom titles configured in areaTitles.yml
+            String basePath = "areaTitles." + area.getName();
+            if (plugin.getConfigManager().exists(basePath)) {
+                oldEnterTitle = plugin.getConfigManager().getSettingString(basePath + ".enter.main", oldEnterTitle);
+                oldEnterMessage = plugin.getConfigManager().getSettingString(basePath + ".enter.subtitle", oldEnterMessage);
+                oldLeaveTitle = plugin.getConfigManager().getSettingString(basePath + ".leave.main", oldLeaveTitle);
+                oldLeaveMessage = plugin.getConfigManager().getSettingString(basePath + ".leave.subtitle", oldLeaveMessage);
+            }
 
             // Get new values
             String newName = response.getInputResponse(NAME_INDEX);
             String priorityInput = response.getInputResponse(PRIORITY_INDEX);
             boolean newShowTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
+            String newEnterTitle = response.getInputResponse(ENTER_TITLE_INDEX);
             String newEnterMessage = response.getInputResponse(ENTER_MESSAGE_INDEX);
+            String newLeaveTitle = response.getInputResponse(LEAVE_TITLE_INDEX);
             String newLeaveMessage = response.getInputResponse(LEAVE_MESSAGE_INDEX);
             
             // Validate name (skip validation if name hasn't changed)
@@ -167,24 +208,30 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 // Check what needs to be updated
                 boolean updatePriority = oldPriority != newPriority;
                 boolean updateShowTitle = oldShowTitle != newShowTitle;
+                boolean updateEnterTitle = !oldEnterTitle.equals(newEnterTitle);
                 boolean updateEnterMsg = !oldEnterMessage.equals(newEnterMessage);
+                boolean updateLeaveTitle = !oldLeaveTitle.equals(newLeaveTitle);
                 boolean updateLeaveMsg = !oldLeaveMessage.equals(newLeaveMessage);
                 boolean updateName = !oldName.equals(newName);
                 
                 // Track changed fields for message
                 if (updatePriority) changedFields++;
                 if (updateShowTitle) changedFields++;
+                if (updateEnterTitle) changedFields++;
                 if (updateEnterMsg) changedFields++;
+                if (updateLeaveTitle) changedFields++;
                 if (updateLeaveMsg) changedFields++;
                 if (updateName) changedFields++;
                 
                 // If we need to update anything other than the name
-                if (updatePriority || updateShowTitle || updateEnterMsg || updateLeaveMsg) {
+                if (updatePriority || updateShowTitle || updateEnterTitle || updateEnterMsg || updateLeaveTitle || updateLeaveMsg) {
                     // Create updated area using builder
                     Area updatedArea = AreaBuilder.fromDTO(currentDTO)
                         .priority(updatePriority ? newPriority : currentDTO.priority())
                         .showTitle(updateShowTitle ? newShowTitle : currentDTO.showTitle())
+                        .enterTitle(updateEnterTitle ? newEnterTitle : currentDTO.enterTitle())
                         .enterMessage(updateEnterMsg ? newEnterMessage : currentDTO.enterMessage())
+                        .leaveTitle(updateLeaveTitle ? newLeaveTitle : currentDTO.leaveTitle())
                         .leaveMessage(updateLeaveMsg ? newLeaveMessage : currentDTO.leaveMessage())
                         .build();
                         
@@ -198,15 +245,22 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 }
 
                 // Handle title configuration updates
-                if (updateShowTitle || updateEnterMsg || updateLeaveMsg || updateName) {
+                if (updateShowTitle || updateEnterTitle || updateEnterMsg || updateLeaveTitle || updateLeaveMsg || updateName) {
                     // If area name changed, remove old title entry
                     if (updateName) {
-                        // Code to handle title config for removed name
+                        plugin.getConfigManager().removeAreaTitleConfig(oldName);
                     }
                     
                     // Configure new title settings if enabled
                     if (newShowTitle) {
-                        // Code to configure title settings
+                        // Update title settings in areaTitles.yml
+                        plugin.getConfigManager().setAreaTitleText(newName, "enter", "main", newEnterTitle);
+                        plugin.getConfigManager().setAreaTitleText(newName, "enter", "subtitle", newEnterMessage);
+                        plugin.getConfigManager().setAreaTitleText(newName, "leave", "main", newLeaveTitle);
+                        plugin.getConfigManager().setAreaTitleText(newName, "leave", "subtitle", newLeaveMessage);
+                    } else {
+                        // Remove title configuration if title display is disabled
+                        plugin.getConfigManager().removeAreaTitleConfig(newName);
                     }
                 }
 
@@ -218,7 +272,9 @@ public class BasicSettingsHandler extends BaseFormHandler {
                         .name(newName)
                         .priority(updatePriority ? newPriority : currentDTO.priority())
                         .showTitle(updateShowTitle ? newShowTitle : currentDTO.showTitle())
+                        .enterTitle(updateEnterTitle ? newEnterTitle : currentDTO.enterTitle())
                         .enterMessage(updateEnterMsg ? newEnterMessage : currentDTO.enterMessage())
+                        .leaveTitle(updateLeaveTitle ? newLeaveTitle : currentDTO.leaveTitle())
                         .leaveMessage(updateLeaveMsg ? newLeaveMessage : currentDTO.leaveMessage())
                         .build().toDTO();
                     

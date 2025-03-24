@@ -16,6 +16,7 @@ import org.json.JSONObject;
 public class ConfigManager {
     private final AdminAreaProtectionPlugin plugin;
     private Config config;
+    private Config areaTitlesConfig;
     private final Map<String, Object> defaults;
 
     public ConfigManager(AdminAreaProtectionPlugin plugin) {
@@ -41,26 +42,7 @@ public class ConfigManager {
         defaults.put("undoHistorySize", 10);
         defaults.put("selectionCooldown", 250); // milliseconds
 
-        // Title configurations with default fadeIn=20, stay=40, fadeOut=20
-        Map<String, Object> titleConfig = new HashMap<>();
-        
-        Map<String, Object> enterTitle = new HashMap<>();
-        enterTitle.put("main", "§aEntering {area}");
-        enterTitle.put("subtitle", "Welcome to {area}!");
-        enterTitle.put("fadeIn", 20);
-        enterTitle.put("stay", 40);
-        enterTitle.put("fadeOut", 20);
-        titleConfig.put("enter", enterTitle);
-        
-        Map<String, Object> leaveTitle = new HashMap<>();
-        leaveTitle.put("main", "§eLeaving {area}");
-        leaveTitle.put("subtitle", "Goodbye from {area}!");
-        leaveTitle.put("fadeIn", 20);
-        leaveTitle.put("stay", 40);
-        leaveTitle.put("fadeOut", 20);
-        titleConfig.put("leave", leaveTitle);
-        
-        defaults.put("title", titleConfig);
+        // Title configurations removed - now handled by areaTitles.yml
 
         // LuckPerms integration settings
         defaults.put("luckperms.enabled", true);
@@ -80,6 +62,7 @@ public class ConfigManager {
             plugin.getDataFolder().mkdirs();
         }
         
+        // Load main config.yml
         File configFile = new File(plugin.getDataFolder(), "config.yml");
         if (!configFile.exists()) {
             // Try to save the default config file
@@ -102,6 +85,57 @@ public class ConfigManager {
         }
 
         config = new Config(configFile, Config.YAML);
+        
+        // Load area titles from areaTitles.yml
+        File areaTitlesFile = new File(plugin.getDataFolder(), "areaTitles.yml");
+        if (!areaTitlesFile.exists()) {
+            // Try to save the default areaTitles.yml file
+            try {
+                plugin.saveResource("areaTitles.yml", false);
+                plugin.getLogger().info("Created default areaTitles.yml");
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to create default areaTitles.yml", e);
+                
+                // If the file still doesn't exist, create a basic one
+                if (!areaTitlesFile.exists()) {
+                    try {
+                        areaTitlesFile.createNewFile();
+                        plugin.getLogger().info("Created empty areaTitles.yml");
+                    } catch (Exception ex) {
+                        plugin.getLogger().error("Failed to create empty areaTitles.yml", ex);
+                    }
+                }
+            }
+        }
+        
+        areaTitlesConfig = new Config(areaTitlesFile, Config.YAML);
+        
+        // Initialize default area titles if empty
+        if (areaTitlesConfig.getKeys(false).isEmpty()) {
+            // Create default structure
+            Map<String, Object> defaultEntry = new HashMap<>();
+            
+            Map<String, Object> enterDefaults = new HashMap<>();
+            enterDefaults.put("main", "§6Welcome to {area}");
+            enterDefaults.put("subtitle", "§eEnjoy your stay!");
+            enterDefaults.put("fadeIn", 20);
+            enterDefaults.put("stay", 40);
+            enterDefaults.put("fadeOut", 20);
+            
+            Map<String, Object> leaveDefaults = new HashMap<>();
+            leaveDefaults.put("main", "§6Leaving {area}");
+            leaveDefaults.put("subtitle", "§eThank you for visiting!");
+            leaveDefaults.put("fadeIn", 20);
+            leaveDefaults.put("stay", 40);
+            leaveDefaults.put("fadeOut", 20);
+            
+            Map<String, Object> defaultSection = new HashMap<>();
+            defaultSection.put("enter", enterDefaults);
+            defaultSection.put("leave", leaveDefaults);
+            
+            areaTitlesConfig.set("default", defaultSection);
+            saveAreaTitles();
+        }
         
         // Load debug mode first before any other operations
         boolean debugMode = config.getBoolean("debug", false);
@@ -127,6 +161,123 @@ public class ConfigManager {
             plugin.getLogger().error("Failed to save configuration", e);
         }
     }
+    
+    public void saveAreaTitles() {
+        try {
+            areaTitlesConfig.save();
+            if (plugin.isDebugMode()) {
+                plugin.debug("Area titles saved successfully");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to save area titles", e);
+        }
+    }
+
+    /**
+     * Gets area title configuration for the specified area
+     * 
+     * @param areaName The name of the area
+     * @return Map containing title configuration or null if not found
+     */
+    public Map<String, Object> getAreaTitleConfig(String areaName) {
+        // Check if the area has configuration in areaTitles.yml
+        if (areaTitlesConfig.exists(areaName)) {
+            return areaTitlesConfig.getSection(areaName).getAllMap();
+        }
+        
+        // Return null if no specific configuration exists
+        return null;
+    }
+    
+    /**
+     * Gets the title text for an area's enter or leave event
+     * 
+     * @param areaName The area name
+     * @param type "enter" or "leave"
+     * @param field "main" or "subtitle"
+     * @param defaultValue Default value if not found
+     * @return The configured title text
+     */
+    public String getAreaTitleText(String areaName, String type, String field, String defaultValue) {
+        // Check specific area config first
+        String specificPath = areaName + "." + type + "." + field;
+        if (areaTitlesConfig.exists(specificPath)) {
+            return areaTitlesConfig.getString(specificPath);
+        }
+        
+        // Fall back to default config
+        String defaultPath = "default." + type + "." + field;
+        if (areaTitlesConfig.exists(defaultPath)) {
+            String template = areaTitlesConfig.getString(defaultPath);
+            return template.replace("{area}", areaName);
+        }
+        
+        // Use provided default if nothing else is available
+        return defaultValue;
+    }
+    
+    /**
+     * Updates area title configuration in areaTitles.yml
+     * 
+     * @param areaName The area name
+     * @param type "enter" or "leave"
+     * @param field "main" or "subtitle"
+     * @param value The new value to set
+     */
+    public void setAreaTitleText(String areaName, String type, String field, String value) {
+        areaTitlesConfig.set(areaName + "." + type + "." + field, value);
+        saveAreaTitles();
+    }
+    
+    /**
+     * Checks if area title configuration exists for the specified area
+     * 
+     * @param areaName The area name
+     * @return true if configuration exists, false otherwise
+     */
+    public boolean hasAreaTitleConfig(String areaName) {
+        return areaTitlesConfig.exists(areaName);
+    }
+    
+    /**
+     * Removes area title configuration for the specified area
+     * 
+     * @param areaName The area name
+     */
+    public void removeAreaTitleConfig(String areaName) {
+        areaTitlesConfig.remove(areaName);
+        saveAreaTitles();
+    }
+
+    /**
+     * Gets all area names with custom title configurations
+     * 
+     * @return Set of area names
+     */
+    public Set<String> getAreaTitleNames() {
+        Set<String> result = new HashSet<>(areaTitlesConfig.getKeys(false));
+        result.remove("default"); // Remove default section
+        return result;
+    }
+
+    /**
+     * Check if a path exists in the areaTitles configuration
+     * @param path The path to check
+     * @return True if the path exists
+     */
+    public boolean existsInAreaTitles(String path) {
+        return areaTitlesConfig.exists(path);
+    }
+
+    /**
+     * Get a value from areaTitles.yml
+     * @param path The path to get
+     * @param defaultValue The default value if not found
+     * @return The value or default
+     */
+    public String getAreaTitlesSetting(String path, String defaultValue) {
+        return areaTitlesConfig.getString(path, defaultValue);
+    }
 
     private void validate() {
         boolean needsSave = false;
@@ -146,9 +297,15 @@ public class ConfigManager {
         validateNumericRange("selectionCooldown", 50, 5000);
         validateNumericRange("particleVisualization.duration", 1, 120); // Allow up to 2 minutes
         
-        // Validate title timings
-        validateTitleTimings("title.enter");
-        validateTitleTimings("title.leave");
+        // Validate title timings in areaTitles.yml
+        validateTitleTimings("default.enter");
+        validateTitleTimings("default.leave");
+        
+        // Validate all custom area title timings
+        for (String areaName : getAreaTitleNames()) {
+            validateTitleTimings(areaName + ".enter");
+            validateTitleTimings(areaName + ".leave");
+        }
 
         if (needsSave) {
             config.save();
@@ -239,15 +396,27 @@ public class ConfigManager {
     }
 
     private void validateTitleTimings(String path) {
-        if (!config.exists(path)) return;
+        // Skip if path doesn't exist in areaTitles.yml
+        if (!areaTitlesConfig.exists(path)) return;
         
         for (String timing : new String[]{"fadeIn", "stay", "fadeOut"}) {
             String timingPath = path + "." + timing;
-            int value = config.getInt(timingPath, 20);
+            // Get as string first to handle both string and integer values
+            String rawValue = areaTitlesConfig.getString(timingPath, "20");
+            int value;
+            try {
+                value = Integer.parseInt(rawValue);
+            } catch (NumberFormatException e) {
+                value = 20; // Default to 20 if not a valid number
+            }
+            
             if (value < 0 || value > 100) {
-                config.set(timingPath, 20);
+                areaTitlesConfig.set(timingPath, 20);
             }
         }
+        
+        // Save changes if any were made
+        saveAreaTitles();
     }
 
     public String getMessage(String key) {
@@ -292,7 +461,15 @@ public class ConfigManager {
     }
 
     public Map<String, Object> getTitleConfig(String type) {
-        return config.getSection("title." + type).getAllMap();
+        // Check if the type is "enter" or "leave" and return from areaTitles.yml default section
+        if ("enter".equals(type) || "leave".equals(type)) {
+            if (areaTitlesConfig.exists("default." + type)) {
+                return areaTitlesConfig.getSection("default." + type).getAllMap();
+            }
+        }
+        
+        // Fallback to empty map if not found
+        return new HashMap<>();
     }
 
     /**
@@ -574,5 +751,16 @@ public class ConfigManager {
             return defaultValue;
         }
         return config.getInt(path);
+    }
+
+    /**
+     * Gets a string value from config with default fallback
+     */
+    public String getSettingString(String path, String defaultValue) {
+        if (!config.exists(path)) {
+            set(path, defaultValue);
+            return defaultValue;
+        }
+        return config.getString(path, defaultValue);
     }
 }

@@ -109,6 +109,8 @@ public class DatabaseManager {
                             show_title BOOLEAN,
                             enter_message TEXT,
                             leave_message TEXT,
+                            enter_title TEXT,
+                            leave_title TEXT,
                             toggle_states TEXT DEFAULT '{}',
                             default_toggle_states TEXT DEFAULT '{}',
                             inherited_toggle_states TEXT DEFAULT '{}',
@@ -116,7 +118,19 @@ public class DatabaseManager {
                         )
                     """);
 
-                    // Add potion_effects column if it doesn't exist
+                    // Add columns if they don't exist
+                    try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", "enter_title")) {
+                        if (!rs.next()) {
+                            stmt.executeUpdate("ALTER TABLE areas ADD COLUMN enter_title TEXT DEFAULT ''");
+                        }
+                    }
+                    
+                    try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", "leave_title")) {
+                        if (!rs.next()) {
+                            stmt.executeUpdate("ALTER TABLE areas ADD COLUMN leave_title TEXT DEFAULT ''");
+                        }
+                    }
+
                     try (ResultSet rs = conn.getMetaData().getColumns(null, null, "areas", "potion_effects")) {
                         if (!rs.next()) {
                             stmt.executeUpdate("ALTER TABLE areas ADD COLUMN potion_effects TEXT DEFAULT '{}'");
@@ -165,9 +179,9 @@ public class DatabaseManager {
                 try {
                     try (PreparedStatement stmt = conn.prepareStatement(
                         "INSERT OR REPLACE INTO areas (name, world, x_min, x_max, y_min, y_max, z_min, z_max, " +
-                        "priority, show_title, enter_message, leave_message, " +
+                        "priority, show_title, enter_message, leave_message, enter_title, leave_title, " +
                         "toggle_states, default_toggle_states, inherited_toggle_states, potion_effects) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )) {
                         AreaDTO dto = area.toDTO();
                         stmt.setString(1, dto.name());
@@ -182,10 +196,12 @@ public class DatabaseManager {
                         stmt.setBoolean(10, dto.showTitle());
                         stmt.setString(11, dto.enterMessage());
                         stmt.setString(12, dto.leaveMessage());
-                        stmt.setString(13, dto.toggleStates().toString());
-                        stmt.setString(14, dto.defaultToggleStates().toString());
-                        stmt.setString(15, dto.inheritedToggleStates().toString());
-                        stmt.setString(16, dto.potionEffects().toString());
+                        stmt.setString(13, dto.enterTitle());
+                        stmt.setString(14, dto.leaveTitle());
+                        stmt.setString(15, dto.toggleStates().toString());
+                        stmt.setString(16, dto.defaultToggleStates().toString());
+                        stmt.setString(17, dto.inheritedToggleStates().toString());
+                        stmt.setString(18, dto.potionEffects().toString());
                         
                         int result = stmt.executeUpdate();
                         
@@ -265,21 +281,29 @@ public class DatabaseManager {
             return;
         }
         
-        String basePath = "areaTitles." + dto.name();
-        if (!plugin.getConfigManager().exists(basePath)) {
-            plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + dto.name());
-            plugin.getConfigManager().set(basePath + ".enter.subtitle", dto.enterMessage());
-            plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
-            plugin.getConfigManager().set(basePath + ".enter.stay", 40);
-            plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
+        String areaName = dto.name();
+        
+        // Only create default titles if they don't already exist
+        if (!plugin.getConfigManager().hasAreaTitleConfig(areaName)) {
+            // Use titles from DTO if available, otherwise use defaults
+            String enterTitle = dto.enterTitle().isEmpty() ? "§6Welcome to " + areaName : dto.enterTitle();
+            String leaveTitle = dto.leaveTitle().isEmpty() ? "§6Leaving " + areaName : dto.leaveTitle();
             
-            plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + dto.name());
-            plugin.getConfigManager().set(basePath + ".leave.subtitle", dto.leaveMessage());
-            plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
-            plugin.getConfigManager().set(basePath + ".leave.stay", 40);
-            plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
+            // Set title values in areaTitles.yml
+            plugin.getConfigManager().setAreaTitleText(areaName, "enter", "main", enterTitle);
+            plugin.getConfigManager().setAreaTitleText(areaName, "enter", "subtitle", dto.enterMessage());
+            plugin.getConfigManager().setAreaTitleText(areaName, "enter", "fadeIn", "20");
+            plugin.getConfigManager().setAreaTitleText(areaName, "enter", "stay", "40");
+            plugin.getConfigManager().setAreaTitleText(areaName, "enter", "fadeOut", "20");
             
-            plugin.getConfigManager().save();
+            plugin.getConfigManager().setAreaTitleText(areaName, "leave", "main", leaveTitle);
+            plugin.getConfigManager().setAreaTitleText(areaName, "leave", "subtitle", dto.leaveMessage());
+            plugin.getConfigManager().setAreaTitleText(areaName, "leave", "fadeIn", "20");
+            plugin.getConfigManager().setAreaTitleText(areaName, "leave", "stay", "40");
+            plugin.getConfigManager().setAreaTitleText(areaName, "leave", "fadeOut", "20");
+            
+            // Save the changes
+            plugin.getConfigManager().saveAreaTitles();
         }
     }
 
@@ -310,7 +334,7 @@ public class DatabaseManager {
                 
                 try (PreparedStatement stmt = conn.prepareStatement(
                     "UPDATE areas SET world = ?, x_min = ?, x_max = ?, y_min = ?, y_max = ?, z_min = ?, z_max = ?, " +
-                    "priority = ?, show_title = ?, enter_message = ?, leave_message = ?, " +
+                    "priority = ?, show_title = ?, enter_message = ?, leave_message = ?, enter_title = ?, leave_title = ?, " +
                     "toggle_states = ?, default_toggle_states = ?, inherited_toggle_states = ?, potion_effects = ? " +
                     "WHERE name = ?"
                  )) {
@@ -326,11 +350,13 @@ public class DatabaseManager {
                     stmt.setBoolean(9, dto.showTitle());
                     stmt.setString(10, dto.enterMessage());
                     stmt.setString(11, dto.leaveMessage());
-                    stmt.setString(12, dto.toggleStates().toString());
-                    stmt.setString(13, dto.defaultToggleStates().toString());
-                    stmt.setString(14, dto.inheritedToggleStates().toString());
-                    stmt.setString(15, dto.potionEffects().toString());
-                    stmt.setString(16, dto.name());
+                    stmt.setString(12, dto.enterTitle());
+                    stmt.setString(13, dto.leaveTitle());
+                    stmt.setString(14, dto.toggleStates().toString());
+                    stmt.setString(15, dto.defaultToggleStates().toString());
+                    stmt.setString(16, dto.inheritedToggleStates().toString());
+                    stmt.setString(17, dto.potionEffects().toString());
+                    stmt.setString(18, dto.name());
 
                     int updated = stmt.executeUpdate();
                     
@@ -494,64 +520,101 @@ public class DatabaseManager {
     }
 
     private Area buildAreaFromResultSet(ResultSet rs) throws SQLException {
-        String areaName = rs.getString("name");
-        
-        // Parse JSON fields
-        JSONObject toggleStates = new JSONObject(rs.getString("toggle_states"));
-        JSONObject defaultToggleStates = new JSONObject(rs.getString("default_toggle_states"));
-        JSONObject inheritedToggleStates = new JSONObject(rs.getString("inherited_toggle_states"));
-        
-        // Get potion effects JSON
-        String potionEffectsJson = rs.getString("potion_effects");
-        JSONObject potionEffects = potionEffectsJson != null && !potionEffectsJson.isEmpty() ? 
-            new JSONObject(potionEffectsJson) : new JSONObject();
-        
-        // Create bounds object
-        AreaDTO.Bounds bounds = new AreaDTO.Bounds(
-            rs.getInt("x_min"),
-            rs.getInt("x_max"),
-            rs.getInt("y_min"),
-            rs.getInt("y_max"),
-            rs.getInt("z_min"),
-            rs.getInt("z_max")
-        );
+        try {
+            String name = rs.getString("name");
+            String world = rs.getString("world");
+            int xMin = rs.getInt("x_min");
+            int xMax = rs.getInt("x_max");
+            int yMin = rs.getInt("y_min");
+            int yMax = rs.getInt("y_max");
+            int zMin = rs.getInt("z_min");
+            int zMax = rs.getInt("z_max");
+            int priority = rs.getInt("priority");
+            boolean showTitle = rs.getBoolean("show_title");
+            String enterMessage = rs.getString("enter_message");
+            String leaveMessage = rs.getString("leave_message");
+            String enterTitle = rs.getString("enter_title");
+            String leaveTitle = rs.getString("leave_title");
+            
+            // Check for null strings (can happen with older database entries)
+            enterMessage = enterMessage != null ? enterMessage : "";
+            leaveMessage = leaveMessage != null ? leaveMessage : "";
+            enterTitle = enterTitle != null ? enterTitle : "";
+            leaveTitle = leaveTitle != null ? leaveTitle : "";
 
-        // Convert toggle states to permissions map
-        Map<String, Boolean> permissionsMap = new HashMap<>();
-        for (String key : toggleStates.keySet()) {
-            permissionsMap.put(key, toggleStates.getBoolean(key));
+            // Parse JSON fields
+            JSONObject toggleStates = new JSONObject(rs.getString("toggle_states"));
+            JSONObject defaultToggleStates = new JSONObject(rs.getString("default_toggle_states"));
+            JSONObject inheritedToggleStates = new JSONObject(rs.getString("inherited_toggle_states"));
+            
+            // Get potion effects JSON
+            String potionEffectsJson = rs.getString("potion_effects");
+            JSONObject potionEffects = potionEffectsJson != null && !potionEffectsJson.isEmpty() ? 
+                new JSONObject(potionEffectsJson) : new JSONObject();
+            
+            // Create bounds object
+            AreaDTO.Bounds bounds = new AreaDTO.Bounds(
+                xMin,
+                xMax,
+                yMin,
+                yMax,
+                zMin,
+                zMax
+            );
+
+            // Convert toggle states to permissions map
+            Map<String, Boolean> permissionsMap = new HashMap<>();
+            for (String key : toggleStates.keySet()) {
+                permissionsMap.put(key, toggleStates.getBoolean(key));
+            }
+
+            // Lookup titles from areaTitles.yml if configured
+            ConfigManager configManager = plugin.getConfigManager();
+            String basePath = "areaTitles." + name;
+            if (configManager.hasAreaTitleConfig(name)) {
+                // Override with values from areaTitles.yml if they exist
+                enterTitle = configManager.getAreaTitleText(name, "enter", "main", enterTitle);
+                enterMessage = configManager.getAreaTitleText(name, "enter", "subtitle", enterMessage);
+                leaveTitle = configManager.getAreaTitleText(name, "leave", "main", leaveTitle);
+                leaveMessage = configManager.getAreaTitleText(name, "leave", "subtitle", leaveMessage);
+            }
+
+            // Create DTO
+            AreaDTO dto = new AreaDTO(
+                name,
+                world,
+                bounds,
+                priority,
+                showTitle,
+                toggleStates,
+                new HashMap<>(), // Empty group permissions
+                new HashMap<>(), // Empty inherited permissions
+                toggleStates,
+                defaultToggleStates,
+                inheritedToggleStates,
+                AreaDTO.Permissions.fromMap(permissionsMap),
+                enterMessage,
+                leaveMessage,
+                enterTitle,
+                leaveTitle,
+                new HashMap<>(), // Empty track permissions
+                new HashMap<>(), // Empty player permissions
+                potionEffects
+            );
+
+            // Build the area
+            Area area = AreaBuilder.fromDTO(dto).build();
+            
+            // Load permissions if needed
+            if (plugin.getPermissionOverrideManager() != null) {
+                plugin.getPermissionOverrideManager().synchronizeOnLoad(area);
+            }
+
+            return area;
+        } catch (Exception e) {
+            logger.error("Error building area from result set", e);
+            throw new SQLException("Failed to build area from database result", e);
         }
-
-        // Create DTO
-        AreaDTO dto = new AreaDTO(
-            areaName,
-            rs.getString("world"),
-            bounds,
-            rs.getInt("priority"),
-            rs.getBoolean("show_title"),
-            toggleStates,
-            new HashMap<>(), // Empty group permissions
-            new HashMap<>(), // Empty inherited permissions
-            toggleStates,
-            defaultToggleStates,
-            inheritedToggleStates,
-            AreaDTO.Permissions.fromMap(permissionsMap),
-            rs.getString("enter_message"),
-            rs.getString("leave_message"),
-            new HashMap<>(), // Empty track permissions
-            new HashMap<>(), // Empty player permissions
-            potionEffects
-        );
-
-        // Build the area
-        Area area = AreaBuilder.fromDTO(dto).build();
-        
-        // Load permissions if needed
-        if (plugin.getPermissionOverrideManager() != null) {
-            plugin.getPermissionOverrideManager().synchronizeOnLoad(area);
-        }
-
-        return area;
     }
 
     public Connection getConnection() throws SQLException {

@@ -33,9 +33,11 @@ public class CreateAreaHandler extends BaseFormHandler {
     private static final int POS2_X_INDEX = 9;
     private static final int POS2_Y_INDEX = 10;
     private static final int POS2_Z_INDEX = 11;
-    private static final int ENTER_MESSAGE_INDEX = 12;
-    private static final int LEAVE_MESSAGE_INDEX = 13;
-    private static final int TOGGLE_START_INDEX = 15;
+    private static final int ENTER_TITLE_INDEX = 12;
+    private static final int ENTER_MESSAGE_INDEX = 13;
+    private static final int LEAVE_TITLE_INDEX = 14;
+    private static final int LEAVE_MESSAGE_INDEX = 15;
+    private static final int TOGGLE_START_INDEX = 17;
 
     private final AreaValidationUtils areaValidationUtils;
 
@@ -64,12 +66,17 @@ public class CreateAreaHandler extends BaseFormHandler {
             boolean isGlobal = response.getToggleResponse(PROTECT_WORLD_INDEX);
             String worldName = player.getLevel().getName();
 
-            // Get enter/leave messages if show title is enabled
-            String enterMsg = "", leaveMsg = "";
+            // Get title messages if show title is enabled
+            String enterTitle = "", enterMsg = "", leaveTitle = "", leaveMsg = "";
             if (showTitle) {
+                enterTitle = response.getInputResponse(ENTER_TITLE_INDEX);
                 enterMsg = response.getInputResponse(ENTER_MESSAGE_INDEX);
+                leaveTitle = response.getInputResponse(LEAVE_TITLE_INDEX);
                 leaveMsg = response.getInputResponse(LEAVE_MESSAGE_INDEX);
+                
+                if (enterTitle == null) enterTitle = "";
                 if (enterMsg == null) enterMsg = "";
+                if (leaveTitle == null) leaveTitle = "";
                 if (leaveMsg == null) leaveMsg = "";
                 
                 // Validate message lengths
@@ -104,7 +111,9 @@ public class CreateAreaHandler extends BaseFormHandler {
                 .showTitle(showTitle)
                 .world(worldName)
                 .coordinates(x1, x2, y1, y2, z1, z2)
+                .enterTitle(enterTitle)
                 .enterMessage(enterMsg)
+                .leaveTitle(leaveTitle)
                 .leaveMessage(leaveMsg)
                 .build()
                 .toDTO();
@@ -135,7 +144,7 @@ public class CreateAreaHandler extends BaseFormHandler {
             
             // Save title configuration if enabled
             if (showTitle) {
-                areaValidationUtils.configureAreaTitles(name, enterMsg, leaveMsg);
+                areaValidationUtils.configureAreaTitles(name, enterTitle, enterMsg, leaveTitle, leaveMsg);
             }
             
             // Save the area
@@ -307,16 +316,26 @@ public class CreateAreaHandler extends BaseFormHandler {
                 String.valueOf(selection.get("z2"))
             ));
             
-            // Messages with placeholders suggestion
+            // Title messages with placeholders suggestion
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.createArea.labels.enterTitle"),
+                plugin.getLanguageManager().get("gui.createArea.labels.enterTitlePlaceholder"),
+                "§6Welcome to {area}"
+            ));
             form.addElement(new ElementInput(
                 plugin.getLanguageManager().get("gui.createArea.labels.enterMessage"),
                 plugin.getLanguageManager().get("gui.createArea.labels.enterPlaceholder"),
-                ""
+                "§eEnjoy your stay {player}!"
+            ));
+            form.addElement(new ElementInput(
+                plugin.getLanguageManager().get("gui.createArea.labels.leaveTitle"),
+                plugin.getLanguageManager().get("gui.createArea.labels.leaveTitlePlaceholder"),
+                "§6Leaving {area}"
             ));
             form.addElement(new ElementInput(
                 plugin.getLanguageManager().get("gui.createArea.labels.leaveMessage"),
                 plugin.getLanguageManager().get("gui.createArea.labels.leavePlaceholder"),
-                ""
+                "§eThank you for visiting {player}!"
             ));
             
             // Add protection settings header

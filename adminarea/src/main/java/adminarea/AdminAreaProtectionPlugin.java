@@ -177,20 +177,21 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 // Log plugin enabling start
                 getLogger().info("Enabling AdminAreaProtectionPlugin...");
     
-                getLogger().info("Configuration loaded.");
-    
+                // Comment out less important logs
+                // getLogger().info("Configuration loaded.");
+
                 // Replace direct config access with config manager
                 reloadConfigValues();
 
                 // Initialize MonsterHandler early to detect MobPlugin availability
                 adminarea.entity.MonsterHandler.initialize(this);
-                getLogger().info("Monster handler initialized");
+                // getLogger().info("Monster handler initialized");
     
                 // Initialize language manager earlier in startup sequence
                 languageManager = new LanguageManager(this);
                 try {
                     languageManager.reload();
-                    getLogger().info("LanguageManager initialized successfully.");
+                    // getLogger().info("LanguageManager initialized successfully.");
                 } catch (Exception e) {
                     getLogger().error("Failed to initialize LanguageManager", e);
                     getServer().getPluginManager().disablePlugin(this);
@@ -222,9 +223,9 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                                     Object eventBus = luckPermsClass.getMethod("getEventBus").invoke(luckPermsApi);
                                     
                                     // Register for basic events 
-                                    getLogger().info("LuckPerms integration enabled, but event listeners are simplified");
+                                    // getLogger().info("LuckPerms integration enabled, but event listeners are simplified");
                                     
-                                    getLogger().info("LuckPerms integration enabled successfully");
+                                    // getLogger().info("LuckPerms integration enabled successfully");
                                 } catch (Exception e) {
                                     getLogger().warning("Could not register LuckPerms event listeners: " + e.getMessage());
                                 }
@@ -232,16 +233,16 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         }
                     } catch (Exception e) {
                         getLogger().error("Failed to initialize LuckPerms integration", e);
-                        getLogger().info("Plugin will continue without LuckPerms features");
+                        // getLogger().info("Plugin will continue without LuckPerms features");
                     }
                 } else {
-                    getLogger().info("LuckPerms not found. Proceeding without permissions integration.");
+                    // getLogger().info("LuckPerms not found. Proceeding without permissions integration.");
                 }
 
                 // Initialize PermissionOverrideManager before loading areas
                 try {
                     permissionOverrideManager = new PermissionOverrideManager(this);
-                    getLogger().info("PermissionOverrideManager initialized successfully");
+                    // getLogger().info("PermissionOverrideManager initialized successfully");
                     
                     // Verify and repair track permissions database
                     verifyTrackPermissionsDatabase();
@@ -302,7 +303,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     
                     // Initialize the database tables
                     dbManager.init();
-                    getLogger().info("Database tables initialized successfully");
+                    // getLogger().info("Database tables initialized successfully");
                     
                     areaManager = new AreaManager(this);
                     
@@ -315,7 +316,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         debug("Areas loaded successfully: " + areaManager.getAllAreas().size() + " areas");
                     }
                     
-                    getLogger().info("Database and area managers initialized successfully");
+                    // getLogger().info("Database and area managers initialized successfully");
                 } catch (Exception e) {
                     getLogger().error("Failed to initialize database or area manager", e);
                     getServer().getPluginManager().disablePlugin(this);
@@ -372,7 +373,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getServer().getPluginManager().registerEvents(this, this);
                 getServer().getPluginManager().registerEvents(new FormResponseListener(this), this);
                 getServer().getPluginManager().registerEvents(wandListener, this); // Register WandListener
-                getLogger().info("FormResponseListener registered.");
+                // getLogger().info("FormResponseListener registered.");
                 
                 // Initialize and register protection-related listeners
                 Timer.Sample listenerInitTimer = performanceMonitor.startTimer();
@@ -384,7 +385,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     getServer().getPluginManager().registerEvents(new FormCleanupListener(this), this);
                     
                     performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init");
-                    getLogger().info("Listener manager initialized and all listeners registered successfully");
+                    // getLogger().info("Listener manager initialized and all listeners registered successfully");
                 } catch (Exception e) {
                     performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init_failed");
                     getLogger().error("Failed to initialize listener manager", e);
@@ -392,14 +393,14 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 
                 // Now that all managers are initialized, normalize toggle states
                 if (configManager.getBoolean("normalize_toggle_states", true)) {
-                    getLogger().info("Normalizing toggle states for all areas...");
+                    // getLogger().info("Normalizing toggle states for all areas...");
                     
                     // Use high-frequency context for this intensive operation
                     executeInHighFrequencyContext(() -> {
                         areaManager.normalizeAllAreaToggleStates();
                     });
                     
-                    getLogger().info("Toggle states normalized successfully.");
+                    // getLogger().info("Toggle states normalized successfully.");
                 }
 
                 // Initialize AreaCommand
@@ -407,7 +408,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     
                 // Register the command
                 getServer().getCommandMap().register("area", areaCommand);
-                getLogger().info("Area command registered.");
+                // getLogger().info("Area command registered.");
     
                 performanceMonitor.stopTimer(startupTimer, "plugin_startup");
                 getLogger().info("AdminAreaProtectionPlugin enabled successfully.");
@@ -1222,7 +1223,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             }
             
             try {
-                getLogger().info("Verifying track permissions database integrity...");
+                // getLogger().info("Verifying track permissions database integrity...");
                 
                 // Get a connection to the database
                 try (Connection conn = permissionOverrideManager.getConnection();
@@ -1245,7 +1246,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         totalCount = rs.next() ? rs.getInt(1) : 0;
                     }
                     
-                    getLogger().info("Found " + totalCount + " total track permission entries in database");
+                    // getLogger().info("Found " + totalCount + " total track permission entries in database");
                     
                     // Only force save track permissions if none exist in the database
                     // This prevents overwriting existing permissions during startup
@@ -1257,7 +1258,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         
                         if (areaManager != null) {
                             List<Area> allAreas = areaManager.getAllAreas();
-                            getLogger().info("Force saving track permissions for " + allAreas.size() + " areas...");
+                            // getLogger().info("Force saving track permissions for " + allAreas.size() + " areas...");
                             
                             for (Area area : allAreas) {
                                 Map<String, Map<String, Boolean>> trackPerms = area.getTrackPermissions();
@@ -1284,24 +1285,26 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                                 }
                             }
                             
-                            getLogger().info("Force saved " + forceSavedCount + " track permissions to the database");
+                            // getLogger().info("Force saved " + forceSavedCount + " track permissions to the database");
                         
                             // Force a checkpoint to ensure the changes are persisted
                             try {
                                 stmt.execute("PRAGMA wal_checkpoint(FULL)");
-                                getLogger().info("Executed full checkpoint to persist track permissions");
+                                // getLogger().info("Executed full checkpoint to persist track permissions");
                             } catch (SQLException e) {
                                 getLogger().error("Failed to execute checkpoint", e);
                             }
                             
                             // Check the permissions count again after saving
-                            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM track_permissions")) {
-                                int newCount = rs.next() ? rs.getInt(1) : 0;
-                                getLogger().info("After force saving: " + newCount + " track permission entries in database (added " + (newCount - totalCount) + ")");
+                            if (isDebugMode()) {
+                                try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM track_permissions")) {
+                                    int newCount = rs.next() ? rs.getInt(1) : 0;
+                                    debug("After force saving: " + newCount + " track permission entries in database (added " + (newCount - totalCount) + ")");
+                                }
                             }
                         }
                     } else {
-                        getLogger().info("Track permissions exist in database, skipping force save to preserve data");
+                        // getLogger().info("Track permissions exist in database, skipping force save to preserve data");
                         
                         // Still check for coherence between memory and database
                         if (areaManager != null && isDebugMode()) {
@@ -1335,10 +1338,10 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     if (nullCount > 0) {
                         getLogger().warning("Found " + nullCount + " track permission entries with NULL values, fixing...");
                         stmt.execute("DELETE FROM track_permissions WHERE area_name IS NULL OR track_name IS NULL OR permission IS NULL");
-                        getLogger().info("Removed " + nullCount + " invalid track permission entries");
+                        // getLogger().info("Removed " + nullCount + " invalid track permission entries");
                     }
                     
-                    getLogger().info("Track permissions database verification completed");
+                    // getLogger().info("Track permissions database verification completed");
                 }
             } catch (Exception e) {
                 getLogger().error("Error verifying track permissions database", e);
@@ -1356,7 +1359,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             }
             
             try {
-                getLogger().info("Verifying group permissions database integrity...");
+                // getLogger().info("Verifying group permissions database integrity...");
                 
                 // Get a connection to the database
                 try (Connection conn = permissionOverrideManager.getConnection();
@@ -1379,7 +1382,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         totalCount = rs.next() ? rs.getInt(1) : 0;
                     }
                     
-                    getLogger().info("Found " + totalCount + " total group permission entries in database");
+                    // getLogger().info("Found " + totalCount + " total group permission entries in database");
                     
                     // Only force save group permissions if none exist in the database
                     // This prevents overwriting existing permissions during startup
@@ -1391,7 +1394,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                         
                         if (areaManager != null) {
                             List<Area> allAreas = areaManager.getAllAreas();
-                            getLogger().info("Force saving group permissions for " + allAreas.size() + " areas...");
+                            // getLogger().info("Force saving group permissions for " + allAreas.size() + " areas...");
                             
                             for (Area area : allAreas) {
                                 Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
@@ -1418,24 +1421,26 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                                 }
                             }
                             
-                            getLogger().info("Force saved " + forceSavedCount + " group permissions to the database");
+                            // getLogger().info("Force saved " + forceSavedCount + " group permissions to the database");
                         
                             // Force a checkpoint to ensure the changes are persisted
                             try {
                                 stmt.execute("PRAGMA wal_checkpoint(FULL)");
-                                getLogger().info("Executed full checkpoint to persist group permissions");
+                                // getLogger().info("Executed full checkpoint to persist group permissions");
                             } catch (SQLException e) {
                                 getLogger().error("Failed to execute checkpoint", e);
                             }
                             
                             // Check the permissions count again after saving
-                            try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM group_permissions")) {
-                                int newCount = rs.next() ? rs.getInt(1) : 0;
-                                getLogger().info("After force saving: " + newCount + " group permission entries in database (added " + (newCount - totalCount) + ")");
+                            if (isDebugMode()) {
+                                try (ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM group_permissions")) {
+                                    int newCount = rs.next() ? rs.getInt(1) : 0;
+                                    debug("After force saving: " + newCount + " group permission entries in database (added " + (newCount - totalCount) + ")");
+                                }
                             }
                         }
                     } else {
-                        getLogger().info("Group permissions exist in database, skipping force save to preserve data");
+                        // getLogger().info("Group permissions exist in database, skipping force save to preserve data");
                         
                         // Still check for coherence between memory and database
                         if (areaManager != null && isDebugMode()) {
@@ -1469,10 +1474,10 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     if (nullCount > 0) {
                         getLogger().warning("Found " + nullCount + " group permission entries with NULL values, fixing...");
                         stmt.execute("DELETE FROM group_permissions WHERE area_name IS NULL OR group_name IS NULL OR permission IS NULL");
-                        getLogger().info("Removed " + nullCount + " invalid group permission entries");
+                        // getLogger().info("Removed " + nullCount + " invalid group permission entries");
                     }
                     
-                    getLogger().info("Group permissions database verification completed");
+                    // getLogger().info("Group permissions database verification completed");
                 }
             } catch (Exception e) {
                 getLogger().error("Error verifying group permissions database", e);

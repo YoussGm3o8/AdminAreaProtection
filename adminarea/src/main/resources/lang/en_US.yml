@@ -22,6 +22,7 @@ messages:
       entry: "§7- {area}\n  §7World: {world}\n  §7Priority: {priority}\n  §7Size: {size} blocks"
     merge:
       success: "{prefix}Areas merged successfully into: {area}"
+      withFlags: "{prefix}§aMerged areas into '{area}' with {count} combined permission toggles"
     visualize:
       success: "{prefix}Started visualization for area: {area}"
       complete: "{prefix}§aVisualization stopped for area '{area}'."
@@ -71,7 +72,7 @@ messages:
 
   # Protection messages
   protection:
-    blockBreak: "{prefix}§cYou cannot break blocks in {area}!"
+    blockBreak: "{prefix}§cYou cannot break blocks in {area}"
     blockPlace: "{prefix}§cYou cannot place blocks in {area}"
     interact: "{prefix}§cYou cannot interact with that in {area}"
     container: "{prefix}§cYou cannot access containers in {area}"
@@ -155,12 +156,14 @@ messages:
     toggleUpdateFailed: "§cFailed to update toggle state"
     positionsNotSet: "§cYou need to set both positions first"
     noPermission: "§cYou don't have permission to do this"
-    missingAreaName: "§cYou must specify an area name"
+    missingAreaName: "§cYou must provide an area name"
     areaNotFound: "§cArea '{area}' not found"
     playerOnly: "§cThis command can only be used in-game"
     invalidArguments: "§cInvalid arguments: {args}"
     databaseError: "§cDatabase error: {error}"
     worldNotFound: "§cWorld '{world}' not found"
+    differentWorlds: "§cThe areas must be in the same world"
+    cannotMergeGlobal: "§cGlobal areas cannot be merged"
     positionsCrossWorld: "§cPositions must be in the same world"
     selectionTooSmall: "§cSelection is too small (minimum: {min} blocks)"
     selectionTooLarge: "§cSelection is too large (maximum: {max} blocks)"
@@ -518,6 +521,10 @@ gui:
       enterPlaceholder: "Message shown when entering area"
       leaveMessage: "Leave Message"
       leavePlaceholder: "Message shown when leaving area"
+      enterTitle: "Enter Title"
+      enterTitlePlaceholder: "Title shown when entering area"
+      leaveTitle: "Leave Title"
+      leaveTitlePlaceholder: "Title shown when leaving area"
       protection: "\n§2Protection Settings\n§8Configure area permissions"
       categoryHeader: "\n§6{category} Settings"
 

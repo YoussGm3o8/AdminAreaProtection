@@ -725,6 +725,8 @@ public final class Area {
             dto.permissions(),
             dto.enterMessage(),
             dto.leaveMessage(),
+            dto.enterTitle(),
+            dto.leaveTitle(),
             latestTrackPerms,
             latestPlayerPerms,
             potionEffects

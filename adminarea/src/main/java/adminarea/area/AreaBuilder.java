@@ -21,6 +21,8 @@ public class AreaBuilder {
     private JSONObject inheritedToggleStates;
     private String enterMessage;
     private String leaveMessage;
+    private String enterTitle;
+    private String leaveTitle;
     private Map<String, Boolean> permissions;
     private Map<String, Map<String, Boolean>> trackPermissions;
     private Map<String, Map<String, Boolean>> playerPermissions;
@@ -163,6 +165,17 @@ public class AreaBuilder {
 
     public AreaBuilder leaveMessage(String message) {
         this.leaveMessage = message;
+        return this;
+    }
+
+    // Title messages
+    public AreaBuilder enterTitle(String title) {
+        this.enterTitle = title;
+        return this;
+    }
+
+    public AreaBuilder leaveTitle(String title) {
+        this.leaveTitle = title;
         return this;
     }
 
@@ -314,6 +327,8 @@ public class AreaBuilder {
             permissionsRecord,
             enterMessage != null ? enterMessage : "",
             leaveMessage != null ? leaveMessage : "",
+            enterTitle != null ? enterTitle : "",
+            leaveTitle != null ? leaveTitle : "",
             trackPermissions,
             playerPermissions,
             potionEffects
@@ -345,6 +360,8 @@ public class AreaBuilder {
               .inheritedToggleStates(dto.inheritedToggleStates())
               .enterMessage(dto.enterMessage())
               .leaveMessage(dto.leaveMessage())
+              .enterTitle(dto.enterTitle())
+              .leaveTitle(dto.leaveTitle())
               .trackPermissions(dto.trackPermissions())
               .playerPermissions(dto.playerPermissions())
               .potionEffects(dto.potionEffects());

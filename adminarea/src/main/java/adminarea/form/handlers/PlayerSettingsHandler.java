@@ -450,6 +450,8 @@ public class PlayerSettingsHandler extends BaseFormHandler {
                     updatedArea.toDTO().permissions(),
                     updatedArea.toDTO().enterMessage(),
                     updatedArea.toDTO().leaveMessage(),
+                    updatedArea.toDTO().enterTitle(),
+                    updatedArea.toDTO().leaveTitle(),
                     updatedArea.toDTO().trackPermissions(),
                     freshPlayerPerms, // Use our explicitly created playerPerms map
                     updatedArea.toDTO().potionEffects()

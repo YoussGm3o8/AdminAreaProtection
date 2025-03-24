@@ -2,7 +2,7 @@
 # Version 1.0.1
 
 # Debug mode - set to true to enable detailed logging
-debug: true
+debug: false
 
 # Language setting (en_US or ru_RU)
 language: "en_US"
@@ -41,18 +41,3 @@ luckperms:
   enabled: true
   inheritPermissions: true
   updateInterval: 300
-
-# Title settings for area entry/exit
-title:
-  enter:
-    main: "§aEntering {area}"
-    subtitle: "Welcome to {area}!"
-    fadeIn: 20
-    stay: 40
-    fadeOut: 20
-  leave:
-    main: "§eLeaving {area}"
-    subtitle: "Goodbye from {area}!"
-    fadeIn: 20
-    stay: 40
-    fadeOut: 20

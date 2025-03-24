@@ -145,43 +145,57 @@ public class AreaValidationUtils {
     }
     
     /**
-     * Configures area title settings in config.yml
+     * Configures title settings in areaTitles.yml for an area
      * 
      * @param areaName The area name
-     * @param enterMessage The enter message
-     * @param leaveMessage The leave message
+     * @param enterTitle The main title when entering the area
+     * @param enterMessage The subtitle when entering the area
+     * @param leaveTitle The main title when leaving the area
+     * @param leaveMessage The subtitle when leaving the area
      */
-    public void configureAreaTitles(String areaName, String enterMessage, String leaveMessage) {
-        // Create base path for area titles
-        String basePath = "areaTitles." + areaName;
+    public void configureAreaTitles(String areaName, String enterTitle, String enterMessage, String leaveTitle, String leaveMessage) {
+        // Set title values in areaTitles.yml
+        plugin.getConfigManager().setAreaTitleText(areaName, "enter", "main", enterTitle.isEmpty() ? "§6Welcome to " + areaName : enterTitle);
+        plugin.getConfigManager().setAreaTitleText(areaName, "enter", "subtitle", enterMessage.isEmpty() ? "§eEnjoy your stay!" : enterMessage);
+        plugin.getConfigManager().setAreaTitleText(areaName, "enter", "fadeIn", "20");
+        plugin.getConfigManager().setAreaTitleText(areaName, "enter", "stay", "40");
+        plugin.getConfigManager().setAreaTitleText(areaName, "enter", "fadeOut", "20");
         
-        // Set default title values
-        plugin.getConfigManager().set(basePath + ".enter.main", "§6Welcome to " + areaName);
-        plugin.getConfigManager().set(basePath + ".enter.subtitle", enterMessage.isEmpty() ? "§eEnjoy your stay!" : enterMessage);
-        plugin.getConfigManager().set(basePath + ".enter.fadeIn", 20);
-        plugin.getConfigManager().set(basePath + ".enter.stay", 40);
-        plugin.getConfigManager().set(basePath + ".enter.fadeOut", 20);
-        
-        plugin.getConfigManager().set(basePath + ".leave.main", "§6Leaving " + areaName);
-        plugin.getConfigManager().set(basePath + ".leave.subtitle", leaveMessage.isEmpty() ? "§eThank you for visiting!" : leaveMessage);
-        plugin.getConfigManager().set(basePath + ".leave.fadeIn", 20);
-        plugin.getConfigManager().set(basePath + ".leave.stay", 40);
-        plugin.getConfigManager().set(basePath + ".leave.fadeOut", 20);
+        plugin.getConfigManager().setAreaTitleText(areaName, "leave", "main", leaveTitle.isEmpty() ? "§6Leaving " + areaName : leaveTitle);
+        plugin.getConfigManager().setAreaTitleText(areaName, "leave", "subtitle", leaveMessage.isEmpty() ? "§eThank you for visiting!" : leaveMessage);
+        plugin.getConfigManager().setAreaTitleText(areaName, "leave", "fadeIn", "20");
+        plugin.getConfigManager().setAreaTitleText(areaName, "leave", "stay", "40");
+        plugin.getConfigManager().setAreaTitleText(areaName, "leave", "fadeOut", "20");
         
         // Save the config
-        plugin.getConfigManager().save();
+        plugin.getConfigManager().saveAreaTitles();
         
         logDebug("Configured title settings for area " + areaName);
     }
     
     /**
-     * Removes area title configuration from config.yml
+     * Configures title settings in areaTitles.yml for an area
+     * 
+     * @param areaName The area name
+     * @param enterMessage The subtitle when entering the area
+     * @param leaveMessage The subtitle when leaving the area
+     */
+    public void configureAreaTitles(String areaName, String enterMessage, String leaveMessage) {
+        // Create default titles
+        String enterTitle = "§6Welcome to " + areaName;
+        String leaveTitle = "§6Leaving " + areaName;
+        
+        // Forward to the full method
+        configureAreaTitles(areaName, enterTitle, enterMessage, leaveTitle, leaveMessage);
+    }
+    
+    /**
+     * Removes area title configuration from areaTitles.yml
      * 
      * @param areaName The area name to remove
      */
     public void removeAreaTitles(String areaName) {
-        plugin.getConfigManager().remove("areaTitles." + areaName);
-        plugin.getConfigManager().save();
+        plugin.getConfigManager().removeAreaTitleConfig(areaName);
         
         logDebug("Removed title configuration for area " + areaName);
     }
