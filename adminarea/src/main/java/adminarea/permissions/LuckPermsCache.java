@@ -60,40 +60,55 @@ public class LuckPermsCache {
             .build();
             
         this.weightCache = Caffeine.newBuilder()
-            .maximumSize(200)
+            .maximumSize(100)
             .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
+            .recordStats()
             .build();
             
         this.inheritedGroupsCache = Caffeine.newBuilder()
-            .maximumSize(200)
+            .maximumSize(100)
             .expireAfterWrite(CACHE_DURATION, TimeUnit.MILLISECONDS)
+            .recordStats()
             .build();
             
         registerEventHandlers();
+        
+        refreshCache();
     }
-
+    
+    /**
+     * Register event listeners for LuckPerms data changes
+     */
     private void registerEventHandlers() {
-        // User data recalculation events
-        eventSubscriptions.add(
-            luckPerms.getEventBus().subscribe(UserDataRecalculateEvent.class, this::onUserDataRecalculate)
-        );
-        
-        // Node mutation events
-        eventSubscriptions.add(
-            luckPerms.getEventBus().subscribe(NodeMutateEvent.class, this::onNodeMutate)
-        );
-        
-        // We'll use the node mutation events to handle track and group changes
-        // This is already covered by the NodeMutateEvent handler
-        if (plugin.isDebugMode()) {
-            plugin.debug("Registered LuckPerms event handlers for permission cache invalidation");
+        try {
+            // User data recalculation events
+            eventSubscriptions.add(
+                luckPerms.getEventBus().subscribe(UserDataRecalculateEvent.class, this::onUserDataRecalculate)
+            );
+            
+            // Node mutation events
+            eventSubscriptions.add(
+                luckPerms.getEventBus().subscribe(NodeMutateEvent.class, this::onNodeMutate)
+            );
+            
+            // We'll use the node mutation events to handle track and group changes
+            // This is already covered by the NodeMutateEvent handler
+            if (plugin.isDebugMode()) {
+                plugin.debug("Registered LuckPerms event handlers for permission cache invalidation");
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to register LuckPerms event handlers: " + e.getMessage());
         }
     }
     
     public void cleanup() {
         eventSubscriptions.forEach(EventSubscription::close);
         eventSubscriptions.clear();
-        invalidateAllCaches();
+        primaryGroupCache.invalidateAll();
+        groupsCache.invalidateAll();
+        tracksCache.invalidateAll();
+        weightCache.invalidateAll();
+        inheritedGroupsCache.invalidateAll();
     }
 
     public String getPrimaryGroup(String username) {
@@ -102,32 +117,39 @@ public class LuckPermsCache {
             if (user == null) {
                 return "default"; // Fallback to default group
             }
+            
             return user.getPrimaryGroup();
         });
     }
 
+    /**
+     * Get all groups a user belongs to
+     */
     public List<String> getGroups(String username) {
         return groupsCache.get(username, k -> {
             User user = luckPerms.getUserManager().getUser(k);
             if (user == null) return Collections.emptyList();
             
-            return user.getNodes().stream()
-                .filter(node -> node.getKey().startsWith("group."))
-                .map(node -> node.getKey().substring(6))
+            return user.getInheritedGroups(user.getQueryOptions())
+                .stream()
+                .map(Group::getName)
                 .collect(Collectors.toList());
         });
     }
     
-    public Set<String> getInheritedGroups(String groupName) {
+    /**
+     * Get all groups that inherit from the specified group
+     */
+    public List<String> getInheritingGroups(String groupName) {
         Set<String> result = new HashSet<>();
-        
         try {
             // Get all loaded groups
             luckPerms.getGroupManager().getLoadedGroups().forEach(group -> {
                 // Check if this group inherits from the specified group
                 boolean inherits = group.getNodes(NodeType.INHERITANCE).stream()
-                    .anyMatch(node -> ((InheritanceNode) node).getGroupName().equals(groupName));
-                
+                    .map(InheritanceNode.class::cast)
+                    .anyMatch(node -> node.getGroupName().equalsIgnoreCase(groupName));
+                    
                 if (inherits) {
                     result.add(group.getName());
                 }
@@ -135,71 +157,41 @@ public class LuckPermsCache {
         } catch (Exception e) {
             plugin.getLogger().error("Error getting groups that inherit from " + groupName, e);
         }
-        
-        return result;
-    }
-
-    public boolean isGroupHigherThan(String group1, String group2) {
-        int weight1 = getGroupWeight(group1);
-        int weight2 = getGroupWeight(group2);
-        return weight1 > weight2;
+        return new ArrayList<>(result);
     }
     
+    /**
+     * Get the weight of a group
+     */
     public int getGroupWeight(String groupName) {
         return weightCache.get(groupName, k -> {
             Group group = luckPerms.getGroupManager().getGroup(k);
             return group != null ? group.getWeight().orElse(0) : 0;
         });
     }
-
-    public void updateGroupWeight(String groupName, int weight) {
-        weightCache.put(groupName, weight);
+    
+    /**
+     * Clear a specific user's cached data
+     */
+    public void clearUserCache(String username) {
+        primaryGroupCache.invalidate(username);
+        groupsCache.invalidate(username);
     }
 
-    public void invalidateGroup(String groupName) {
-        if (groupName == null || groupName.isEmpty()) {
-            return;
-        }
-        
-        // Clear all related caches
-        inheritedGroupsCache.invalidate(groupName);
-        weightCache.invalidate(groupName);
-        
-        // Also invalidate area permission caches for this group through the PermissionOverrideManager
-        try {
-            // Find all areas that have permissions for this group
-            List<String> affectedAreas = plugin.getPermissionOverrideManager().getAreasWithGroupPermissions(groupName);
-            // Convert to Set to avoid type mismatch
-            Set<String> affectedAreasSet = new HashSet<>(affectedAreas);
-            
-            // Invalidate the permission checker cache for these areas
-            for (String areaName : affectedAreasSet) {
-                plugin.getPermissionOverrideManager().invalidateGroupPermissions(areaName, groupName);
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Invalidated group cache for " + groupName + 
-                           " affecting " + affectedAreasSet.size() + " areas");
-            }
-        } catch (Exception e) {
-            plugin.getLogger().error("Error invalidating group cache for " + groupName, e);
-        }
-    }
-
+    /**
+     * Get all groups in LuckPerms
+     */
     public Set<String> getGroups() {
         return luckPerms.getGroupManager().getLoadedGroups().stream()
             .map(Group::getName)
             .collect(Collectors.toSet());
     }
-
+    
     /**
-     * Gets all tracks and their groups
-     * 
-     * @return Map of track names to lists of group names
+     * Get all tracks and their groups
      */
-    public Map<String, List<String>> getGroupTracks() {
+    public Map<String, List<String>> getAllTracks() {
         Map<String, List<String>> result = new HashMap<>();
-        
         try {
             // Get all tracks from LuckPerms
             luckPerms.getTrackManager().getLoadedTracks().forEach(track -> {
@@ -208,10 +200,12 @@ public class LuckPermsCache {
         } catch (Exception e) {
             plugin.getLogger().error("Error getting group tracks", e);
         }
-        
         return result;
     }
 
+    /**
+     * Get all groups in a track
+     */
     public Set<String> getTrackGroups(String trackName) {
         Track track = luckPerms.getTrackManager().getTrack(trackName);
         // Fix: Convert List to Set explicitly
@@ -221,217 +215,86 @@ public class LuckPermsCache {
         return Collections.emptySet();
     }
 
+    /**
+     * Get the inheritance chain for a group
+     */
+    public List<String> getInheritanceChain(String groupName) {
+        return new ArrayList<>(getDirectGroups(groupName));
+    }
+    
+    /**
+     * Get all groups that this group directly inherits from
+     */
     public List<String> getDirectGroups(String groupName) {
         Group group = luckPerms.getGroupManager().getGroup(groupName);
         if (group == null) return Collections.emptyList();
         
-        return group.getNodes(NodeType.INHERITANCE)
-            .stream()
-            .map(node -> ((InheritanceNode) node).getGroupName())
+        return group.getNodes(NodeType.INHERITANCE).stream()
+            .map(InheritanceNode.class::cast)
+            .map(InheritanceNode::getGroupName)
             .collect(Collectors.toList());
     }
-
-    private void onUserDataRecalculate(UserDataRecalculateEvent event) {
-        String username = event.getUser().getUsername();
-        if (username != null) {
-            invalidateUserCaches(username);
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Invalidated LuckPerms cache for user " + username + " due to data recalculation");
-            }
-        }
-    }
-
-    private void onNodeMutate(NodeMutateEvent event) {
-        if (event.getTarget() instanceof User) {
-            String username = ((User) event.getTarget()).getUsername();
-            if (username != null) {
-                invalidateUserCaches(username);
-                
-                // Also invalidate permission cache for this user in all areas
-                plugin.getPermissionOverrideManager().getPermissionChecker().invalidatePlayerCache(username);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Invalidated LuckPerms and permission caches for user " + 
-                               username + " due to permission node change");
-                }
-            }
-        } else if (event.getTarget() instanceof Group) {
-            String groupName = ((Group) event.getTarget()).getName();
-            invalidateGroup(groupName);
-            
-            // Get all users affected by this group change and invalidate their caches
-            Set<String> affectedPlayers = getPlayersInGroup(groupName);
-            for (String playerName : affectedPlayers) {
-                invalidateUserCaches(playerName);
-                plugin.getPermissionOverrideManager().getPermissionChecker().invalidatePlayerCache(playerName);
-            }
-            
-            // Also invalidate all inherited groups as they might be affected
-            Set<String> inheritedGroups = getInheritedGroups(groupName);
-            for (String inheritedGroup : inheritedGroups) {
-                invalidateGroup(inheritedGroup);
-                
-                // Also invalidate players in these inherited groups
-                Set<String> inheritedGroupPlayers = getPlayersInGroup(inheritedGroup);
-                for (String playerName : inheritedGroupPlayers) {
-                    invalidateUserCaches(playerName);
-                    plugin.getPermissionOverrideManager().getPermissionChecker().invalidatePlayerCache(playerName);
-                }
-            }
-            
-            // Also invalidate any tracks that contain this group
-            Map<String, List<String>> groupTracks = getGroupTracks();
-            for (Map.Entry<String, List<String>> entry : groupTracks.entrySet()) {
-                if (entry.getValue().contains(groupName)) {
-                    String trackName = entry.getKey();
-                    invalidateTrackCache(trackName);
-                    
-                    // Invalidate players in this track
-                    Set<String> trackPlayers = getPlayersInTrack(trackName);
-                    for (String playerName : trackPlayers) {
-                        invalidateUserCaches(playerName);
-                        plugin.getPermissionOverrideManager().getPermissionChecker().invalidatePlayerCache(playerName);
-                    }
-                }
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Invalidated LuckPerms cache for group " + groupName + 
-                           " and affected users due to node change");
-            }
-        } else if (event.getTarget() instanceof Track) {
-            // Handle track mutation
-            String trackName = ((Track) event.getTarget()).getName();
-            invalidateTrackCache(trackName);
-            
-            // Invalidate all players in this track
-            Set<String> trackPlayers = getPlayersInTrack(trackName);
-            for (String playerName : trackPlayers) {
-                invalidateUserCaches(playerName);
-                plugin.getPermissionOverrideManager().getPermissionChecker().invalidatePlayerCache(playerName);
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Invalidated LuckPerms cache for track " + trackName + 
-                           " and affected users due to node change");
-            }
-        }
-    }
-
-    public void invalidateUserCaches(String username) {
-        primaryGroupCache.invalidate(username);
-        groupsCache.invalidate(username);
-        tracksCache.invalidate(username);
-    }
-
-    public void invalidateAllCaches() {
+    
+    /**
+     * Refresh the entire cache when configuration changes
+     */
+    public void refreshCache() {
+        // First clear the cache
         primaryGroupCache.invalidateAll();
         groupsCache.invalidateAll();
         tracksCache.invalidateAll();
-        inheritedGroupsCache.invalidateAll();
         weightCache.invalidateAll();
+        inheritedGroupsCache.invalidateAll();
         
-        // Also trigger a permission cache invalidation
-        plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Invalidated all LuckPerms caches and permission checker cache");
-        }
-    }
-    
-    /**
-     * Refreshes all caches, force-loading all data
-     */
-    public void refreshCache() {
-        invalidateAllCaches();
-        
-        // Pre-load common groups
-        Set<String> groups = getGroups();
-        for (String group : groups) {
-            getGroupWeight(group);
-            getInheritedGroups(group);
-        }
-        
-        // Pre-load track data
-        getGroupTracks();
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("[LuckPermsCache] Cache refreshed, pre-loaded " + groups.size() + " groups");
-        }
-    }
-    
-    /**
-     * Gets the inheritance chain for a group, ordered from least to most powerful
-     *
-     * @param groupName The name of the group
-     * @return List of groups in inheritance order
-     */
-    public List<String> getInheritanceChain(String groupName) {
-        List<String> chain = new ArrayList<>();
-        buildInheritanceChain(groupName, chain, new HashSet<>());
-        
-        // Sort by weight (higher weights come last in the chain)
-        chain.sort(Comparator.comparingInt(this::getGroupWeight));
-        
-        return chain;
-    }
-    
-    private void buildInheritanceChain(String groupName, List<String> chain, Set<String> visited) {
-        if (visited.contains(groupName)) return; // Prevent circular inheritance
-        visited.add(groupName);
-        
-        if (!chain.contains(groupName)) {
-            chain.add(groupName);
-        }
-        
-        // Add parent groups first, then process their parents
-        List<String> parents = getDirectGroups(groupName);
-        for (String parent : parents) {
-            if (!chain.contains(parent)) {
-                chain.add(parent);
+        // Preload some common data
+        try {
+            // Cache all group weights
+            luckPerms.getGroupManager().getLoadedGroups().forEach(group -> {
+                weightCache.put(group.getName(), group.getWeight().orElse(0));
+            });
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Refreshed LuckPerms cache with " + weightCache.estimatedSize() + " groups");
             }
-            buildInheritanceChain(parent, chain, visited);
+        } catch (Exception e) {
+            plugin.getLogger().error("Error preloading LuckPerms cache", e);
         }
     }
     
     /**
-     * Gets all players that are in a specific group
-     * 
-     * @param groupName The group name
-     * @return Set of player names in the group
+     * Get all players in a specific track
      */
-    public Set<String> getPlayersInGroup(String groupName) {
+    public Set<String> getPlayersInTrack(String trackName) {
         Set<String> players = new HashSet<>();
-        
         try {
             // First check online players for efficiency
             plugin.getServer().getOnlinePlayers().values().forEach(player -> {
                 String playerName = player.getName();
                 List<String> playerGroups = getGroups(playerName);
                 
-                if (playerGroups.contains(groupName)) {
+                // Get the track groups
+                Set<String> trackGroups = getTrackGroups(trackName);
+                
+                // Check if this player has any group in the track
+                if (playerGroups.stream().anyMatch(trackGroups::contains)) {
                     players.add(playerName);
                 }
             });
             
             // For a more comprehensive check, we could query LuckPerms directly
-            // but this would be more expensive, so we'll stick with online players
-            // for now since they're the ones that matter for active permission checks
+            // But this would be expensive and probably not needed for our use case
+            
         } catch (Exception e) {
-            plugin.getLogger().error("Error getting players in group " + groupName, e);
+            plugin.getLogger().error("Error getting players in track", e);
         }
         
         return players;
     }
     
     /**
-     * Gets all online players who are in any group of a specific track
-     *
-     * @param trackName The name of the track
-     * @return Set of player names in the specified track
+     * Get all players in a specific track or group
      */
-    public Set<String> getPlayersInTrack(String trackName) {
+    public Set<String> getPlayersInTrackOrGroup(String trackName, String groupName) {
         Set<String> players = new HashSet<>();
         
         try {
@@ -440,40 +303,87 @@ public class LuckPermsCache {
                 return players;
             }
             
-            // Get all groups in this track
+            // Get groups in the track
             List<String> trackGroups = track.getGroups();
             
-            // For each group in the track, get all players
-            for (String groupName : trackGroups) {
-                players.addAll(getPlayersInGroup(groupName));
-            }
+            // Get players with groups in the track
+            plugin.getServer().getOnlinePlayers().values().forEach(player -> {
+                String playerName = player.getName();
+                List<String> playerGroups = getGroups(playerName);
+                
+                // Check if this player has the specific group or any track groups
+                if (playerGroups.contains(groupName) || 
+                    playerGroups.stream().anyMatch(trackGroups::contains)) {
+                    players.add(playerName);
+                }
+            });
         } catch (Exception e) {
-            plugin.getLogger().error("Error getting players in track " + trackName, e);
+            plugin.getLogger().error("Error getting players in track or group", e);
         }
         
         return players;
     }
 
-    public void invalidateTrackCache(String trackName) {
-        tracksCache.invalidateAll(); // Invalidate all track caches for simplicity
-        
+    /**
+     * Handle user data recalculation events
+     */
+    private void onUserDataRecalculate(UserDataRecalculateEvent event) {
+        User user = event.getUser();
+        String username = null;
         try {
-            // Find all areas that have permissions for this track
-            // Fix: Convert List to Set to avoid type mismatch
-            List<String> affectedAreasList = plugin.getPermissionOverrideManager().getAreasWithTrackPermissions(trackName);
-            Set<String> affectedAreas = new HashSet<>(affectedAreasList);
-            
-            // Invalidate the permission checker cache for these areas
-            for (String areaName : affectedAreas) {
-                plugin.getPermissionOverrideManager().invalidateTrackPermissions(areaName, trackName);
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Invalidated track cache for " + trackName + 
-                           " affecting " + affectedAreas.size() + " areas");
+            // Call getUsername() directly - if it returns null, that's fine
+            username = user.getUsername();
+            // Only proceed if we have a valid username
+            if (username == null) {
+                return;
             }
         } catch (Exception e) {
-            plugin.getLogger().error("Error invalidating track cache for " + trackName, e);
+            // Handle case where username might not be available
+            return;
         }
+        
+        clearUserCache(username);
+        
+        if (plugin.isDebugMode()) {
+            plugin.debug("Cleared user cache for " + username + " due to data recalculation");
+        }
+    }
+    
+    /**
+     * Handle node mutation events
+     */
+    private void onNodeMutate(NodeMutateEvent event) {
+        // Clear all caches for track and group weights when inheritance nodes change
+        boolean hasInheritanceNode = false;
+        try {
+            hasInheritanceNode = event.getTarget() instanceof Group;
+        } catch (Exception e) {
+            // Ignore exceptions, play it safe and refresh
+            hasInheritanceNode = true;
+        }
+        
+        if (hasInheritanceNode) {
+            refreshCache();
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Refreshed permission caches due to inheritance node change");
+            }
+        }
+    }
+    
+    /**
+     * Clears all caches
+     * Called when the plugin is disabled
+     */
+    public void clearCache() {
+        primaryGroupCache.invalidateAll();
+        groupsCache.invalidateAll();
+        tracksCache.invalidateAll();
+        weightCache.invalidateAll();
+        inheritedGroupsCache.invalidateAll();
+        
+        // Unregister event handlers
+        eventSubscriptions.forEach(EventSubscription::close);
+        eventSubscriptions.clear();
     }
 }

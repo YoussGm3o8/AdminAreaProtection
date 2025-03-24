@@ -282,6 +282,8 @@ public class ProtectionListener implements Listener {
                 return "messages.protection.door";
             case "allowXPDrop":
                 return "messages.protection.xpDrop";
+            case "allowXPPickup":
+                return "messages.protection.xpPickup";
             case "allowMonsterTarget":
                 return "messages.protection.monsterTarget";
             case "allowMonsterSpawn":

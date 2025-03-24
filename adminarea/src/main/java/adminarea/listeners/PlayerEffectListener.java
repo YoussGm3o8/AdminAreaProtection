@@ -678,6 +678,15 @@ public class PlayerEffectListener implements Listener {
             
             // Check if XP drops are allowed in this area
             if (protectionListener.handleProtection(pos, player, "allowXPDrop")) {
+                // If Nukkit is already keeping experience, don't duplicate the effort
+                if (event.getKeepExperience()) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("XP already being preserved by Nukkit for player " + 
+                            player.getName() + ", skipping manual preservation");
+                    }
+                    return;
+                }
+                
                 // Calculate and save the player's total XP for respawn
                 int totalExp = calculateTotalExperience(player.getExperienceLevel(), player.getExperience());
                 
@@ -704,16 +713,36 @@ public class PlayerEffectListener implements Listener {
         Player player = event.getPlayer();
         String playerName = player.getName();
         
-        // Check if we have saved XP for this player
+        // Only restore XP if we have saved it manually
         if (savedPlayerExperience.containsKey(playerName)) {
             // Get the saved XP value
             int savedExp = savedPlayerExperience.remove(playerName);
+            
+            // Before scheduling restoration, check if player already has XP
+            // This means Nukkit's built-in system preserved it
+            if (player.getExperienceLevel() > 0 || player.getExperience() > 0) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Player " + playerName + " already has XP (level: " + 
+                        player.getExperienceLevel() + ", progress: " + player.getExperience() + 
+                        "), skipping manual restoration");
+                }
+                return;
+            }
             
             // Schedule XP restoration with a longer delay to ensure player is fully spawned
             // This avoids potential race conditions with the vanilla respawn handler
             plugin.getServer().getScheduler().scheduleDelayedTask(plugin, () -> {
                 // Make sure player is still online
                 if (player.isOnline()) {
+                    // Final check that XP hasn't been restored by something else
+                    if (player.getExperienceLevel() > 0 || player.getExperience() > 0) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Player " + playerName + " already received XP from another source, " +
+                                "skipping manual restoration");
+                        }
+                        return;
+                    }
+                    
                     // Reset first to avoid conflicts with any XP already given
                     player.setExperience(0, 0);
                     

@@ -89,8 +89,9 @@ public class EditAreaHandler extends BaseFormHandler {
         
         if (plugin.getLuckPermsApi() != null) {
             form.addButton(new ElementButton("LuckPerms Settings"));
-            form.addButton(new ElementButton("Player Settings"));
         }
+
+        form.addButton(new ElementButton("Player Settings"));
 
         return form;
     }
@@ -140,17 +141,15 @@ public class EditAreaHandler extends BaseFormHandler {
                 formId = FormIds.POTION_EFFECTS_SETTINGS;
                 break;
             case 8:
-                if (plugin.getLuckPermsApi() != null) {
+                if (plugin.isLuckPermsEnabled()) {
                     formId = FormIds.LUCKPERMS_SETTINGS;
-                    break;
-                }
-                return;
-            case 9:
-                if (plugin.getLuckPermsApi() != null) {
+                } else {
                     formId = FormIds.PLAYER_SETTINGS;
-                    break;
                 }
-                return;
+                break;
+            case 9:
+                formId = FormIds.PLAYER_SETTINGS;
+                break;
             default:
                 return;
         }

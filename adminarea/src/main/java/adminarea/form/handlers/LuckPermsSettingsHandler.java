@@ -7,10 +7,8 @@ import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.event.LuckPermsTrackChangeEvent;
-import adminarea.form.handlers.BaseFormHandler;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
-import cn.nukkit.form.element.ElementButton;
 import cn.nukkit.form.element.ElementDropdown;
 import cn.nukkit.form.element.ElementLabel;
 import cn.nukkit.form.element.ElementToggle;
@@ -18,13 +16,9 @@ import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowCustom;
-import cn.nukkit.form.window.FormWindowSimple;
-import net.luckperms.api.track.Track;
-
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class LuckPermsSettingsHandler extends BaseFormHandler {
     private static final String TRACK_DATA_KEY = "_track";
@@ -72,10 +66,26 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
             trackOptions.add(plugin.getLanguageManager().get("gui.luckperms.labels.selectTrack")); // Default option
             
             if (plugin.isLuckPermsEnabled()) {
-                List<String> trackNames = plugin.getLuckPermsApi().getTrackManager().getLoadedTracks().stream()
-                    .map(Track::getName)
-                    .sorted(String.CASE_INSENSITIVE_ORDER)
-                    .collect(Collectors.toList());
+                List<String> trackNames = new ArrayList<>();
+                try {
+                    // Use reflection to safely access the track manager
+                    Object luckPermsApi = plugin.getLuckPermsApi();
+                    if (luckPermsApi != null) {
+                        Object trackManager = luckPermsApi.getClass().getMethod("getTrackManager").invoke(luckPermsApi);
+                        if (trackManager != null) {
+                            Collection<?> loadedTracks = (Collection<?>) trackManager.getClass().getMethod("getLoadedTracks").invoke(trackManager);
+                            if (loadedTracks != null) {
+                                for (Object track : loadedTracks) {
+                                    String trackName = (String) track.getClass().getMethod("getName").invoke(track);
+                                    trackNames.add(trackName);
+                                }
+                            }
+                        }
+                    }
+                    trackNames.sort(String.CASE_INSENSITIVE_ORDER);
+                } catch (Exception e) {
+                    plugin.getLogger().error("Error accessing LuckPerms tracks", e);
+                }
                 
                 if (trackNames.isEmpty()) {
                     form.addElement(new ElementLabel(plugin.getLanguageManager().get("gui.luckperms.labels.noTracks")));
@@ -210,10 +220,25 @@ public class LuckPermsSettingsHandler extends BaseFormHandler {
                 
                 List<String> trackNames = new ArrayList<>();
                 if (plugin.isLuckPermsEnabled()) {
-                    trackNames = plugin.getLuckPermsApi().getTrackManager().getLoadedTracks().stream()
-                        .map(Track::getName)
-                        .sorted(String.CASE_INSENSITIVE_ORDER)
-                        .collect(Collectors.toList());
+                    try {
+                        // Use reflection to safely access the track manager
+                        Object luckPermsApi = plugin.getLuckPermsApi();
+                        if (luckPermsApi != null) {
+                            Object trackManager = luckPermsApi.getClass().getMethod("getTrackManager").invoke(luckPermsApi);
+                            if (trackManager != null) {
+                                Collection<?> loadedTracks = (Collection<?>) trackManager.getClass().getMethod("getLoadedTracks").invoke(trackManager);
+                                if (loadedTracks != null) {
+                                    for (Object track : loadedTracks) {
+                                        String trackName = (String) track.getClass().getMethod("getName").invoke(track);
+                                        trackNames.add(trackName);
+                                    }
+                                }
+                            }
+                        }
+                        trackNames.sort(String.CASE_INSENSITIVE_ORDER);
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Error accessing LuckPerms tracks", e);
+                    }
                 }
                 
                 if (selectedIndex - 1 < trackNames.size()) {

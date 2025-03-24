@@ -21,7 +21,6 @@ import cn.nukkit.item.Item;
 import cn.nukkit.item.ItemSpawnEgg;
 import cn.nukkit.level.Position;
 import io.micrometer.core.instrument.Timer;
-import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
 import cn.nukkit.block.Block;
 
 import java.util.List;
@@ -33,6 +32,7 @@ public class EntityListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
     private final ProtectionListener protectionListener;
     private final Class<?> mobPluginMonster; // Track MobPlugin's monster class
+    private final Class<?> walkingMonsterClass; // Track MobPlugin's WalkingMonster class
     // Replace ConcurrentHashMap with WeakHashMap for better memory management of entity classes
     private final Map<Class<?>, Boolean> isMonster = new WeakHashMap<>();
     
@@ -49,17 +49,30 @@ public class EntityListener implements Listener {
         
         // Initialize MobPlugin's monster class for instanceof checks
         Class<?> monsterClass = null;
+        Class<?> walkingMonsterClass = null;
         try {
             monsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.Monster");
+            plugin.getLogger().info("Found MobPlugin Monster interface for monster checks");
         } catch (ClassNotFoundException ignored) {
             plugin.getLogger().warning("Could not find MobPlugin Monster interface, using WalkingMonster for checks");
             try {
                 monsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.WalkingMonster");
+                plugin.getLogger().info("Found MobPlugin WalkingMonster class for monster checks");
             } catch (ClassNotFoundException e) {
-                plugin.getLogger().warning("Could not find WalkingMonster class, monster protection may not work correctly");
+                plugin.getLogger().warning("Could not find WalkingMonster class, monster protection will be limited to Nukkit's EntityMob");
+                monsterClass = null;
             }
         }
+        
+        // Initialize WalkingMonster class separately
+        try {
+            walkingMonsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.WalkingMonster");
+        } catch (ClassNotFoundException e) {
+            walkingMonsterClass = null;
+        }
+        
         this.mobPluginMonster = monsterClass;
+        this.walkingMonsterClass = walkingMonsterClass;
     }
     
     /**
@@ -167,6 +180,56 @@ public class EntityListener implements Listener {
             Entity damager = event.getDamager();
             Entity victim = event.getEntity();
             
+            // Handle direct explosion damage from explosive entities
+            if (victim instanceof Player player && 
+                event.getCause() == EntityDamageEvent.DamageCause.ENTITY_EXPLOSION) {
+                
+                Position pos = victim.getPosition();
+                // Skip if not in loaded chunk
+                if (pos.getLevel() == null || !pos.getLevel().isChunkLoaded(pos.getChunkX(), pos.getChunkZ())) {
+                    return;
+                }
+                
+                // Get area at position
+                Area area = plugin.getAreaManager().getHighestPriorityArea(
+                    pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+                
+                if (area == null) {
+                    return;
+                }
+                
+                // Determine which explosion type it is based on the damager
+                boolean shouldCancel = false;
+                String explosionTypeName = "Unknown";
+                
+                String entityType = damager.getClass().getSimpleName();
+                if (entityType.equals("EntityPrimedTNT")) {
+                    shouldCancel = !area.getToggleState("allowTNT");
+                    explosionTypeName = "TNT";
+                } else if (entityType.equals("EntityCreeper")) {
+                    shouldCancel = !area.getToggleState("allowCreeper");
+                    explosionTypeName = "Creeper";
+                } else if (entityType.equals("EntityEndCrystal")) {
+                    shouldCancel = !area.getToggleState("allowCrystalExplosion");
+                    explosionTypeName = "End Crystal";
+                } else {
+                    // Generic explosion protection for unidentified explosion entities
+                    shouldCancel = !area.getToggleState("allowExplosions");
+                    explosionTypeName = entityType;
+                }
+                
+                if (shouldCancel) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Cancelled " + explosionTypeName + " explosion damage to player " + player.getName() +
+                                   " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ() +
+                                   " in area " + area.getName());
+                    }
+                    return;
+                }
+            }
+            
             // Handle fall damage if it's enabled/disabled in configuration
             if (event.getCause() == EntityDamageEvent.DamageCause.FALL && victim instanceof Player player) {
                 Position pos = victim.getPosition();
@@ -185,17 +248,32 @@ public class EntityListener implements Listener {
                 return;
             }
 
-            // Handle monster targeting through damage events - use MobPlugin's WalkingMonster
-            if (damager instanceof WalkingMonster && victim instanceof Player player) {
-                // Call MonsterTargetEvent
-                MonsterTargetEvent targetEvent = new MonsterTargetEvent((WalkingMonster)damager, player);
-                plugin.getServer().getPluginManager().callEvent(targetEvent);
-                
-                if (targetEvent.isCancelled() || shouldCheckProtection(damager, player, "allowMonsterTarget")) {
-                    event.setCancelled(true);
-                    // Send a message to the player that monster targeting is disabled
-                    protectionListener.sendProtectionMessage(player, "messages.protection.monsterTarget");
-                    return;
+            // Handle monster targeting through damage events - safely check for MobPlugin's WalkingMonster
+            if (walkingMonsterClass != null && walkingMonsterClass.isInstance(damager) && victim instanceof Player player) {
+                // Only call MonsterTargetEvent if the WalkingMonster class is available
+                try {
+                    // Call MonsterTargetEvent - use direct call with Entity instead of reflection
+                    MonsterTargetEvent targetEvent = new MonsterTargetEvent(damager, player);
+                    plugin.getServer().getPluginManager().callEvent(targetEvent);
+                    
+                    if (targetEvent.isCancelled() || shouldCheckProtection(damager, player, "allowMonsterTarget")) {
+                        event.setCancelled(true);
+                        // Send a message to the player that monster targeting is disabled
+                        protectionListener.sendProtectionMessage(player, "messages.protection.monsterTarget");
+                        return;
+                    }
+                } catch (Exception e) {
+                    // Silently handle errors with MonsterTargetEvent
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Error handling MonsterTargetEvent: " + e.getMessage());
+                    }
+                    
+                    // Still check protection even if event fails
+                    if (shouldCheckProtection(damager, player, "allowMonsterTarget")) {
+                        event.setCancelled(true);
+                        protectionListener.sendProtectionMessage(player, "messages.protection.monsterTarget");
+                        return;
+                    }
                 }
             }
             
@@ -207,8 +285,7 @@ public class EntityListener implements Listener {
                         protectionListener.sendProtectionMessage(player, "messages.protection.animalDamage");
                         return;
                     }
-                } else if (victim instanceof EntityMob || 
-                          (mobPluginMonster != null && mobPluginMonster.isAssignableFrom(victim.getClass()))) {
+                } else if (victim instanceof EntityMob || isMobPluginMonster(victim)) {
                     if (shouldCheckProtection(victim, player, "allowMonsterDamage")) {
                         event.setCancelled(true);
                         protectionListener.sendProtectionMessage(player, "messages.protection.monsterDamage");
@@ -228,38 +305,51 @@ public class EntityListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityExplode(EntityExplodeEvent event) {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Skip if not near any players - early performance optimization
-            if (!plugin.getAreaManager().isNearAnyPlayer(event.getPosition().x, event.getPosition().z)) {
-                return;
-            }
-
-            // Skip if no active areas - another early bailout
-            if (plugin.getAreaManager().getActiveAreas().isEmpty()) {
-                return;
-            }
-
             // Get the entity type
             Entity entity = event.getEntity();
             String entityType = entity.getClass().getSimpleName();
             
-            // For TNT entities, we should have already handled them at spawn time
-            // This is just a backup in case some TNT entities were missed
+            // For TNT entities, we need to handle them immediately
             if (entityType.equals("EntityPrimedTNT")) {
                 Position pos = event.getPosition();
-                if (protectionListener.handleProtection(pos, null, "allowTNT")) {
+                
+                // Skip if not in loaded chunk
+                if (pos.getLevel() == null || !pos.getLevel().isChunkLoaded(pos.getChunkX(), pos.getChunkZ())) {
+                    return;
+                }
+                
+                // Get area at position
+                Area area = plugin.getAreaManager().getHighestPriorityArea(
+                    pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+                
+                if (area != null && !area.getToggleState("allowTNT")) {
                     // Cancel the explosion completely
                     event.setCancelled(true);
                     
+                    // Remove the TNT entity
+                    entity.close();
+                    
                     if (plugin.isDebugMode()) {
                         plugin.debug("Cancelled TNT explosion at " + 
-                            pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
+                            pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
+                            " in area " + area.getName());
                     }
                     return;
                 }
+            }
+
+            // Skip costly checks if not near any players
+            if (!plugin.getAreaManager().isNearAnyPlayer(event.getPosition().x, event.getPosition().z)) {
+                return;
+            }
+
+            // Skip if no active areas
+            if (plugin.getAreaManager().getActiveAreas().isEmpty()) {
+                return;
             }
 
             // Check the specific explosion type permission
@@ -284,99 +374,85 @@ public class EntityListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntitySpawn(EntitySpawnEvent event) {
-        if (event == null || event.getEntity() == null) return;
-        
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
-            Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-            try {
-                Entity entity = event.getEntity();
-                Position pos = event.getPosition();
-
-                // Extra null checks
-                if (pos == null || pos.getLevel() == null) return;
+            Entity entity = event.getEntity();
+            
+            // Fast path for TNT - check this first to instantly despawn it
+            if (entity != null && entity.getClass().getSimpleName().equals("EntityPrimedTNT")) {
+                // Get entity position
+                Position pos = entity.getPosition();
+                if (pos == null || pos.getLevel() == null) {
+                    return;
+                }
                 
-                // Skip unloaded chunks
+                // Check if spawning in an area with protection
                 if (!pos.getLevel().isChunkLoaded(pos.getChunkX(), pos.getChunkZ())) {
                     return;
                 }
-
-                // Early bailout using master check with try-catch
-                try {
-                    if (!plugin.getAreaManager().shouldProcessEvent(pos, false)) {
-                        return;
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Error in shouldProcessEvent", e);
-                    return;
-                }
-
-                // Check for TNT entities and remove them immediately in protected areas
-                String entityType = entity.getClass().getSimpleName();
-                if (entityType.equals("EntityPrimedTNT")) {
-                    // Debug the TNT permission check
+                
+                // Get the highest priority area at this location
+                Area area = plugin.getAreaManager().getHighestPriorityArea(
+                    pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+                
+                if (area != null && !area.getToggleState("allowTNT")) {
+                    // Cancel event to prevent TNT from spawning at all
+                    event.setCancelled(true);
+                    
+                    // Ensure the entity is immediately closed/removed
+                    entity.close();
+                    
                     if (plugin.isDebugMode()) {
-                        Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
-                        if (area != null) {
-                            plugin.debug("TNT check in area: " + area.getName());
-                            plugin.debug("TNT toggle state from cache: " + area.getToggleState("allowTNT"));
-                            
-                            // Try direct database reload for debugging
-                            try {
-                                Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
-                                if (freshArea != null) {
-                                    plugin.debug("TNT toggle state directly from DB: " + 
-                                        freshArea.toDTO().toggleStates().optBoolean("gui.permissions.toggles.allowTNT", false));
-                                }
-                            } catch (Exception e) {
-                                plugin.debug("Failed to check DB state: " + e.getMessage());
-                            }
-                        }
-                    }
-                    
-                    // Don't force clear caches for every TNT entity - this was causing performance issues
-                    // Only clear cache if we suspect it might be out of date
-                    Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
-                    
-                    // Check if TNT is allowed in this area
-                    // If handleProtection returns true, it means TNT is NOT allowed (protection is enabled)
-                    boolean tntNotAllowed = protectionListener.handleProtection(pos, null, "allowTNT");
-                    
-                    if (tntNotAllowed) {
-                        // Remove the TNT entity immediately if not allowed
-                        entity.close();
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Removed primed TNT entity at " + 
-                                pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
-                                " in area " + (area != null ? area.getName() : "none"));
-                        }
-                        return;
-                    } else if (plugin.isDebugMode()) {
-                        plugin.debug("Allowed TNT to spawn at " + 
+                        plugin.debug("Instantly despawned primed TNT entity at " + 
                             pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
-                            " in area " + (area != null ? area.getName() : "none"));
+                            " in area " + area.getName());
                     }
+                    return;
+                } else if (plugin.isDebugMode() && area != null) {
+                    plugin.debug("Allowed TNT to spawn at " + 
+                        pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
+                        " in area " + area.getName());
                 }
-
+            }
+            
+            // Skip processing for non-living entities, arrows, etc.
+            if (!(entity instanceof EntityLiving) || entity instanceof EntityProjectile) {
+                return;
+            }
+            
+            // Skip if not near any players - early performance optimization
+            if (!plugin.getAreaManager().isNearAnyPlayer(entity.x, entity.z)) {
+                return;
+            }
+            
+            // Get entity position
+            Position pos = entity.getPosition();
+            if (pos == null || pos.getLevel() == null) {
+                return;
+            }
+            
+            // Check if spawning in an area with protection
+            if (!pos.getLevel().isChunkLoaded(pos.getChunkX(), pos.getChunkZ())) {
+                return;
+            }
+            
+            // Get the highest priority area at this location
+            Area area = plugin.getAreaManager().getHighestPriorityArea(
+                pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+            
+            if (area != null) {
                 // Optimized entity type checking with caching
                 boolean isEntityAnimal = entity instanceof EntityAnimal;
                 boolean isEntityWaterAnimal = entity instanceof EntityWaterAnimal;
-                boolean isMobPluginMonster = entity instanceof WalkingMonster;
-                boolean isMonsterClass = false;
-                
-                if (mobPluginMonster != null) {
-                    // Use computeIfAbsent to avoid unnecessary class checks
-                    isMonsterClass = isMonster.computeIfAbsent(entity.getClass(), 
-                        cls -> mobPluginMonster.isAssignableFrom(cls));
-                }
+                boolean isMobPluginMonster = isMobPluginMonster(entity);
                 
                 // Only check mob spawns if the entity is a mob type
-                if (isEntityAnimal || isEntityWaterAnimal || isMobPluginMonster || isMonsterClass) {
+                if (isEntityAnimal || isEntityWaterAnimal || isMobPluginMonster || entity instanceof EntityMob) {
                     // Determine permission based on mob type - moved outside the condition for clarity
                     String permission;
-                    if (isMobPluginMonster || isMonsterClass) {
+                    if (isMobPluginMonster || entity instanceof EntityMob) {
                         permission = "allowMonsterSpawn";
                     } else {
                         permission = "allowAnimalSpawn";
@@ -391,11 +467,9 @@ public class EntityListener implements Listener {
                         }
                     }
                 }
-            } finally {
-                plugin.getPerformanceMonitor().stopTimer(sample, "entity_spawn_check");
             }
-        } catch (Exception e) {
-            plugin.getLogger().error("Error handling entity spawn", e);
+        } finally {
+            plugin.getPerformanceMonitor().stopTimer(sample, "entity_spawn_check");
         }
     }
 
@@ -553,33 +627,106 @@ public class EntityListener implements Listener {
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onEntityDamage(EntityDamageEvent event) {
-        if (event.getCause() != EntityDamageEvent.DamageCause.FALL) {
-            return;
-        }
-        
-        if (!(event.getEntity() instanceof Player player)) {
-            return;
-        }
-        
-        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
-        try {
-            Position pos = player.getPosition();
-            
-            // Check if fall damage is NOT allowed or if flying is allowed
-            // Note: We need to invert allowFallDamage because:
-            // - If allowFallDamage is true, we should NOT cancel the event (let fall damage occur)
-            // - If allowFallDamage is false, we SHOULD cancel the event (prevent fall damage)
-            if (!protectionListener.handleProtection(pos, player, "allowFallDamage") || 
-                protectionListener.handleProtection(pos, player, "allowFlying")) {
-                event.setCancelled(true);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Cancelled fall damage for player " + player.getName() +
-                                " at " + pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
-                }
+        // Handle fall damage
+        if (event.getCause() == EntityDamageEvent.DamageCause.FALL) {
+            if (!(event.getEntity() instanceof Player player)) {
+                return;
             }
-        } finally {
-            plugin.getPerformanceMonitor().stopTimer(sample, "fall_damage_check");
+            
+            Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+            try {
+                Position pos = player.getPosition();
+                
+                // Check if fall damage is NOT allowed or if flying is allowed
+                // Note: We need to invert allowFallDamage because:
+                // - If allowFallDamage is true, we should NOT cancel the event (let fall damage occur)
+                // - If allowFallDamage is false, we SHOULD cancel the event (prevent fall damage)
+                if (!protectionListener.handleProtection(pos, player, "allowFallDamage") || 
+                    protectionListener.handleProtection(pos, player, "allowFlying")) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Cancelled fall damage for player " + player.getName() +
+                                    " at " + pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ());
+                    }
+                }
+            } finally {
+                plugin.getPerformanceMonitor().stopTimer(sample, "fall_damage_check");
+            }
+            return;
+        }
+        
+        // Handle explosion damage to players
+        if ((event.getCause() == EntityDamageEvent.DamageCause.ENTITY_EXPLOSION ||
+             event.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) &&
+            event.getEntity() instanceof Player player) {
+            
+            Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
+            try {
+                Position pos = player.getPosition();
+                
+                // Get the area at the player's position
+                Area area = plugin.getAreaManager().getHighestPriorityArea(
+                    pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
+                
+                if (area == null) {
+                    return;
+                }
+                
+                // Check for entity explosion source if available
+                Entity damager = null;
+                if (event instanceof EntityDamageByEntityEvent damageByEntityEvent) {
+                    damager = damageByEntityEvent.getDamager();
+                }
+                
+                // Determine which explosion type toggle to check
+                boolean shouldCancel = false;
+                String explosionType = "unknown";
+                
+                if (damager != null) {
+                    String entityType = damager.getClass().getSimpleName();
+                    
+                    // Check specific entity types
+                    if (entityType.equals("EntityPrimedTNT")) {
+                        shouldCancel = !area.getToggleState("allowTNT");
+                        explosionType = "TNT";
+                    } else if (entityType.equals("EntityCreeper")) {
+                        shouldCancel = !area.getToggleState("allowCreeper");
+                        explosionType = "Creeper";
+                    } else if (entityType.equals("EntityEndCrystal")) {
+                        shouldCancel = !area.getToggleState("allowCrystalExplosion");
+                        explosionType = "End Crystal";
+                    } else {
+                        // If we can't identify the specific entity, check generic explosion toggle
+                        shouldCancel = !area.getToggleState("allowExplosions");
+                        explosionType = entityType;
+                    }
+                } else {
+                    // If it's a block explosion (e.g., bed) or an unidentified entity explosion
+                    if (event.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) {
+                        // For bed explosions in nether/end
+                        shouldCancel = !area.getToggleState("allowBedExplosion");
+                        explosionType = "Bed";
+                    } else {
+                        // Generic explosion protection as fallback
+                        shouldCancel = !area.getToggleState("allowExplosions");
+                        explosionType = "Unknown";
+                    }
+                }
+                
+                // Cancel the damage if the toggle is disabled
+                if (shouldCancel) {
+                    event.setCancelled(true);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Cancelled " + explosionType + " explosion damage to player " + player.getName() +
+                                   " at " + pos.getFloorX() + "," + pos.getFloorY() + "," + pos.getFloorZ() +
+                                   " in area " + area.getName());
+                    }
+                }
+            } finally {
+                plugin.getPerformanceMonitor().stopTimer(sample, "explosion_damage_check");
+            }
         }
     }
     
@@ -731,4 +878,28 @@ public class EntityListener implements Listener {
             }
         }
     }
+
+    /**
+     * Safely check if an entity is a MobPlugin monster without risking ClassNotFoundException
+     * @param entity The entity to check
+     * @return true if the entity is a MobPlugin monster
+     */
+    private boolean isMobPluginMonster(Entity entity) {
+        if (entity == null) return false;
+        
+        // Fast path: check if it's an EntityMob (Nukkit core class)
+        if (entity instanceof EntityMob) return true;
+        
+        // Check for MobPlugin monsters if the class is available
+        if (mobPluginMonster != null) {
+            // Get from cache or compute
+            return isMonster.computeIfAbsent(entity.getClass(), 
+                cls -> mobPluginMonster.isAssignableFrom(cls));
+        }
+        
+        // If MobPlugin is not available, just use EntityMob check
+        return false;
+    }
 }
+
+

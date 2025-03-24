@@ -2,9 +2,6 @@ package adminarea.permissions;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.area.AreaDTO;
-import adminarea.event.LuckPermsGroupChangeEvent;
-import adminarea.event.LuckPermsTrackChangeEvent;
 import adminarea.exception.DatabaseException;
 
 import org.slf4j.Logger;

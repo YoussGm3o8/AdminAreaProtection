@@ -4,19 +4,15 @@ import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
-import adminarea.constants.AdminAreaConstants;
 import adminarea.permissions.PermissionToggle;
-import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementButton;
 import cn.nukkit.form.element.ElementToggle;
 import cn.nukkit.form.window.FormWindowCustom;
 import cn.nukkit.form.window.FormWindowSimple;
-import net.luckperms.api.model.group.Group;
 import org.json.JSONObject;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 import java.util.Map;
 import java.util.HashMap;
 
@@ -42,9 +38,25 @@ public class LuckPermsOverrideForm {
             "Choose a group to edit permissions for:"
         );
 
-        Set<Group> groups = plugin.getLuckPermsApi().getGroupManager().getLoadedGroups();
-        for (Group group : groups) {
-            form.addButton(new ElementButton(group.getName()));
+        try {
+            // Use reflection to safely access the group manager
+            Object luckPermsApi = plugin.getLuckPermsApi();
+            if (luckPermsApi != null) {
+                Object groupManager = luckPermsApi.getClass().getMethod("getGroupManager").invoke(luckPermsApi);
+                if (groupManager != null) {
+                    // Cast the result to the appropriate collection type
+                    Set<?> groups = (Set<?>) groupManager.getClass().getMethod("getLoadedGroups").invoke(groupManager);
+                    if (groups != null) {
+                        for (Object group : groups) {
+                            String groupName = (String) group.getClass().getMethod("getName").invoke(group);
+                            form.addButton(new ElementButton(groupName));
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error accessing LuckPerms groups", e);
+            form.addButton(new ElementButton("No groups available"));
         }
 
         return form;

@@ -705,7 +705,8 @@ public class PermissionChecker {
                     }
                 }
                 
-                if (groupPerms.containsKey(normalizedPermission)) {
+                // Add null check to prevent NPE
+                if (groupPerms != null && groupPerms.containsKey(normalizedPermission)) {
                     boolean groupAllowed = groupPerms.get(normalizedPermission);
                     if (plugin.isDebugMode()) {
                         logDebug("[PermissionChecker] Found LuckPerms primary group permission for " + 
@@ -717,7 +718,7 @@ public class PermissionChecker {
                 
                 // Try without the prefix
                 String permWithoutPrefix = normalizedPermission.replace("gui.permissions.toggles.", "");
-                if (groupPerms.containsKey(permWithoutPrefix)) {
+                if (groupPerms != null && groupPerms.containsKey(permWithoutPrefix)) {
                     boolean groupAllowed = groupPerms.get(permWithoutPrefix);
                     if (plugin.isDebugMode()) {
                         logDebug("[PermissionChecker] Found LuckPerms primary group permission without prefix for " + 
@@ -885,12 +886,21 @@ public class PermissionChecker {
             boolean isInTrack = plugin.isPlayerInTrack(player, trackName);
             
             if (plugin.isDebugMode()) {
-                // Get track groups for better debugging
+                // Use reflection to safely access the track manager and groups
                 try {
-                    var track = plugin.getLuckPermsApi().getTrackManager().getTrack(trackName);
-                    if (track != null) {
-                        logDebug("[PermissionChecker] Track " + trackName + " contains groups: " + 
-                               String.join(", ", track.getGroups()));
+                    // Use reflection to safely access the track manager and groups
+                    Object luckPermsApi = plugin.getLuckPermsApi();
+                    if (luckPermsApi != null) {
+                        Object trackManager = luckPermsApi.getClass().getMethod("getTrackManager").invoke(luckPermsApi);
+                        if (trackManager != null) {
+                            Object track = trackManager.getClass().getMethod("getTrack", String.class).invoke(trackManager, trackName);
+                            if (track != null) {
+                                @SuppressWarnings("unchecked")
+                                List<String> groups = (List<String>) track.getClass().getMethod("getGroups").invoke(track);
+                                logDebug("[PermissionChecker] Track " + trackName + " contains groups: " + 
+                                       String.join(", ", groups));
+                            }
+                        }
                     }
                 } catch (Exception e) {
                     // Ignore exceptions in debug code

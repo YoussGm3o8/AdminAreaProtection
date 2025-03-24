@@ -5,9 +5,6 @@ import adminarea.area.Area;
 import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
-import adminarea.data.FormTrackingData;
-import adminarea.form.validation.FormValidator;
-import adminarea.form.validation.ValidationResult;
 import adminarea.util.AreaValidationUtils;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementInput;
@@ -17,8 +14,6 @@ import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.form.window.FormWindowCustom;
-import org.json.JSONObject;
-
 import java.util.HashMap;
 import java.util.Map;
 

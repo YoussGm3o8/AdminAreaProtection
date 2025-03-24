@@ -57,9 +57,27 @@ public class GroupPermissionsHandler extends BaseFormHandler {
                 "Choose a group to edit permissions for:"
             );
 
-            Set<Group> groups = plugin.getLuckPermsApi().getGroupManager().getLoadedGroups();
-            for (Group group : groups) {
-                form.addButton(new ElementButton(group.getName()));
+            Set<Group> groups = null;
+            try {
+                // Use reflection to safely access the group manager
+                Object luckPermsApi = plugin.getLuckPermsApi();
+                if (luckPermsApi != null) {
+                    Object groupManager = luckPermsApi.getClass().getMethod("getGroupManager").invoke(luckPermsApi);
+                    if (groupManager != null) {
+                        // Cast the result to the appropriate collection type
+                        groups = (Set<Group>) groupManager.getClass().getMethod("getLoadedGroups").invoke(groupManager);
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Error accessing LuckPerms groups", e);
+            }
+
+            if (groups != null) {
+                for (Group group : groups) {
+                    form.addButton(new ElementButton(group.getName()));
+                }
+            } else {
+                form.addButton(new ElementButton("No groups available"));
             }
 
             return form;
@@ -111,12 +129,27 @@ public class GroupPermissionsHandler extends BaseFormHandler {
         if (area == null) return;
 
         // Get selected group
-        String groupName = plugin.getLuckPermsApi().getGroupManager().getLoadedGroups()
-            .stream()
-            .skip(response.getClickedButtonId())
-            .findFirst()
-            .map(Group::getName)
-            .orElse(null);
+        String groupName = null;
+        try {
+            // Use reflection to access the group list
+            Object luckPermsApi = plugin.getLuckPermsApi();
+            if (luckPermsApi != null) {
+                Object groupManager = luckPermsApi.getClass().getMethod("getGroupManager").invoke(luckPermsApi);
+                if (groupManager != null) {
+                    Set<Group> loadedGroups = (Set<Group>) groupManager.getClass().getMethod("getLoadedGroups").invoke(groupManager);
+                    if (loadedGroups != null) {
+                        // Skip to the selected group and get its name
+                        groupName = loadedGroups.stream()
+                            .skip(response.getClickedButtonId())
+                            .findFirst()
+                            .map(Group::getName)
+                            .orElse(null);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error getting selected group", e);
+        }
 
         if (groupName == null) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidGroup"));

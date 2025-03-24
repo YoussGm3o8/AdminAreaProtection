@@ -4,20 +4,26 @@ import cn.nukkit.Player;
 import cn.nukkit.event.Cancellable;
 import cn.nukkit.event.Event;
 import cn.nukkit.event.HandlerList;
-import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
+import cn.nukkit.entity.Entity;
 
 /**
  * Called when a monster targets a player in a protected area
- * Compatible with MobPlugin monsters
+ * Compatible with all monster entity types
  */
 public class MonsterTargetEvent extends Event implements Cancellable {
     private static final HandlerList handlers = new HandlerList();
     
-    private final WalkingMonster entity;
+    private final Entity entity;
     private final Player target;
     private boolean cancelled = false;
     
-    public MonsterTargetEvent(WalkingMonster entity, Player target) {
+    /**
+     * Create a new monster target event
+     * 
+     * @param entity The monster entity targeting a player
+     * @param target The player being targeted
+     */
+    public MonsterTargetEvent(Entity entity, Player target) {
         this.entity = entity;
         this.target = target;
     }
@@ -27,7 +33,7 @@ public class MonsterTargetEvent extends Event implements Cancellable {
      * 
      * @return The monster entity
      */
-    public WalkingMonster getEntity() {
+    public Entity getEntity() {
         return entity;
     }
     

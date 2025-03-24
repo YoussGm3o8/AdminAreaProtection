@@ -2,8 +2,6 @@ package adminarea.stats;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.util.ValidationUtils;
-import adminarea.util.PerformanceMonitor;
-
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import io.micrometer.core.instrument.Counter;
@@ -18,7 +16,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**

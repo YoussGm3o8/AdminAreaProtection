@@ -11,7 +11,8 @@ import cn.nukkit.level.Level;
 import java.util.Random;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
+// Remove direct import to prevent ClassNotFoundException
+// import nukkitcoders.mobplugin.entities.monster.WalkingMonster;
 import adminarea.AdminAreaProtectionPlugin;
 
 /**
@@ -27,6 +28,9 @@ public class MonsterHandler {
     private static String mobPluginVersion = "unknown";
     private static PluginLogger logger = null;
     private static boolean debugMode = false;
+    
+    // Store references to classes from MobPlugin using Class<?> to avoid ClassNotFoundException
+    private static Class<?> walkingMonsterClass = null;
     
     /**
      * Initialize the handler with the plugin instance for logging
@@ -47,6 +51,18 @@ public class MonsterHandler {
             mobPluginDetected = true;
             mobPluginVersion = mobPlugin.getDescription().getVersion();
             
+            // Try to load WalkingMonster class using reflection
+            try {
+                walkingMonsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.WalkingMonster");
+                if (debugMode) {
+                    logger.info("Successfully loaded WalkingMonster class from MobPlugin");
+                }
+            } catch (ClassNotFoundException e) {
+                if (debugMode) {
+                    logger.warning("MobPlugin found, but could not load WalkingMonster class: " + e.getMessage());
+                }
+            }
+            
             if (debugMode) {
                 logger.info("MobPlugin detected, version: " + mobPluginVersion);
             }
@@ -66,10 +82,11 @@ public class MonsterHandler {
      * @param target The player target to avoid
      */
     public static void resetTarget(Entity entity, Player target) {
-        // Check if entity is a MobPlugin monster
-        if (!(entity instanceof WalkingMonster)) return;
+        // Only proceed if MobPlugin is detected
+        if (!mobPluginDetected || walkingMonsterClass == null) return;
         
-        WalkingMonster monster = (WalkingMonster) entity;
+        // Check if entity is a MobPlugin monster using reflection
+        if (!walkingMonsterClass.isInstance(entity)) return;
         
         // Skip if we've recently reset this entity (prevents excessive processing)
         String entityKey = entity.getId() + ":" + target.getId();
@@ -82,16 +99,16 @@ public class MonsterHandler {
         
         try {
             // Calculate a new position away from player that doesn't go through walls
-            Vector3 newPos = calculateSafePosition(monster, target);
+            Vector3 newPos = calculateSafePosition(entity, target);
             
-            // Use MobPlugin's WalkingMonster methods to reset targeting
-            resetMonsterTargeting(monster);
+            // Use reflection to reset monster targeting
+            resetMonsterTargeting(entity);
             
             // Move entity away from player if safe position was found
             if (newPos != null) {
-                Vector3 direction = newPos.subtract(monster.getPosition());
-                monster.setPosition(newPos);
-                monster.setMotion(direction.normalize().multiply(0.1)); // Add slight momentum
+                Vector3 direction = newPos.subtract(entity.getPosition());
+                entity.setPosition(newPos);
+                entity.setMotion(direction.normalize().multiply(0.1)); // Add slight momentum
             }
         } catch (Exception e) {
             if (debugMode && logger != null) {
@@ -101,21 +118,33 @@ public class MonsterHandler {
     }
     
     /**
-     * Reset a monster's targeting using all known methods for compatibility
+     * Reset a monster's targeting using reflection for compatibility
      * 
-     * @param monster The WalkingMonster to reset
+     * @param monster The monster entity to reset
      */
-    private static void resetMonsterTargeting(WalkingMonster monster) {
-        // Try direct API methods first
+    private static void resetMonsterTargeting(Entity monster) {
+        if (walkingMonsterClass == null) return;
+        
+        // Try direct API methods first using reflection
         try {
-            // This is the preferred method - should work on most versions
-            monster.setFollowTarget(null, false);
-        } catch (Exception ignored) {
-            // Fallback to simpler method if the one with boolean param fails
+            // Try method with boolean param first
             try {
-                monster.setFollowTarget(null);
-            } catch (Exception ignored2) {
-                // Both direct methods failed, try reflection
+                java.lang.reflect.Method setFollowTargetMethod = 
+                    walkingMonsterClass.getMethod("setFollowTarget", Entity.class, boolean.class);
+                setFollowTargetMethod.invoke(monster, null, false);
+            } catch (Exception ignored) {
+                // Fallback to simpler method if the one with boolean param fails
+                try {
+                    java.lang.reflect.Method setFollowTargetMethod = 
+                        walkingMonsterClass.getMethod("setFollowTarget", Entity.class);
+                    setFollowTargetMethod.invoke(monster, null);
+                } catch (Exception ignored2) {
+                    // Both direct methods failed, try reflection on fields
+                }
+            }
+        } catch (Exception e) {
+            if (debugMode) {
+                logger.warning("Failed to reset monster targeting: " + e.getMessage());
             }
         }
         
@@ -123,7 +152,7 @@ public class MonsterHandler {
         try {
             // Reset isAngryTo field
             java.lang.reflect.Field angryToField = 
-                WalkingMonster.class.getDeclaredField("isAngryTo");
+                walkingMonsterClass.getDeclaredField("isAngryTo");
             angryToField.setAccessible(true);
             angryToField.set(monster, -1L);
         } catch (Exception ignored) {
@@ -133,7 +162,7 @@ public class MonsterHandler {
         try {
             // Disable canAttack field
             java.lang.reflect.Field canAttackField = 
-                WalkingMonster.class.getDeclaredField("canAttack");
+                walkingMonsterClass.getDeclaredField("canAttack");
             canAttackField.setAccessible(true);
             canAttackField.set(monster, false);
         } catch (Exception ignored) {
@@ -157,7 +186,7 @@ public class MonsterHandler {
      * @param target The player target to move away from
      * @return A safe position, or null if no safe position found
      */
-    private static Vector3 calculateSafePosition(WalkingMonster monster, Player target) {
+    private static Vector3 calculateSafePosition(Entity monster, Player target) {
         Vector3 playerPos = target.getPosition();
         Vector3 mobPos = monster.getPosition();
         Level level = monster.getLevel();
@@ -205,7 +234,7 @@ public class MonsterHandler {
      */
     public static boolean isMobPluginMonster(Entity entity) {
         // Check if entity is a WalkingMonster from MobPlugin
-        return entity instanceof WalkingMonster;
+        return walkingMonsterClass != null && walkingMonsterClass.isInstance(entity);
     }
     
     /**
@@ -215,6 +244,15 @@ public class MonsterHandler {
      */
     public static boolean isMobPluginDetected() {
         return mobPluginDetected;
+    }
+    
+    /**
+     * Check if WalkingMonster class was loaded successfully
+     *
+     * @return true if WalkingMonster class was loaded
+     */
+    public static boolean isWalkingMonsterAvailable() {
+        return walkingMonsterClass != null;
     }
     
     /**

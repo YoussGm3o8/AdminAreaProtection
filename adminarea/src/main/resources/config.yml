@@ -5,7 +5,7 @@
 debug: true
 
 # Language setting (en_US or ru_RU)
-language: "ru_RU"
+language: "en_US"
 
 # Wand item type (default: 280 = stick)
 wandItemType: 280

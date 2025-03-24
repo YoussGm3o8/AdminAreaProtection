@@ -313,8 +313,22 @@ public class GuiManager {
         if (!plugin.isLuckPermsEnabled()) {
             throw new IllegalStateException("LuckPerms is not available");
         }
-        if (!plugin.getLuckPermsApi().getUserManager().isLoaded(player.getUniqueId())) {
-            throw new IllegalStateException("LuckPerms user data not loaded");
+        
+        try {
+            // Use reflection to safely access the user manager
+            Object luckPermsApi = plugin.getLuckPermsApi();
+            Object userManager = luckPermsApi.getClass().getMethod("getUserManager").invoke(luckPermsApi);
+            
+            // Check if user is loaded
+            boolean isLoaded = (boolean) userManager.getClass()
+                .getMethod("isLoaded", java.util.UUID.class)
+                .invoke(userManager, player.getUniqueId());
+                
+            if (!isLoaded) {
+                throw new IllegalStateException("LuckPerms user data not loaded");
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Error accessing LuckPerms: " + e.getMessage(), e);
         }
     }
 

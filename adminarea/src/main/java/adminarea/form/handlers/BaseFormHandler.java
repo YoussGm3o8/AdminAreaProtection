@@ -2,22 +2,15 @@ package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
-import adminarea.constants.FormIds;
 import adminarea.form.IFormHandler;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
-import cn.nukkit.form.response.FormResponseData;
 import cn.nukkit.form.response.FormResponseModal;
 import cn.nukkit.form.response.FormResponseSimple;
 import cn.nukkit.form.window.FormWindow;
 import cn.nukkit.utils.LogLevel;
-import com.google.common.collect.MapDifference;
-import com.google.common.collect.Maps;
-
 import java.util.Map;
 import java.util.HashMap;
-import java.util.function.Consumer;
-import org.json.JSONObject;
 
 /**
  * Base handler for all forms in the plugin.
