@@ -244,7 +244,7 @@ validation:
   messages:
     tooLong: "{prefix}§cСообщение не может быть длиннее {max} символов"
     invalidPlaceholders: "{prefix}§cНедопустимые заполнители в сообщении: {placeholders}"
-    invalidFormat: "{prefix}§cНеверный формат сообщения. Доступные заполнители: {available}"
+    invalidFormat: "{prefix}§cНедопустимый формат сообщения. Доступные плейсхолдеры: {available}"
 
   permissions:
     invalidToggle: "{prefix}§cНеверный переключатель разрешения: {toggle}"
@@ -550,19 +550,23 @@ gui:
     header: "§2Настройка Разрешений {category}\n§8Переключите настройки ниже"
 
   basicSettings:
-    title: "Основные Настройки: {area}"
+    title: "Основные настройки: {area}"
     sections:
-      general: "§2Общие Настройки"
-      display: "\n§2Настройки Отображения"
+      general: "§2Общие настройки"
+      display: "\n§2Настройки отображения"
     labels:
-      name: "Название Области"
+      name: "Название области"
       namePlaceholder: "Введите название области"
       priority: "Приоритет"
       priorityPlaceholder: "Введите приоритет (0-100)"
-      showTitle: "Показывать Заголовок Области"
-      enterMessage: "Сообщение При Входе"
+      showTitle: "Показывать заголовок области"
+      enterTitle: "Заголовок При Входе"
+      enterTitlePlaceholder: "Заголовок, показываемый при входе в область"
+      enterMessage: "Сообщение при входе"
       enterPlaceholder: "Сообщение, показываемое при входе"
-      leaveMessage: "Сообщение При Выходе"
+      leaveTitle: "Заголовок При Выходе"
+      leaveTitlePlaceholder: "Заголовок, показываемый при выходе из области"
+      leaveMessage: "Сообщение при выходе"
       leavePlaceholder: "Сообщение, показываемое при выходе"
 
   deleteArea:
@@ -691,4 +695,9 @@ potionEffect:
     set: "{prefix}§aУстановлена сила эффекта {effect} на {strength} в области {area}"
     outOfRange: "{prefix}§cЗначение силы должно быть между 0 и 10"
     invalid: "{prefix}§cНедопустимое значение силы, должно быть числом"
+
+# New titles validation messages
+titles:
+  tooLong: "{prefix}§cЗаголовок не может быть длиннее {max} символов"
+  invalidFormat: "{prefix}§cНедопустимый формат заголовка"
 

@@ -530,6 +530,20 @@ public class PlayerEffectListener implements Listener {
             if (areaName != null) {
                 playerAreaMap.put(playerName, areaName);
                 
+                // Record visit statistic
+                try {
+                    plugin.getAreaManager().getAreaStats(areaName)
+                        .recordVisit(areaName, playerName);
+                    
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Recorded visit for player " + playerName + " to area " + areaName);
+                    }
+                } catch (Exception e) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Failed to record area visit: " + e.getMessage());
+                    }
+                }
+                
                 // Apply effects for new area - this is an entry event
                 applyAreaEffectsToPlayer(player, area, true);
             } else {

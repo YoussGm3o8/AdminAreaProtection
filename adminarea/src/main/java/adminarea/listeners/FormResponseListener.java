@@ -177,8 +177,16 @@ public class FormResponseListener implements Listener {
                     handler.handleCancel(event.getPlayer());
                 }
             } catch (Exception e) {
-                plugin.getLogger().error("Error handling form cancel", e);
-                event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+                // Check for validation errors that are already shown to the player
+                if (e instanceof RuntimeException && e.getMessage() != null && 
+                    e.getMessage().contains("_validation_error_already_shown")) {
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("[Form] Not showing generic error for validation error in form cancel handler");
+                    }
+                } else {
+                    plugin.getLogger().error("Error handling form cancel", e);
+                    event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+                }
             }
         }
         // Always ensure form data is cleaned up
@@ -198,11 +206,25 @@ public class FormResponseListener implements Listener {
     private void handleCustomForm(PlayerFormRespondedEvent event, IFormHandler handler, String formId) {
         FormResponseCustom response = (FormResponseCustom) event.getResponse();
         
-        // Use GuiManager for validation
-        if (plugin.getGuiManager().validateForm(event.getPlayer(), response, formId)) {
+        try {
+            // Use GuiManager for validation - this will now throw an exception for validation errors
+            plugin.getGuiManager().validateForm(event.getPlayer(), response, formId);
+            
+            // Only handle the response if validation succeeds
             handler.handleResponse(event.getPlayer(), response);
-        } else {
-            event.getPlayer().sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
+        } catch (Exception e) {
+            // Check for validation errors that are already shown to the player
+            if (e instanceof RuntimeException && e.getMessage() != null && 
+                e.getMessage().contains("_validation_error_already_shown")) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[Form] Not showing generic error for validation error in custom form handler");
+                }
+            } else {
+                plugin.getLogger().error("Error handling custom form response", e);
+                event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            }
+            // Clean up form data
+            ensureFormDataCleanup(event.getPlayer().getName());
         }
     }
 
@@ -248,14 +270,36 @@ public class FormResponseListener implements Listener {
                 }
             }
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling simple form response", e);
-            event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            // Check for validation errors that are already shown to the player
+            if (e instanceof RuntimeException && e.getMessage() != null && 
+                e.getMessage().contains("_validation_error_already_shown")) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[Form] Not showing generic error for validation error in simple form handler");
+                }
+            } else {
+                plugin.getLogger().error("Error handling simple form response", e);
+                event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            }
             // Don't automatically open main menu
             ensureFormDataCleanup(event.getPlayer().getName());
         }
     }
 
     private void handleFormError(PlayerFormRespondedEvent event, Exception e) {
+        // Check for validation errors that are already shown to the player
+        if (e instanceof RuntimeException && e.getMessage() != null && 
+            e.getMessage().contains("_validation_error_already_shown")) {
+            if (plugin.isDebugMode()) {
+                plugin.debug("[Form] Validation error already shown to player " + event.getPlayer().getName() + 
+                    ", suppressing generic error");
+            }
+            // Still clean up form tracking data
+            String playerName = event.getPlayer().getName();
+            plugin.getFormIdMap().remove(playerName);
+            plugin.getFormIdMap().remove(playerName + "_editing");
+            return;
+        }
+        
         plugin.getLogger().error("Error handling form response", e);
         if (plugin.isDebugMode()) {
             plugin.debug("[Form] Error processing form response:");

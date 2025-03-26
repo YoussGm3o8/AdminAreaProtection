@@ -35,6 +35,10 @@ areaSettings:
   useMostRestrictiveMerge: true
   description:
     mergeBehavior: "When true, overlapping areas use AND logic (most restrictive). When false, uses OR logic (least restrictive)."
+  
+  # Maximum length for area titles
+  titles:
+    maxLength: 100
 
 # LuckPerms integration
 luckperms:

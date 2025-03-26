@@ -560,8 +560,12 @@ gui:
       priority: "Priority"
       priorityPlaceholder: "Enter priority (0-100)"
       showTitle: "Show Area Title"
+      enterTitle: "Enter Title"
+      enterTitlePlaceholder: "Title shown when entering area"
       enterMessage: "Enter Message"
       enterPlaceholder: "Message shown when entering"
+      leaveTitle: "Leave Title"
+      leaveTitlePlaceholder: "Title shown when leaving area"
       leaveMessage: "Leave Message"
       leavePlaceholder: "Message shown when leaving"
 
@@ -691,4 +695,8 @@ potionEffect:
     set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
     outOfRange: "{prefix}§cStrength value must be between 0 and 10"
     invalid: "{prefix}§cInvalid strength value, must be a number"
+
+titles:
+  tooLong: "{prefix}§cTitle cannot be longer than {max} characters"
+  invalidFormat: "{prefix}§cInvalid title format"
 

@@ -343,7 +343,7 @@ public class PermissionDatabaseManager implements AutoCloseable {
                     String value = rs.getString("value");
                     // Explicitly handle text values "true" and "false"
                     boolean boolValue = "true".equalsIgnoreCase(value);
-                    plugin.getLogger().info("[Debug] Permission DB row: " + permission + " = " + value + " (parsed as " + boolValue + ")");
+                    // plugin.getLogger().info("[Debug] Permission DB row: " + permission + " = " + value + " (parsed as " + boolValue + ")");
                     permissions.put(permission, boolValue);
                 }
             }
@@ -544,7 +544,7 @@ public class PermissionDatabaseManager implements AutoCloseable {
     
     // Get all player permissions for an area
     public Map<String, Map<String, Boolean>> getAllPlayerPermissions(String areaName) throws DatabaseException {
-        plugin.getLogger().info("[Debug] Loading all player permissions for area " + areaName + " from database");
+        // plugin.getLogger().info("[Debug] Loading all player permissions for area " + areaName + " from database");
         Map<String, Map<String, Boolean>> allPermissions = new HashMap<>();
         
         try (Connection conn = getConnection();
@@ -568,10 +568,10 @@ public class PermissionDatabaseManager implements AutoCloseable {
             
             // Log debug information
             int playerCount = allPermissions.size();
-            plugin.getLogger().info("[Debug] Found " + totalEntries + " total permission entries for " + playerCount + " players in area " + areaName);
-            for (Map.Entry<String, Map<String, Boolean>> entry : allPermissions.entrySet()) {
-                plugin.getLogger().info("[Debug]   Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
-            }
+            //plugin.getLogger().info("[Debug] Found " + totalEntries + " total permission entries for " + playerCount + " players in area " + areaName);
+            // for (Map.Entry<String, Map<String, Boolean>> entry : allPermissions.entrySet()) {
+            //     //plugin.getLogger().info("[Debug]   Player " + entry.getKey() + ": " + entry.getValue().size() + " permissions");
+            // }
         } catch (SQLException e) {
             throw new DatabaseException("Failed to load all player permissions", e);
         }

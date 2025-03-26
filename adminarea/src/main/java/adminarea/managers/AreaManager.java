@@ -675,14 +675,11 @@ public class AreaManager implements IAreaManager {
                 // Pre-allocate result list with estimated capacity
                 List<Area> result = new ArrayList<>(4); // Most locations have few overlapping areas
                 
-                // Check for global area first (most efficient)
+                // Check for global area first but don't return immediately
+                // Instead, add it to the result list and continue processing
                 Area globalArea = globalAreasByWorld.get(world);
                 if (globalArea != null) {
                     result.add(globalArea);
-                    
-                    // For global areas, we can avoid further processing completely
-                    // This is a significant optimization for servers with many players
-                    return result; // Global area overrides all others
                 }
                 
                 // Get all potential areas in this chunk
@@ -690,16 +687,17 @@ public class AreaManager implements IAreaManager {
                 Set<Area> chunkAreas = chunkAreaMap.getOrDefault(chunkKey, Collections.emptySet());
                 
                 if (!chunkAreas.isEmpty()) {
-                    // Filter areas that actually contain the point and sort by priority
+                    // Filter areas that actually contain the point
                     for (Area area : chunkAreas) {
                         if (area.isInside(world, x, y, z)) { // Use isInside instead of contains
                             result.add(area);
                         }
                     }
-                    
-                    if (!result.isEmpty()) {
-                        result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority())); 
-                    }
+                }
+                
+                // Sort by priority regardless of whether we have global areas or not
+                if (!result.isEmpty()) {
+                    result.sort((a1, a2) -> Integer.compare(a2.getPriority(), a1.getPriority())); 
                 }
                 
                 return result;
@@ -757,6 +755,22 @@ public class AreaManager implements IAreaManager {
         Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
             List<Area> areasAtLocation = getAreasAtLocation(world, x, y, z);
+            
+            if (plugin.isDebugMode() && !areasAtLocation.isEmpty()) {
+                plugin.debug("Areas at location (" + world + ", " + x + ", " + y + ", " + z + "):");
+                for (Area area : areasAtLocation) {
+                    boolean isGlobal = area.isGlobal();
+                    plugin.debug(" - " + area.getName() + " (Priority: " + area.getPriority() + 
+                              ", Global: " + isGlobal + ")");
+                }
+                if (!areasAtLocation.isEmpty()) {
+                    Area highest = areasAtLocation.get(0);
+                    plugin.debug("Highest priority area selected: " + highest.getName() + 
+                             " (Priority: " + highest.getPriority() + 
+                             ", Global: " + highest.isGlobal() + ")");
+                }
+            }
+            
             return areasAtLocation.isEmpty() ? null : areasAtLocation.get(0);
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "area_lookup_highest");

@@ -6,6 +6,7 @@ import adminarea.area.AreaBuilder;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.util.AreaValidationUtils;
+import adminarea.util.ValidationUtils;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementInput;
 import cn.nukkit.form.element.ElementLabel;
@@ -131,10 +132,16 @@ public class BasicSettingsHandler extends BaseFormHandler {
 
     @Override
     protected void handleCustomResponse(Player player, FormResponseCustom response) {
+        if (response == null) {
+            handleCancel(player);
+            return;
+        }
+        
         try {
             Area area = getEditingArea(player);
             if (area == null) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
 
@@ -169,8 +176,30 @@ public class BasicSettingsHandler extends BaseFormHandler {
             
             // Validate name (skip validation if name hasn't changed)
             if (!oldName.equals(newName)) {
-                // Use centralized validation method
-                if (!areaValidationUtils.validateAreaName(newName, player, true, FormIds.BASIC_SETTINGS)) {
+                // Check if name is empty first
+                if (newName == null || newName.trim().isEmpty()) {
+                    player.sendMessage(plugin.getLanguageManager().get("validation.form.area.name.required"));
+                    plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                    markValidationErrorShown(); // Mark that we've already shown a specific error
+                    return;
+                }
+                
+                // Direct validation with specific error message, similar to CreateAreaHandler
+                try {
+                    ValidationUtils.validateAreaName(newName);
+                    
+                    // Check if area already exists (only if name format is valid)
+                    if (!oldName.equals(newName) && plugin.getArea(newName) != null) {
+                        player.sendMessage(plugin.getLanguageManager().get("validation.form.area.name.exists", 
+                            Map.of("name", newName)));
+                        plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                        markValidationErrorShown(); // Mark that we've already shown a specific error
+                        return;
+                    }
+                } catch (IllegalArgumentException e) {
+                    player.sendMessage(plugin.getLanguageManager().get("validation.area.name.format") + ": " + e.getMessage());
+                    plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                    markValidationErrorShown(); // Mark that we've already shown a specific error
                     return;
                 }
             }
@@ -180,16 +209,25 @@ public class BasicSettingsHandler extends BaseFormHandler {
             try {
                 newPriority = Integer.parseInt(priorityInput);
                 if (!areaValidationUtils.validatePriority(newPriority, player, FormIds.BASIC_SETTINGS)) {
+                    markValidationErrorShown(); // Mark that we've already shown a specific error
                     return;
                 }
             } catch (NumberFormatException e) {
                 player.sendMessage(plugin.getLanguageManager().get("validation.form.area.priority.notNumber"));
                 plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
             
             // Validate messages
             if (!areaValidationUtils.validateMessages(newEnterMessage, newLeaveMessage, player, FormIds.BASIC_SETTINGS)) {
+                markValidationErrorShown(); // Mark that we've already shown a specific error
+                return;
+            }
+            
+            // Validate titles
+            if (!areaValidationUtils.validateTitles(newEnterTitle, newLeaveTitle, player, FormIds.BASIC_SETTINGS)) {
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
 
@@ -268,18 +306,30 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 Area updatedArea = area;
                 if (updateName) {
                     // For name changes, we need to create a new area and delete the old one
-                    AreaDTO updatedDTO = AreaBuilder.fromDTO(currentDTO)
+                    
+                    // Check if this is a global area and preserve that status
+                    boolean isGlobalArea = currentDTO.bounds().isGlobal() || area.isGlobal();
+                    
+                    // Create builder from existing DTO
+                    AreaBuilder builder = AreaBuilder.fromDTO(currentDTO)
                         .name(newName)
                         .priority(updatePriority ? newPriority : currentDTO.priority())
                         .showTitle(updateShowTitle ? newShowTitle : currentDTO.showTitle())
                         .enterTitle(updateEnterTitle ? newEnterTitle : currentDTO.enterTitle())
                         .enterMessage(updateEnterMsg ? newEnterMessage : currentDTO.enterMessage())
                         .leaveTitle(updateLeaveTitle ? newLeaveTitle : currentDTO.leaveTitle())
-                        .leaveMessage(updateLeaveMsg ? newLeaveMessage : currentDTO.leaveMessage())
-                        .build().toDTO();
+                        .leaveMessage(updateLeaveMsg ? newLeaveMessage : currentDTO.leaveMessage());
                     
-                    // Create new area with the new name
-                    updatedArea = AreaBuilder.fromDTO(updatedDTO).build();
+                    // If this is a global area, ensure we use global coordinates
+                    if (isGlobalArea) {
+                        builder.global(currentDTO.world());
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Preserving global area status when updating: " + oldName + " -> " + newName);
+                        }
+                    }
+                    
+                    // Build the updated area
+                    updatedArea = builder.build();
                     
                     // Save new area first
                     plugin.getDatabaseManager().saveArea(updatedArea);
@@ -297,12 +347,6 @@ public class BasicSettingsHandler extends BaseFormHandler {
                     // Invalidate permission caches for both names
                     plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(oldName);
                     plugin.getPermissionOverrideManager().getPermissionChecker().invalidateCache(newName);
-                    
-                    if (plugin.isDebugMode()) {
-                        // Debug logging for name change
-                    }
-                } else if (changedFields > 0) {
-                    // Debug logging for updates without name change
                 }
                 
                 // Create message placeholders
@@ -315,13 +359,6 @@ public class BasicSettingsHandler extends BaseFormHandler {
 
                 // Send success message only if changes were made
                 if (changedFields > 0) {
-                    // Fire area modified event with old and new area states (if name changed we have a new area instance)
-                    if (updateName) {
-                        // Fire event for name change
-                    } else {
-                        // Fire event for updates without name change
-                    }
-                    
                     player.sendMessage(plugin.getLanguageManager().get("success.area.update.settings", placeholders));
                 } else {
                     player.sendMessage(plugin.getLanguageManager().get("messages.area.noChanges", 
@@ -332,25 +369,33 @@ public class BasicSettingsHandler extends BaseFormHandler {
                 plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
 
             } catch (Exception e) {
-                plugin.getLogger().error("Error updating area settings", e);
-                player.sendMessage(plugin.getLanguageManager().get("validation.form.error.generic"));
-                
-                if (plugin.isDebugMode()) {
-                    // Debug logging for errors
+                // Skip handling if it's a validation error already handled
+                if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                    // Just rethrow to let the parent handler deal with it
+                    throw (RuntimeException) e;
                 }
+                
+                plugin.getLogger().error("Error updating area settings", e);
+                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
                 
                 // Reopen the form with current values
                 plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, area);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
             }
-
-        } catch (NumberFormatException e) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidPriority"));
-            plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, getEditingArea(player));
         } catch (Exception e) {
+            // Skip handling if it's a validation error already handled
+            if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                // Just rethrow to let the parent handler deal with it
+                throw (RuntimeException) e;
+            }
+            
             plugin.getLogger().error("Error handling basic settings form", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            if (plugin.isDebugMode()) {
-                e.printStackTrace();
+            
+            // Try to reopen the form with the current area
+            Area currentArea = getEditingArea(player);
+            if (currentArea != null) {
+                plugin.getGuiManager().openFormById(player, FormIds.BASIC_SETTINGS, currentArea);
             }
         }
     }

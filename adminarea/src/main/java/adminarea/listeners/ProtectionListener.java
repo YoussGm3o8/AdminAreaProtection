@@ -410,6 +410,19 @@ public class ProtectionListener implements Listener {
             if (handleProtection(pos, player, "allowBlockBreak")) {
                 event.setCancelled(true);
                 sendProtectionMessage(player, getProtectionMessageKey("allowBlockBreak"));
+            } else {
+                // Record statistics for successful block break if not cancelled
+                Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                if (area != null) {
+                    try {
+                        plugin.getAreaManager().getAreaStats(area.getName())
+                            .recordBlockBreak(area.getName(), player.getName());
+                    } catch (Exception e) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Failed to record block break stat: " + e.getMessage());
+                        }
+                    }
+                }
             }
         } finally {
             plugin.getPerformanceMonitor().stopTimer(sample, "block_break_check");
@@ -418,52 +431,30 @@ public class ProtectionListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
     public void onBlockPlace(BlockPlaceEvent event) {
+        Timer.Sample sample = plugin.getPerformanceMonitor().startTimer();
         try {
+            Position pos = event.getBlock().getLocation();
             Player player = event.getPlayer();
             
-            // Skip if bypassing
-            if (plugin.isBypassing(player.getName())) {
-                return;
-            }
-            
-            Position pos = event.getBlock().getLocation();
-            Block block = event.getBlock();
-            
-            // Check for multi-block structures (doors and beds)
-            if (isDoor(block) || isBed(block)) {
-                // For doors, check above block
-                if (isDoor(block)) {
-                    Position abovePos = new Position(pos.x, pos.y + 1, pos.z, pos.level);
-                    if (handleProtection(abovePos, player, "allowBlockPlace")) {
-                        event.setCancelled(true);
-                        sendProtectionMessage(player, getProtectionMessageKey("allowBlockPlace"));
-                        return;
-                    }
-                }
-                
-                // For beds, check adjacent block based on block data
-                if (isBed(block)) {
-                    int facing = block.getDamage() & 0x03; // Get facing direction from block data
-                    Position adjacentPos = getAdjacentBedPosition(pos, facing);
-                    if (adjacentPos != null && handleProtection(adjacentPos, player, "allowBlockPlace")) {
-                        event.setCancelled(true);
-                        sendProtectionMessage(player, getProtectionMessageKey("allowBlockPlace"));
-                        return;
-                    }
-                }
-            }
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Block place at " + pos.getX() + "," + pos.getY() + "," + pos.getZ());
-            }
-            
-            // Normal protection handling
             if (handleProtection(pos, player, "allowBlockPlace")) {
                 if (plugin.isDebugMode()) {
                     plugin.debug("BlockPlace cancelled due to protection");
                 }
                 event.setCancelled(true);
                 sendProtectionMessage(player, getProtectionMessageKey("allowBlockPlace"));
+            } else {
+                // Record statistics for successful block place if not cancelled
+                Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                if (area != null) {
+                    try {
+                        plugin.getAreaManager().getAreaStats(area.getName())
+                            .recordBlockPlace(area.getName(), player.getName());
+                    } catch (Exception e) {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Failed to record block place stat: " + e.getMessage());
+                        }
+                    }
+                }
             }
         } catch (Exception e) {
             plugin.getLogger().error("Error handling block place", e);
@@ -796,11 +787,31 @@ public class ProtectionListener implements Listener {
                 }
                 
                 // PvP check
-                if (victim instanceof Player) {
+                if (victim instanceof Player victimPlayer) {
+                    // Skip if either player is bypassing
+                    if (plugin.isBypassing(player.getName()) || 
+                        plugin.isBypassing(victimPlayer.getName())) {
+                        return;
+                    }
+                    
                     if (handleProtection(victim, player, "gui.permissions.toggles.allowPvP")) {
                         event.setCancelled(true);
                         sendProtectionMessage(player, getProtectionMessageKey("allowPvP"));
                         return;
+                    } else {
+                        // Record PVP fight statistics
+                        Position pos = victim.getPosition();
+                        Area area = plugin.getAreaManager().getHighestPriorityAreaAtPosition(pos);
+                        if (area != null) {
+                            try {
+                                plugin.getAreaManager().getAreaStats(area.getName())
+                                    .recordPvpFight(area.getName(), player.getName(), victimPlayer.getName());
+                            } catch (Exception e) {
+                                if (plugin.isDebugMode()) {
+                                    plugin.debug("Failed to record PVP fight stat: " + e.getMessage());
+                                }
+                            }
+                        }
                     }
                 }
                 

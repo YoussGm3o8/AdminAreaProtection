@@ -13,6 +13,7 @@ import cn.nukkit.command.Command;
 import cn.nukkit.command.CommandSender;
 import cn.nukkit.Player;
 import cn.nukkit.level.Position;
+import cn.nukkit.math.Vector3;
 
 import java.util.List;
 import java.util.Map;
@@ -33,9 +34,10 @@ import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.util.Collection;
 
+import adminarea.listeners.ContainerListener;
+import adminarea.listeners.FormCleanupListener;
 import adminarea.listeners.FormResponseListener;
 import adminarea.listeners.WandListener;
-import adminarea.listeners.FormCleanupListener;
 import adminarea.managers.AreaManager;
 import adminarea.managers.ConfigManager;
 import adminarea.managers.DatabaseManager;
@@ -52,6 +54,11 @@ import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
 import adminarea.form.FormRegistry;
 import adminarea.permissions.LuckPermsCache;
+import cn.nukkit.plugin.PluginManager;
+import adminarea.listeners.ProtectionListener;
+import adminarea.listeners.PlayerEffectListener;
+import adminarea.listeners.EnvironmentListener;
+
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
@@ -175,14 +182,17 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 reloadConfig();       // reload config after saving
     
                 // Log plugin enabling start
-                getLogger().info("Enabling AdminAreaProtectionPlugin...");
+                // getLogger().info("Enabling AdminAreaProtectionPlugin...");
     
                 // Comment out less important logs
                 // getLogger().info("Configuration loaded.");
 
                 // Replace direct config access with config manager
                 reloadConfigValues();
-
+                
+                // Register container stats listener
+                getServer().getPluginManager().registerEvents(new ContainerListener(this), this);
+                
                 // Initialize MonsterHandler early to detect MobPlugin availability
                 adminarea.entity.MonsterHandler.initialize(this);
                 // getLogger().info("Monster handler initialized");
@@ -260,7 +270,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     dbManager = new DatabaseManager(this);
                     
                     // Add recovery check for crashed sessions
-                    getLogger().info("Checking for database recovery needs...");
+                    // getLogger().info("Checking for database recovery needs...");
                     Path areasLockFilePath = getDataFolder().toPath().resolve("areas.db-shm");
                     Path permLockFilePath = getDataFolder().toPath().resolve("permission_overrides.db-shm");
 
@@ -269,7 +279,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     boolean needsPermRecovery = Files.exists(permLockFilePath) && !cleanShutdownDetected;
 
                     if (needsAreaRecovery || needsPermRecovery) {
-                        getLogger().info("Detected potential unclean shutdown. Running database recovery...");
+                        // getLogger().info("Detected potential unclean shutdown. Running database recovery...");
                         
                         // Recover areas database if needed
                         if (needsAreaRecovery) {
@@ -344,7 +354,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 
                 // Now that PermissionOverrideManager is initialized, load permissions for all areas
                 try {
-                    getLogger().info("Loading permissions for all areas...");
+                    // getLogger().info("Loading permissions for all areas...");
                     List<Area> allAreas = areaManager.getAllAreas();
                     
                     // Add counter for monitoring
@@ -383,6 +393,9 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     
                     // Register form cleanup listener separately (not protection-related)
                     getServer().getPluginManager().registerEvents(new FormCleanupListener(this), this);
+                    
+                    // Register container listener for stats tracking
+                    getServer().getPluginManager().registerEvents(new ContainerListener(this), this);
                     
                     performanceMonitor.stopTimer(listenerInitTimer, "listener_manager_init");
                     // getLogger().info("Listener manager initialized and all listeners registered successfully");
@@ -495,7 +508,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 }
             }
             
-            getLogger().info("All caches have been cleared and listeners reloaded");
+            //getLogger().info("All caches have been cleared and listeners reloaded");
 
             // After reloading configuration
             if (permissionOverrideManager != null && areaManager != null) {

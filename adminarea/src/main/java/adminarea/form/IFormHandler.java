@@ -52,6 +52,13 @@ public interface IFormHandler {
             }
 
         } catch (Exception e) {
+            // Check for validation errors first
+            if (e instanceof RuntimeException && e.getMessage() != null && 
+                e.getMessage().contains("_validation_error_already_shown")) {
+                // Skip showing generic error for validation errors
+                return;
+            }
+            
             // Handle errors
             AdminAreaProtectionPlugin plugin = player.getServer().getPluginManager()
                 .getPlugin("AdminAreaProtection") instanceof AdminAreaProtectionPlugin p ? p : null;

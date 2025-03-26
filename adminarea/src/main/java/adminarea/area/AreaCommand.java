@@ -465,7 +465,7 @@ public class AreaCommand extends Command {
         }
 
         if (args.length < 2) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.usage.stats"));
+            player.sendMessage(plugin.getLanguageManager().get("messages.commands.usage.stats"));
             return true;
         }
 
@@ -494,24 +494,34 @@ public class AreaCommand extends Command {
                         return resetStats(player, area);
                     
                     default:
-                        player.sendMessage(plugin.getLanguageManager().get("messages.usage.stats"));
+                        player.sendMessage(plugin.getLanguageManager().get("messages.commands.usage.stats"));
                         return true;
                 }
             }
 
             // View stats
             AreaDTO dto = area.toDTO();
-            JSONObject stats = dto.settings().optJSONObject("stats");
-            if (stats == null) {
-                stats = new JSONObject();
+            
+            // Get stats from area statistics rather than settings
+            org.json.JSONObject stats;
+            try {
+                // Get stats from AreaStatistics
+                stats = plugin.getAreaManager().getAreaStats(area.getName()).getAreaCommandStats(area.getName());
+            } catch (Exception e) {
+                plugin.getLogger().error("Error retrieving area statistics", e);
+                // Fallback to settings if statistics system fails
+                stats = dto.settings().optJSONObject("stats");
+                if (stats == null) {
+                    stats = new JSONObject();
+                }
             }
 
             // Send stats header
-            player.sendMessage(plugin.getLanguageManager().get("messages.stats.header",
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.stats.header",
                 Map.of("area", area.getName())));
 
             // Send general stats
-            player.sendMessage(plugin.getLanguageManager().get("messages.stats.general",
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.stats.general",
                 Map.of(
                     "size", String.format("%d x %d x %d",
                         dto.bounds().xMax() - dto.bounds().xMin() + 1,
@@ -521,7 +531,7 @@ public class AreaCommand extends Command {
                 )));
 
             // Send activity stats
-            player.sendMessage(plugin.getLanguageManager().get("messages.stats.activity",
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.stats.activity",
                 Map.of(
                     "visits", String.valueOf(stats.optInt("visits", 0)),
                     "blocks_broken", String.valueOf(stats.optInt("blocks_broken", 0)),

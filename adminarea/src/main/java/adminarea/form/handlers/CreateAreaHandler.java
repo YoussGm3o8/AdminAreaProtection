@@ -61,7 +61,51 @@ public class CreateAreaHandler extends BaseFormHandler {
         try {
             // Get basic info
             String name = response.getInputResponse(NAME_INDEX);
-            int priority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+            if (name == null || name.trim().isEmpty()) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.area.name.required"));
+                cleanup(player);
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown();
+                return;
+            }
+            
+            // Add explicit check for area name format using ValidationUtils
+            try {
+                adminarea.util.ValidationUtils.validateAreaName(name);
+            } catch (IllegalArgumentException e) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.area.name.format") + ": " + e.getMessage());
+                cleanup(player);
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
+                return;
+            }
+            
+            // Add explicit check for existing area names
+            if (plugin.getArea(name) != null) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.area.name.exists", 
+                    Map.of("name", name)));
+                cleanup(player);
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
+                return;
+            }
+            
+            int priority;
+            try {
+                priority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+                if (!areaValidationUtils.validatePriority(priority, player, FormIds.CREATE_AREA)) {
+                    cleanup(player);
+                    markValidationErrorShown(); // Mark that we've already shown a specific error
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.form.area.priority.notNumber"));
+                cleanup(player);
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
+                return;
+            }
+            
             boolean showTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
             boolean isGlobal = response.getToggleResponse(PROTECT_WORLD_INDEX);
             String worldName = player.getLevel().getName();
@@ -81,6 +125,8 @@ public class CreateAreaHandler extends BaseFormHandler {
                 
                 // Validate message lengths
                 if (!areaValidationUtils.validateMessages(enterMsg, leaveMsg, player, FormIds.CREATE_AREA)) {
+                    cleanup(player);
+                    markValidationErrorShown(); // Mark that we've already shown a specific error
                     return;
                 }
             }
@@ -92,7 +138,10 @@ public class CreateAreaHandler extends BaseFormHandler {
             } catch (IllegalArgumentException e) {
                 player.sendMessage(plugin.getLanguageManager().get("validation.form.area.selection.invalid", 
                     Map.of("error", e.getMessage())));
+                // Clean up form data before reopening form
+                cleanup(player);
                 plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
             
@@ -101,6 +150,9 @@ public class CreateAreaHandler extends BaseFormHandler {
             // Validate area creation parameters (name, global status, overlap, size)
             if (!areaValidationUtils.validateAreaCreation(
                     name, x1, x2, y1, y2, z1, z2, worldName, isGlobal, player, FormIds.CREATE_AREA, null)) {
+                // Clean up form data to prevent requiring reset command
+                cleanup(player);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
 
@@ -127,6 +179,10 @@ public class CreateAreaHandler extends BaseFormHandler {
                     response, TOGGLE_START_INDEX, changedSettings);
             } catch (IllegalArgumentException e) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidToggles") + ": " + e.getMessage());
+                // Clean up form data on validation failure
+                cleanup(player);
+                plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
 
@@ -168,8 +224,16 @@ public class CreateAreaHandler extends BaseFormHandler {
                     plugin.debug("Area cache size: " + plugin.getAreaManager().getAllAreas().size());
                 }
             } catch (Exception e) {
+                // Skip handling if it's a validation error already handled
+                if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                    // Just rethrow to let the parent handler deal with it
+                    throw (RuntimeException) e;
+                }
+                
                 plugin.getLogger().error("Failed to save area to database", e);
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotSaved"));
+                cleanup(player);
+                markValidationErrorShown(); // Mark that we've already shown a specific error
                 return;
             }
             
@@ -187,9 +251,17 @@ public class CreateAreaHandler extends BaseFormHandler {
             plugin.getGuiManager().openMainMenu(player);
 
         } catch (Exception e) {
+            // Skip handling if it's a validation error already handled
+            if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                // Just rethrow to let the parent handler deal with it
+                throw (RuntimeException) e;
+            }
+            
             plugin.getLogger().error("Error handling form response", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.errorProcessingInput"));
             cleanup(player);
+            // Try to reopen the form
+            plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
         }
     }
 
@@ -391,5 +463,11 @@ public class CreateAreaHandler extends BaseFormHandler {
         if (plugin.isDebugMode()) {
             plugin.debug("Cleaned up all form data for " + player.getName() + " after area creation");
         }
+    }
+
+    @Override
+    public void handleCancel(Player player) {
+        //player.sendMessage(plugin.getLanguageManager().get("messages.cancelled"));
+        cleanup(player);
     }
 }

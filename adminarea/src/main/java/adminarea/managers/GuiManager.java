@@ -155,7 +155,15 @@ public class GuiManager {
             }
         } catch (Exception e) {
             plugin.getPerformanceMonitor().stopTimer(formTimer, "form_open_failed");
-            handleGuiError(player, "Error opening form: " + formId, e);
+            // Check for validation errors first
+            if (e instanceof RuntimeException && e.getMessage() != null && 
+                e.getMessage().contains("_validation_error_already_shown")) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[Form] Not showing generic error for validation error: " + e.getMessage());
+                }
+            } else {
+                handleGuiError(player, "Error opening form: " + formId, e);
+            }
             // Only cleanup on error
             cleanup(player);
         } finally {
@@ -179,6 +187,16 @@ public class GuiManager {
     }
 
     private void handleGuiError(Player player, String message, Exception e) {
+        // Check for validation errors that are already shown to the player
+        if (e instanceof RuntimeException && e.getMessage() != null && 
+            e.getMessage().contains("_validation_error_already_shown")) {
+            // Don't show generic error for validation errors that were already handled
+            if (plugin.isDebugMode()) {
+                plugin.debug("[GUI] Validation error already shown to player " + player.getName());
+            }
+            return;
+        }
+        
         // Log error details
         String error = String.format("[GUI] %s: %s", message, e.getMessage());
         plugin.getLogger().error(error);
@@ -203,16 +221,23 @@ public class GuiManager {
             ValidationResult result = FormValidator.validate(response, formType);
             if (!result.isValid()) {
                 player.sendMessage("§c" + result.getMessage());
-                if (plugin.getConfigManager().isDebugEnabled()) {
-                    plugin.getLogger().debug("Form validation failed: " + result.getMessage());
+                if (plugin.isDebugMode()) {
+                    plugin.debug("[Form] Validation failed: " + result.getMessage());
                 }
-                return false;
+                // Throw validation error to prevent showing generic error
+                throw new RuntimeException("_validation_error_already_shown");
             }
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
+            // Rethrow validation errors
+            if (e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                throw e;
+            }
+            
             plugin.getLogger().error("Validation error", e);
             player.sendMessage("§cAn error occurred while validating your input");
-            return false;
+            // Don't use return false here, throw an exception with the special marker
+            throw new RuntimeException("_validation_error_already_shown");
         } finally {
             plugin.getPerformanceMonitor().stopTimer(timer, "form_validation");
         }

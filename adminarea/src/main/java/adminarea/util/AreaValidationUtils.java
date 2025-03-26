@@ -306,17 +306,15 @@ public class AreaValidationUtils {
             }
         }
         
-        // Validate no overlaps (implementation depends on AreaManager)
-        if (!validateNoAreaOverlap(x1, x2, y1, y2, z1, z2, world, excludeAreaName)) {
-            if (player != null) {
-                player.sendMessage(plugin.getLanguageManager().get("validation.area.selection.overlap",
-                    Map.of("areas", "other areas")));
-                if (formId != null) {
-                    plugin.getGuiManager().openFormById(player, formId, null);
-                }
+        // Validate priority for both regular and global areas
+        int priority = 0; // Default priority value if not provided
+        if (player != null && player.hasPermission("adminarea.create")) {
+            if (!validatePriority(priority, player, formId)) {
+                return false;
             }
-            return false;
         }
+        
+        // Areas are now allowed to overlap, so no need to check for overlaps
         
         return true;
     }
@@ -391,35 +389,7 @@ public class AreaValidationUtils {
      */
     public boolean validateNoAreaOverlap(int x1, int x2, int y1, int y2, int z1, int z2, 
                                           String worldName, String excludeAreaName) {
-        // Create a bounding box for the area being checked
-        SimpleAxisAlignedBB boundingBox = new SimpleAxisAlignedBB(x1, y1, z1, x2, y2, z2);
-        
-        // Get all areas in the same world
-        List<Area> areasInWorld = plugin.getAreaManager().getAreasInWorld(worldName);
-        if (areasInWorld == null || areasInWorld.isEmpty()) {
-            return true; // No areas in this world, no overlap possible
-        }
-        
-        // Check for overlaps with existing areas
-        for (Area existingArea : areasInWorld) {
-            // Skip comparing with the area being updated
-            if (excludeAreaName != null && existingArea.getName().equalsIgnoreCase(excludeAreaName)) {
-                continue;
-            }
-            
-            // Skip global areas if we're creating a global area
-            if ((x1 == -29000000 && x2 == 29000000 && z1 == -29000000 && z2 == 29000000) && 
-                existingArea.toDTO().bounds().isGlobal()) {
-                continue;
-            }
-            
-            // Check if areas overlap
-            if (existingArea.getBoundingBox().intersectsWith(boundingBox)) {
-                logDebug("Area overlap detected with: " + existingArea.getName());
-                return false;
-            }
-        }
-        
+        // Areas are now allowed to overlap, always return true
         return true;
     }
     
@@ -439,7 +409,7 @@ public class AreaValidationUtils {
      */
     public boolean validateAreaSize(int x1, int x2, int y1, int y2, int z1, int z2, 
                                     boolean isGlobal, Player player, String formId) {
-        // Skip validation for global areas
+        // Skip size validation for global areas
         if (isGlobal) {
             return true;
         }
@@ -518,6 +488,33 @@ public class AreaValidationUtils {
             (leaveMessage != null && leaveMessage.length() > maxLength)) {
             if (player != null) {
                 player.sendMessage(plugin.getLanguageManager().get("validation.messages.tooLong",
+                    Map.of("max", String.valueOf(maxLength))));
+                if (formId != null) {
+                    plugin.getGuiManager().openFormById(player, formId, null);
+                }
+            }
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Validate area title fields length
+     * 
+     * @param enterTitle The enter title to validate
+     * @param leaveTitle The leave title to validate
+     * @param player Player to send error messages to (optional)
+     * @param formId Form ID to reopen on validation failure
+     * @return true if titles are valid, false otherwise
+     */
+    public boolean validateTitles(String enterTitle, String leaveTitle, Player player, String formId) {
+        int maxLength = plugin.getConfigManager().getInt("areaSettings.titles.maxLength", 100);
+        
+        if ((enterTitle != null && enterTitle.length() > maxLength) || 
+            (leaveTitle != null && leaveTitle.length() > maxLength)) {
+            if (player != null) {
+                player.sendMessage(plugin.getLanguageManager().get("validation.titles.tooLong",
                     Map.of("max", String.valueOf(maxLength))));
                 if (formId != null) {
                     plugin.getGuiManager().openFormById(player, formId, null);

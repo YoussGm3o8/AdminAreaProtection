@@ -395,5 +395,134 @@ public class AreaStatistics implements AutoCloseable {
     protected Connection getConnection() {
         return dbConnection;
     }
+
+    /**
+     * Records a player visit to an area.
+     * @param areaId The area identifier
+     * @param playerId The player identifier
+     */
+    public void recordVisit(String areaId, String playerId) {
+        recordInteraction(areaId, playerId, "visits");
+    }
+    
+    /**
+     * Records a block broken in an area.
+     * @param areaId The area identifier
+     * @param playerId The player identifier
+     */
+    public void recordBlockBreak(String areaId, String playerId) {
+        recordInteraction(areaId, playerId, "blocks_broken");
+    }
+    
+    /**
+     * Records a block placed in an area.
+     * @param areaId The area identifier
+     * @param playerId The player identifier
+     */
+    public void recordBlockPlace(String areaId, String playerId) {
+        recordInteraction(areaId, playerId, "blocks_placed");
+    }
+    
+    /**
+     * Records a pvp fight in an area.
+     * @param areaId The area identifier
+     * @param attackerId The attacker identifier
+     * @param victimId The victim identifier
+     */
+    public void recordPvpFight(String areaId, String attackerId, String victimId) {
+        try {
+            // Update in-memory counter
+            interactionCounters.computeIfAbsent("pvp_fights", k -> new AtomicInteger())
+                .incrementAndGet();
+            
+            // Record in database with more details
+            try (PreparedStatement stmt = dbConnection.prepareStatement(
+                "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
+                stmt.setString(1, areaId);
+                stmt.setString(2, attackerId);
+                stmt.setString(3, "pvp_fights");
+                stmt.setString(4, "victim:" + victimId);
+                stmt.executeUpdate();
+            }
+            
+            // Update metrics
+            Counter.builder("area.interactions")
+                  .tag("area", areaId)
+                  .tag("action", "pvp_fights")
+                  .register(meterRegistry)
+                  .increment();
+        } catch (SQLException e) {
+            plugin.getLogger().error("Failed to record PvP fight", e);
+        }
+    }
+    
+    /**
+     * Records a container access in an area.
+     * @param areaId The area identifier
+     * @param playerId The player identifier
+     * @param containerType The type of container accessed
+     */
+    public void recordContainerAccess(String areaId, String playerId, String containerType) {
+        try {
+            // Update in-memory counter
+            interactionCounters.computeIfAbsent("container_accesses", k -> new AtomicInteger())
+                .incrementAndGet();
+            
+            // Record in database with container type
+            try (PreparedStatement stmt = dbConnection.prepareStatement(
+                "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
+                stmt.setString(1, areaId);
+                stmt.setString(2, playerId);
+                stmt.setString(3, "container_accesses");
+                stmt.setString(4, containerType);
+                stmt.executeUpdate();
+            }
+            
+            // Update metrics
+            Counter.builder("area.interactions")
+                  .tag("area", areaId)
+                  .tag("action", "container_accesses")
+                  .tag("container", containerType)
+                  .register(meterRegistry)
+                  .increment();
+        } catch (SQLException e) {
+            plugin.getLogger().error("Failed to record container access", e);
+        }
+    }
+    
+    /**
+     * Gets stats for a specific area formatted for display in the AreaCommand.
+     * Returns a JSONObject with all the required stat fields.
+     * 
+     * @param areaId The area identifier
+     * @return JSONObject containing stats for this area
+     */
+    public org.json.JSONObject getAreaCommandStats(String areaId) {
+        org.json.JSONObject stats = new org.json.JSONObject();
+        
+        try {
+            // Get all interaction stats from the database
+            Map<String, Integer> interactions = getInteractionStats(areaId);
+            
+            // Set default values of 0 for all tracked stats
+            stats.put("visits", interactions.getOrDefault("visits", 0));
+            stats.put("blocks_broken", interactions.getOrDefault("blocks_broken", 0));
+            stats.put("blocks_placed", interactions.getOrDefault("blocks_placed", 0));
+            stats.put("pvp_fights", interactions.getOrDefault("pvp_fights", 0));
+            stats.put("container_accesses", interactions.getOrDefault("container_accesses", 0));
+            
+            // Add any additional stats that might be tracked
+            for (Map.Entry<String, Integer> entry : interactions.entrySet()) {
+                String key = entry.getKey();
+                if (!stats.has(key)) {
+                    stats.put(key, entry.getValue());
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Failed to get area command stats", e);
+        }
+        
+        return stats;
+    }
 }
 

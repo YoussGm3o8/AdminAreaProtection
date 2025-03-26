@@ -105,6 +105,13 @@ public class GroupPermissionsHandler extends BaseFormHandler {
                 currentPerms.getOrDefault(toggle.getPermissionNode(), false)
             ));
         }
+        
+        // Add toggle for deleting permissions
+        form.addElement(new ElementToggle(
+            plugin.getLanguageManager().get("gui.permissions.deletePermissions", 
+                Map.of("default", plugin.getLanguageManager().get("gui.labels.delete"))),
+            false
+        ));
 
         return form;
     }
@@ -192,113 +199,158 @@ public class GroupPermissionsHandler extends BaseFormHandler {
             // Get current group permissions
             Map<String, Map<String, Boolean>> currentGroupPerms = currentDTO.groupPermissions();
             Map<String, Boolean> oldPerms = currentGroupPerms.getOrDefault(groupName, new HashMap<>());
-
-            // Process permissions
-            Map<String, Boolean> newPerms = new HashMap<>();
-            int index = 0;
-            for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                Boolean value = response.getToggleResponse(index);
-                newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
-                index++;
-            }
-
-            // Create updated permissions map
-            Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
-            updatedGroupPerms.put(groupName, newPerms);
-
-            // Create updated area using builder - FIXED: Ensure we preserve all permission types
-            AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
-            areaBuilder.groupPermissions(updatedGroupPerms);
-            // We don't need to explicitly set player or track permissions as they're already part of the DTO
-            // and will be preserved by the fromDTO() method
-            Area updatedArea = areaBuilder.build();
-
-            // Fire event
-            LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, newPerms);
-            plugin.getServer().getPluginManager().callEvent(event);
-
-            if (!event.isCancelled()) {
-                // IMPORTANT: Explicitly save group permissions to the permission database first
-                try {
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Explicitly saving group permissions for group " + groupName + " in area " + updatedArea.getName());
-                        plugin.debug("  Permission count: " + newPerms.size());
-                        plugin.debug("  Permissions: " + newPerms);
-                    }
-                    
-                    plugin.getPermissionOverrideManager().setGroupPermissions(
-                        updatedArea.getName(), 
-                        groupName, 
-                        newPerms
-                    );
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Successfully saved group permissions to PermissionOverrideManager");
-                        
-                        // Verify permissions were saved
-                        Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
-                            updatedArea.getName(), groupName);
-                        plugin.debug("  Verification - retrieved permissions: " + 
-                                    (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
-                    }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to explicitly save group permissions", e);
-                    throw e;
-                }
+            
+            // Check if we should delete permissions (last toggle)
+            boolean shouldDeletePermissions = response.getToggleResponse(PermissionToggle.getDefaultToggles().size());
+            
+            if (shouldDeletePermissions) {
+                // Create updated permissions map with the group removed
+                Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
+                updatedGroupPerms.remove(groupName);
                 
-                // Save area to database
-                try {
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Saving updated area to database: " + updatedArea.getName());
-                    }
-                    
-                    plugin.getDatabaseManager().saveArea(updatedArea);
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Area saved successfully");
-                    }
-                    
-                    // Force synchronize permissions to ensure they're saved
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Now synchronizing all permissions from area to database");
-                    }
-                    
-                    plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
-                    
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("  Synchronization complete");
-                        
-                        // Verify area was updated correctly
-                        Area verifyArea = plugin.getArea(updatedArea.getName());
-                        if (verifyArea != null) {
-                            Map<String, Map<String, Boolean>> groupPerms = verifyArea.getGroupPermissions();
-                            plugin.debug("  Verification - area group permissions: " + 
-                                        (groupPerms != null ? groupPerms.size() : "null") + " groups");
-                            
-                            if (groupPerms != null && groupPerms.containsKey(groupName)) {
-                                plugin.debug("  Verification - permissions for " + groupName + ": " + 
-                                           groupPerms.get(groupName).size() + " permissions");
-                            } else {
-                                plugin.debug("  Verification - group " + groupName + " not found in permissions");
-                            }
-                        } else {
-                            plugin.debug("  Verification - area not found: " + updatedArea.getName());
+                // Create updated area using builder
+                AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+                areaBuilder.groupPermissions(updatedGroupPerms);
+                Area updatedArea = areaBuilder.build();
+                
+                // Fire event for permissions deletion
+                LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, new HashMap<>());
+                plugin.getServer().getPluginManager().callEvent(event);
+                
+                if (!event.isCancelled()) {
+                    try {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Deleting group permissions for group " + groupName + " in area " + area.getName());
                         }
+                        
+                        // Remove permissions from database
+                        plugin.getPermissionOverrideManager().setGroupPermissions(
+                            area.getName(),
+                            groupName,
+                            new HashMap<>() // Empty map effectively removes permissions
+                        );
+                        
+                        // Save area to database
+                        plugin.getDatabaseManager().saveArea(updatedArea);
+                        
+                        // Update in plugin
+                        plugin.updateArea(updatedArea);
+                        
+                        player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupPermissionsDeleted",
+                            Map.of("group", groupName, "area", area.getName())));
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Failed to delete group permissions", e);
+                        throw e;
                     }
-                } catch (Exception e) {
-                    plugin.getLogger().error("Failed to save area to database", e);
-                    throw e;
                 }
-                
-                // Update area in plugin
-                plugin.updateArea(updatedArea);
-                player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupUpdated",
-                    Map.of("group", groupName, "area", area.getName())));
+            } else {
+                // Process permissions
+                Map<String, Boolean> newPerms = new HashMap<>();
+                int index = 0;
+                for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+                    Boolean value = response.getToggleResponse(index);
+                    newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
+                    index++;
+                }
+
+                // Create updated permissions map
+                Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
+                updatedGroupPerms.put(groupName, newPerms);
+
+                // Create updated area using builder - FIXED: Ensure we preserve all permission types
+                AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
+                areaBuilder.groupPermissions(updatedGroupPerms);
+                // We don't need to explicitly set player or track permissions as they're already part of the DTO
+                // and will be preserved by the fromDTO() method
+                Area updatedArea = areaBuilder.build();
+
+                // Fire event
+                LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, newPerms);
+                plugin.getServer().getPluginManager().callEvent(event);
+
+                if (!event.isCancelled()) {
+                    // IMPORTANT: Explicitly save group permissions to the permission database first
+                    try {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Explicitly saving group permissions for group " + groupName + " in area " + updatedArea.getName());
+                            plugin.debug("  Permission count: " + newPerms.size());
+                            plugin.debug("  Permissions: " + newPerms);
+                        }
+                        
+                        plugin.getPermissionOverrideManager().setGroupPermissions(
+                            updatedArea.getName(), 
+                            groupName, 
+                            newPerms
+                        );
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Successfully saved group permissions to PermissionOverrideManager");
+                            
+                            // Verify permissions were saved
+                            Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
+                                updatedArea.getName(), groupName);
+                            plugin.debug("  Verification - retrieved permissions: " + 
+                                        (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Failed to explicitly save group permissions", e);
+                        throw e;
+                    }
+                    
+                    // Save area to database
+                    try {
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Saving updated area to database: " + updatedArea.getName());
+                        }
+                        
+                        plugin.getDatabaseManager().saveArea(updatedArea);
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Area saved successfully");
+                        }
+                        
+                        // Force synchronize permissions to ensure they're saved
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Now synchronizing all permissions from area to database");
+                        }
+                        
+                        plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
+                        
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("  Synchronization complete");
+                            
+                            // Verify area was updated correctly
+                            Area verifyArea = plugin.getArea(updatedArea.getName());
+                            if (verifyArea != null) {
+                                Map<String, Map<String, Boolean>> groupPerms = verifyArea.getGroupPermissions();
+                                plugin.debug("  Verification - area group permissions: " + 
+                                            (groupPerms != null ? groupPerms.size() : "null") + " groups");
+                                
+                                if (groupPerms != null && groupPerms.containsKey(groupName)) {
+                                    plugin.debug("  Verification - permissions for " + groupName + ": " + 
+                                               groupPerms.get(groupName).size() + " permissions");
+                                } else {
+                                    plugin.debug("  Verification - group " + groupName + " not found in permissions");
+                                }
+                            } else {
+                                plugin.debug("  Verification - area not found: " + updatedArea.getName());
+                            }
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Failed to save area to database", e);
+                        throw e;
+                    }
+                    
+                    // Update area in plugin
+                    plugin.updateArea(updatedArea);
+                    player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupUpdated",
+                        Map.of("group", groupName, "area", area.getName())));
+                }
             }
 
             // Clear group selection and return to edit menu
             plugin.getFormIdMap().remove(player.getName() + "_group");
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, updatedArea);
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
 
         } catch (Exception e) {
             plugin.getLogger().error("Error handling group permissions response", e);

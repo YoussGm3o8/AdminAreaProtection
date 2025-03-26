@@ -80,8 +80,16 @@ public abstract class BaseFormHandler implements IFormHandler {
                 }
             }
         } catch (Exception e) {
-            plugin.getLogger().log(LogLevel.CRITICAL, "Error handling form response", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            // Only log the error, but don't show the generic error message if it's a validation error
+            // Check if the exception contains info suggesting a validation error already handled
+            if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Validation error already shown to player " + player.getName() + ", suppressing generic error");
+                }
+            } else {
+                plugin.getLogger().log(LogLevel.CRITICAL, "Error handling form response", e);
+                player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            }
         }
     }
     
@@ -410,5 +418,13 @@ public abstract class BaseFormHandler implements IFormHandler {
      */
     public final adminarea.permissions.PermissionOverrideManager getOverrideManager() {
         return plugin.getPermissionOverrideManager(); // Use the main method to ensure consistency
+    }
+    
+    /**
+     * Throw special exception to indicate validation error was already shown
+     * This prevents showing the generic error message in addition to specific validation errors
+     */
+    protected void markValidationErrorShown() {
+        throw new RuntimeException("_validation_error_already_shown");
     }
 }
