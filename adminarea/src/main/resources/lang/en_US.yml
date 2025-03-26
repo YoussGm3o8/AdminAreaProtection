@@ -219,6 +219,10 @@ messages:
     applied: "{prefix}§aEffect {effect} (level {strength}) applied from area {area}"
     removed: "{prefix}§eEffect {effect} from area {area} has expired"
 
+  success:
+    statsExported: "{prefix}§aStatistics for area '{area}' successfully exported to file '{area}_stats.csv'"
+    statsReset: "{prefix}§aStatistics for area '{area}' successfully reset"
+
 # Form validation messages
 validation:
   area:

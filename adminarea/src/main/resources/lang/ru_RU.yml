@@ -219,6 +219,10 @@ messages:
     applied: "{prefix}§aЭффект {effect} (уровень {strength}) применен из области {area}"
     removed: "{prefix}§eЭффект {effect} из области {area} закончился"
 
+  success:
+    statsExported: "{prefix}§aСтатистика области '{area}' успешно экспортирована в файл '{area}_stats.csv'"
+    statsReset: "{prefix}§aСтатистика области '{area}' успешно сброшена"
+
 # Form validation messages
 validation:
   area:

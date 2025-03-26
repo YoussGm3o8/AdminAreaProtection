@@ -17,11 +17,21 @@ import java.util.Stack;
 import java.util.HashMap;
 import java.util.ArrayList;
 import org.json.JSONObject;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.sql.Timestamp;
+import java.time.ZoneId;
+import java.sql.SQLException;
 
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
 import adminarea.permissions.PermissionToggle;
+import adminarea.stats.AreaStatistics;
+import adminarea.stats.AreaModification;
 
 public class AreaCommand extends Command {
 
@@ -551,58 +561,306 @@ public class AreaCommand extends Command {
     private boolean exportStats(Player player, Area area) {
         try {
             AreaDTO dto = area.toDTO();
-            JSONObject stats = dto.settings().optJSONObject("stats");
-            if (stats == null) {
-                stats = new JSONObject();
-            }
-
-            // Create stats export file
-            String fileName = area.getName() + "_stats.json";
-            File exportFile = new File(plugin.getDataFolder(), "stats/" + fileName);
-            exportFile.getParentFile().mkdirs();
-
-            // Add metadata to stats
-            JSONObject export = new JSONObject();
-            export.put("area_name", area.getName());
-            export.put("world", dto.world());
-            export.put("bounds", Map.of(
-                "xMin", dto.bounds().xMin(),
-                "xMax", dto.bounds().xMax(),
-                "yMin", dto.bounds().yMin(),
-                "yMax", dto.bounds().yMax(),
-                "zMin", dto.bounds().zMin(),
-                "zMax", dto.bounds().zMax()
-            ));
-            export.put("priority", dto.priority());
-            export.put("stats", stats);
-            export.put("export_time", System.currentTimeMillis());
-
-            // Write to file
+            String areaName = area.getName();
+            
+            // Create stats export directory
+            File statsDir = new File(plugin.getDataFolder(), "stats");
+            statsDir.mkdirs();
+            
+            // Create CSV export file
+            String fileName = areaName + "_stats.csv";
+            File exportFile = new File(statsDir, fileName);
+            
             try (FileWriter writer = new FileWriter(exportFile)) {
-                writer.write(export.toString(4));
+                // Write CSV header
+                writer.write("Date,Time,StatType,Value,Player,Details\n");
+                
+                // Get the AreaStatistics instance
+                AreaStatistics areaStats = plugin.getAreaManager().getAreaStats(areaName);
+                
+                // Try to get database connection via reflection (like we do in resetStats)
+                Connection conn = null;
+                try {
+                    java.lang.reflect.Method getConnMethod = AreaStatistics.class.getDeclaredMethod("getConnection");
+                    getConnMethod.setAccessible(true);
+                    conn = (Connection) getConnMethod.invoke(areaStats);
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to get database connection via reflection", e);
+                    // Will fall back to using just the summary stats below
+                }
+                
+                // If we have a database connection, get detailed timed actions
+                if (conn != null) {
+                    // 1. Query for detailed interaction stats with timestamps
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                            "SELECT timestamp, action_type, player_id, details FROM interactions WHERE area_id = ? ORDER BY timestamp DESC")) {
+                        stmt.setString(1, areaName);
+                        
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+                            DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+                            
+                            while (rs.next()) {
+                                String actionType = rs.getString("action_type");
+                                String playerId = rs.getString("player_id");
+                                String details = rs.getString("details");
+                                if (details == null) details = "";
+                                
+                                // Parse timestamp
+                                LocalDateTime dateTime;
+                                try {
+                                    Timestamp sqlTimestamp = rs.getTimestamp("timestamp");
+                                    dateTime = sqlTimestamp.toLocalDateTime();
+                                } catch (Exception e) {
+                                    dateTime = LocalDateTime.now();
+                                }
+                                
+                                // Format date and time parts separately
+                                String datePart = dateTime.format(dateFormatter);
+                                String timePart = dateTime.format(timeFormatter);
+                                
+                                // Write CSV row - escape commas in fields
+                                writer.write(String.format("%s,%s,%s,1,\"%s\",\"%s\"\n",
+                                    datePart, timePart, actionType, escapeCsvField(playerId), escapeCsvField(details)));
+                            }
+                        }
+                    }
+                    
+                    // 2. Query for violation stats with timestamps
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                            "SELECT timestamp, violation_type, player_id FROM violations WHERE area_id = ? ORDER BY timestamp DESC")) {
+                        stmt.setString(1, areaName);
+                        
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+                            DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+                            
+                            while (rs.next()) {
+                                String violationType = rs.getString("violation_type");
+                                String playerId = rs.getString("player_id");
+                                
+                                // Parse timestamp
+                                LocalDateTime dateTime;
+                                try {
+                                    Timestamp sqlTimestamp = rs.getTimestamp("timestamp");
+                                    dateTime = sqlTimestamp.toLocalDateTime();
+                                } catch (Exception e) {
+                                    dateTime = LocalDateTime.now();
+                                }
+                                
+                                // Format date and time parts separately
+                                String datePart = dateTime.format(dateFormatter);
+                                String timePart = dateTime.format(timeFormatter);
+                                
+                                // Write CSV row
+                                writer.write(String.format("%s,%s,violation_%s,1,\"%s\",\"\"\n",
+                                    datePart, timePart, violationType, escapeCsvField(playerId)));
+                            }
+                        }
+                    }
+                    
+                    // 3. Query for modification stats with timestamps
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                            "SELECT timestamp, modification_type, player_id, details FROM modifications WHERE area_id = ? ORDER BY timestamp DESC")) {
+                        stmt.setString(1, areaName);
+                        
+                        try (ResultSet rs = stmt.executeQuery()) {
+                            DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+                            DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+                            
+                            while (rs.next()) {
+                                String modificationType = rs.getString("modification_type");
+                                String playerId = rs.getString("player_id");
+                                String details = rs.getString("details");
+                                if (details == null) details = "";
+                                
+                                // Parse timestamp
+                                LocalDateTime dateTime;
+                                try {
+                                    Timestamp sqlTimestamp = rs.getTimestamp("timestamp");
+                                    dateTime = sqlTimestamp.toLocalDateTime();
+                                } catch (Exception e) {
+                                    dateTime = LocalDateTime.now();
+                                }
+                                
+                                // Format date and time parts separately
+                                String datePart = dateTime.format(dateFormatter);
+                                String timePart = dateTime.format(timeFormatter);
+                                
+                                // Write CSV row
+                                writer.write(String.format("%s,%s,mod_%s,1,\"%s\",\"%s\"\n",
+                                    datePart, timePart, modificationType, escapeCsvField(playerId), escapeCsvField(details)));
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to just using the available methods if we couldn't get DB connection
+                    
+                    // Get interaction stats in a more detailed format
+                    Map<String, Integer> interactionStats = areaStats.getInteractionStats(areaName);
+                    
+                    // Get modifications if available
+                    List<AreaModification> recentMods = new ArrayList<>();
+                    try {
+                        recentMods = areaStats.getRecentModifications(areaName, 1000);
+                    } catch (Exception e) {
+                        plugin.getLogger().debug("Could not get modifications: " + e.getMessage());
+                    }
+                    
+                    // Get summary stats
+                    org.json.JSONObject summaryStats = areaStats.getAreaCommandStats(areaName);
+                    
+                    // Write current date/time for all entries
+                    String currentDate = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    String currentTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+                    
+                    // Write interaction stats
+                    for (Map.Entry<String, Integer> entry : interactionStats.entrySet()) {
+                        String statType = entry.getKey();
+                        int value = entry.getValue();
+                        
+                        writer.write(String.format("%s,%s,%s,%d,AGGREGATED,\"\"\n",
+                            currentDate, currentTime, statType, value));
+                    }
+                    
+                    // Write modification data if available
+                    for (AreaModification mod : recentMods) {
+                        // Format the timestamp
+                        LocalDateTime dateTime = mod.timestamp().atZone(ZoneId.systemDefault()).toLocalDateTime();
+                        String datePart = dateTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                        String timePart = dateTime.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+                        
+                        String details = mod.details();
+                        if (details == null) details = "";
+                        
+                        writer.write(String.format("%s,%s,mod_%s,1,\"%s\",\"%s\"\n",
+                            datePart, timePart, mod.modificationType(), escapeCsvField(mod.playerId()), escapeCsvField(details)));
+                    }
+                }
+                
+                // Always add summary stats regardless of which method was used
+                // Get summary stats
+                org.json.JSONObject summaryStats = areaStats.getAreaCommandStats(areaName);
+                String currentDate = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                String currentTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+                
+                // Add summary rows
+                writer.write(String.format("%s,%s,summary_visits,%d,SYSTEM,\"\"\n", 
+                    currentDate, currentTime, summaryStats.optInt("visits", 0)));
+                writer.write(String.format("%s,%s,summary_blocks_broken,%d,SYSTEM,\"\"\n", 
+                    currentDate, currentTime, summaryStats.optInt("blocks_broken", 0)));
+                writer.write(String.format("%s,%s,summary_blocks_placed,%d,SYSTEM,\"\"\n", 
+                    currentDate, currentTime, summaryStats.optInt("blocks_placed", 0)));
+                writer.write(String.format("%s,%s,summary_pvp_fights,%d,SYSTEM,\"\"\n", 
+                    currentDate, currentTime, summaryStats.optInt("pvp_fights", 0)));
+                writer.write(String.format("%s,%s,summary_container_accesses,%d,SYSTEM,\"\"\n", 
+                    currentDate, currentTime, summaryStats.optInt("container_accesses", 0)));
+                
+                // Add area metadata as comments at the end (prefixed with #)
+                writer.write("\n# Area Metadata\n");
+                writer.write(String.format("# Name: %s\n", areaName));
+                writer.write(String.format("# World: %s\n", dto.world()));
+                writer.write(String.format("# Priority: %d\n", dto.priority()));
+                writer.write(String.format("# Bounds: (%d,%d,%d) to (%d,%d,%d)\n", 
+                    dto.bounds().xMin(), dto.bounds().yMin(), dto.bounds().zMin(),
+                    dto.bounds().xMax(), dto.bounds().yMax(), dto.bounds().zMax()));
+                writer.write(String.format("# Export time: %s\n", LocalDateTime.now()));
             }
 
-            player.sendMessage(plugin.getLanguageManager().get("messages.success.statsExported",
-                Map.of(
-                    "area", area.getName(),
-                    "file", fileName
-                )));
-
+            // Success message
+            Map<String, String> placeholders = new HashMap<>();
+            placeholders.put("area", areaName);
+            placeholders.put("file", fileName);
+            
+            // Try to use a CSV-specific message if available
+            String successMessage;
+            if (plugin.getLanguageManager().getRaw("messages.success.statsExportedCsv") != null) {
+                successMessage = plugin.getLanguageManager().get("messages.success.statsExportedCsv", placeholders);
+            } else {
+                successMessage = plugin.getLanguageManager().get("messages.success.statsExported", placeholders);
+            }
+            
+            player.sendMessage(successMessage);
             return true;
         } catch (Exception e) {
-            plugin.getLogger().error("Error exporting stats", e);
+            plugin.getLogger().error("Error exporting stats to CSV", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.error.exportFailed"));
             return false;
         }
     }
 
+    // Helper method to escape CSV fields that might contain commas or quotes
+    private String escapeCsvField(String field) {
+        if (field == null) return "";
+        // Replace quotes with double quotes (CSV standard for escaping quotes)
+        return field.replace("\"", "\"\"");
+    }
+
     private boolean resetStats(Player player, Area area) {
         try {
+            String areaName = area.getName();
+            
+            // 1. Get the AreaStatistics instance for this area
+            AreaStatistics areaStats = plugin.getAreaManager().getAreaStats(areaName);
+            
+            // 2. Clear database records for this area
+            try {
+                // Get the database connection through reflection to access the protected method
+                // This is a bit hacky, but we need access to the DB connection
+                Connection conn = null;
+                try {
+                    java.lang.reflect.Method getConnMethod = AreaStatistics.class.getDeclaredMethod("getConnection");
+                    getConnMethod.setAccessible(true);
+                    conn = (Connection) getConnMethod.invoke(areaStats);
+                } catch (Exception e) {
+                    plugin.getLogger().error("Failed to get database connection via reflection", e);
+                    player.sendMessage(plugin.getLanguageManager().get("messages.error.resetFailed"));
+                    return false;
+                }
+                
+                if (conn != null) {
+                    // Delete all interactions for this area
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                        "DELETE FROM interactions WHERE area_id = ?")) {
+                        stmt.setString(1, areaName);
+                        int deleted = stmt.executeUpdate();
+                        plugin.debug("Deleted " + deleted + " interaction records for area " + areaName);
+                    }
+
+                    // Delete all violations for this area
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                        "DELETE FROM violations WHERE area_id = ?")) {
+                        stmt.setString(1, areaName);
+                        int deleted = stmt.executeUpdate();
+                        plugin.debug("Deleted " + deleted + " violation records for area " + areaName);
+                    }
+
+                    // Delete all modifications for this area
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                        "DELETE FROM modifications WHERE area_id = ?")) {
+                        stmt.setString(1, areaName);
+                        int deleted = stmt.executeUpdate();
+                        plugin.debug("Deleted " + deleted + " modification records for area " + areaName);
+                    }
+                    
+                    // Delete any area_statistics entries
+                    try (PreparedStatement stmt = conn.prepareStatement(
+                        "DELETE FROM area_statistics WHERE area_name = ?")) {
+                        stmt.setString(1, areaName);
+                        stmt.executeUpdate();
+                    }
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().error("Failed to clear database statistics", e);
+                // Continue execution to also clear in-memory stats
+            }
+            
+            // 3. Also reset the JSONObject in the area settings for backward compatibility
             AreaDTO dto = area.toDTO();
             JSONObject settings = dto.settings();
             settings.put("stats", new JSONObject());
 
-            // Create new area with reset stats
+            // 4. Create new area with reset stats settings
             Area updatedArea = Area.builder()
                 .name(dto.name())
                 .world(dto.world())
@@ -621,12 +879,43 @@ public class AreaCommand extends Command {
                 .inheritedToggleStates(dto.inheritedToggleStates())
                 .build();
 
-            // Update area in manager
+            // 5. Update area in manager
             plugin.getAreaManager().updateArea(updatedArea);
+            
+            // 6. Reset in-memory counters by trying to create a fresh AreaStatistics instance
+            try {
+                // Get the area stats cache
+                java.lang.reflect.Field areaStatsField = plugin.getAreaManager().getClass().getDeclaredField("areaStats");
+                areaStatsField.setAccessible(true);
+                Map<String, AreaStatistics> statsMap = (Map<String, AreaStatistics>) areaStatsField.get(plugin.getAreaManager());
+                
+                // Remove from map to force recreation on next access
+                if (statsMap.containsKey(areaName)) {
+                    // Close the statistics instance properly, but catch any exceptions
+                    try {
+                        AreaStatistics stats = statsMap.get(areaName);
+                        if (stats != null) {
+                            stats.close();
+                            plugin.debug("Closed area statistics for " + areaName);
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().error("Error closing area statistics", e);
+                        // Continue anyway to make sure we remove it from cache
+                    }
+                    
+                    // Now remove from the map
+                    statsMap.remove(areaName);
+                    plugin.debug("Removed area statistics from cache for " + areaName);
+                }
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to reset in-memory statistics", e);
+                // Continue execution as database was already cleared
+            }
 
+            // 7. Send success message using the language manager
             player.sendMessage(plugin.getLanguageManager().get("messages.success.statsReset",
-                Map.of("area", area.getName())));
-
+                Map.of("area", areaName)));
+            
             return true;
         } catch (Exception e) {
             plugin.getLogger().error("Error resetting stats", e);

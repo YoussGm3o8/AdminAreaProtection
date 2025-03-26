@@ -67,9 +67,24 @@ public class AreaStatistics implements AutoCloseable {
                     area_id TEXT NOT NULL,
                     player_id TEXT NOT NULL,
                     action_type TEXT NOT NULL,
+                    details TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """);
+            
+            // Add details column if it doesn't exist (for backward compatibility)
+            try {
+                // Check if details column exists
+                ResultSet rs = dbConnection.getMetaData().getColumns(null, null, "interactions", "details");
+                if (!rs.next()) {
+                    // Details column doesn't exist, add it
+                    plugin.getLogger().info("Adding 'details' column to interactions table for advanced stats tracking");
+                    stmt.execute("ALTER TABLE interactions ADD COLUMN details TEXT");
+                }
+                rs.close();
+            } catch (SQLException e) {
+                plugin.getLogger().error("Failed to check or add details column", e);
+            }
             
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS violations (
@@ -283,24 +298,64 @@ public class AreaStatistics implements AutoCloseable {
     private void performBackup() {
         try {
             Files.createDirectories(backupPath);
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
             Path backupFile = backupPath.resolve("statistics_" + timestamp + ".db");
             
-            // Backup database
-            try (PreparedStatement stmt = dbConnection.prepareStatement("BACKUP TO ?")) {
-                stmt.setString(1, backupFile.toString());
-                stmt.execute();
+            // Close the connection before copying the file
+            boolean connectionWasClosed = false;
+            if (dbConnection != null && !dbConnection.isClosed()) {
+                try {
+                    // Execute VACUUM to compact the database first
+                    try (Statement stmt = dbConnection.createStatement()) {
+                        stmt.execute("VACUUM");
+                    }
+                    
+                    // Force checkpoint to ensure all data is written to disk
+                    try (Statement stmt = dbConnection.createStatement()) {
+                        stmt.execute("PRAGMA wal_checkpoint(FULL)");
+                    }
+                } catch (SQLException e) {
+                    plugin.getLogger().error("Error preparing database for backup", e);
+                }
+            }
+            
+            // Get the source database file path
+            Path sourcePath = plugin.getDataFolder().toPath().resolve(DB_FILE);
+            
+            // Copy the database file manually
+            try {
+                Files.copy(sourcePath, backupFile, StandardCopyOption.REPLACE_EXISTING);
+                plugin.getLogger().info("Successfully backed up statistics database to " + backupFile);
+            } catch (IOException e) {
+                plugin.getLogger().error("Failed to copy database file for backup", e);
             }
             
             // Backup in-memory state
-            Gson gson = new GsonBuilder().setPrettyPrinting().create();
-            Map<String, Object> memoryState = new HashMap<>();
-            memoryState.put("interactionCounters", interactionCounters);
-            memoryState.put("violationCounters", violationCounters);
-            memoryState.put("modificationHistory", modificationHistory);
-            
-            Files.write(backupPath.resolve("memory_state_" + timestamp + ".json"),
-                gson.toJson(memoryState).getBytes());
+            try {
+                Gson gson = new GsonBuilder().setPrettyPrinting().create();
+                Map<String, Object> memoryState = new HashMap<>();
+                memoryState.put("interactionCounters", interactionCounters);
+                memoryState.put("violationCounters", violationCounters);
+                
+                // Need to handle modificationHistory specially as it's a complex object
+                List<Map<String, Object>> serializableMods = new ArrayList<>();
+                for (AreaModification mod : modificationHistory) {
+                    Map<String, Object> serializedMod = new HashMap<>();
+                    serializedMod.put("areaId", mod.areaId());
+                    serializedMod.put("playerId", mod.playerId());
+                    serializedMod.put("modificationType", mod.modificationType());
+                    serializedMod.put("details", mod.details());
+                    serializedMod.put("timestamp", mod.timestamp().toString());
+                    serializableMods.add(serializedMod);
+                }
+                memoryState.put("modificationHistory", serializableMods);
+                
+                Path jsonBackupFile = backupPath.resolve("memory_state_" + timestamp + ".json");
+                Files.write(jsonBackupFile, gson.toJson(memoryState).getBytes());
+                plugin.getLogger().info("Successfully backed up memory state to " + jsonBackupFile);
+            } catch (Exception e) {
+                plugin.getLogger().error("Failed to backup in-memory state", e);
+            }
         } catch (Exception e) {
             plugin.getLogger().error("Failed to perform backup", e);
         }
@@ -339,14 +394,37 @@ public class AreaStatistics implements AutoCloseable {
     @Override
     public void close() {
         try {
-            scheduler.shutdown();
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow();
+            // Shutdown scheduler first
+            if (scheduler != null && !scheduler.isShutdown()) {
+                try {
+                    scheduler.shutdown();
+                    if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                        scheduler.shutdownNow();
+                    }
+                } catch (Exception e) {
+                    plugin.getLogger().error("Error shutting down statistics scheduler", e);
+                }
             }
-            performBackup();
-            dbConnection.close();
+            
+            // Try to perform backup but don't let it prevent closing the connection
+            try {
+                performBackup();
+            } catch (Exception e) {
+                plugin.getLogger().error("Error during backup on close", e);
+                // Continue execution to ensure connection is closed
+            }
+            
+            // Always close the database connection
+            if (dbConnection != null && !dbConnection.isClosed()) {
+                try {
+                    dbConnection.close();
+                    plugin.getLogger().debug("Closed statistics database connection");
+                } catch (SQLException e) {
+                    plugin.getLogger().error("Error closing database connection", e);
+                }
+            }
         } catch (Exception e) {
-            plugin.getLogger().error("Error closing AreaStatistics", e);
+            plugin.getLogger().error("Error while closing AreaStatistics", e);
         }
     }
 
@@ -431,21 +509,37 @@ public class AreaStatistics implements AutoCloseable {
      */
     public void recordPvpFight(String areaId, String attackerId, String victimId) {
         try {
-            // Update in-memory counter
+            // Update in-memory counter - only do this once
             interactionCounters.computeIfAbsent("pvp_fights", k -> new AtomicInteger())
                 .incrementAndGet();
             
-            // Record in database with more details
-            try (PreparedStatement stmt = dbConnection.prepareStatement(
-                "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
-                stmt.setString(1, areaId);
-                stmt.setString(2, attackerId);
-                stmt.setString(3, "pvp_fights");
-                stmt.setString(4, "victim:" + victimId);
-                stmt.executeUpdate();
+            // Try to record in database with details column
+            boolean recorded = false;
+            try {
+                try (PreparedStatement stmt = dbConnection.prepareStatement(
+                    "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
+                    stmt.setString(1, areaId);
+                    stmt.setString(2, attackerId);
+                    stmt.setString(3, "pvp_fights");
+                    stmt.setString(4, "victim:" + victimId);
+                    stmt.executeUpdate();
+                    recorded = true;
+                }
+            } catch (SQLException e) {
+                // Only fallback if the first attempt failed
+                if (!recorded) {
+                    // Fallback to insert without details column (backwards compatibility)
+                    try (PreparedStatement stmt = dbConnection.prepareStatement(
+                        "INSERT INTO interactions (area_id, player_id, action_type) VALUES (?, ?, ?)")) {
+                        stmt.setString(1, areaId);
+                        stmt.setString(2, attackerId);
+                        stmt.setString(3, "pvp_fights");
+                        stmt.executeUpdate();
+                    }
+                }
             }
             
-            // Update metrics
+            // Update metrics - only do this once
             Counter.builder("area.interactions")
                   .tag("area", areaId)
                   .tag("action", "pvp_fights")
@@ -464,21 +558,37 @@ public class AreaStatistics implements AutoCloseable {
      */
     public void recordContainerAccess(String areaId, String playerId, String containerType) {
         try {
-            // Update in-memory counter
+            // Update in-memory counter - only do this once
             interactionCounters.computeIfAbsent("container_accesses", k -> new AtomicInteger())
                 .incrementAndGet();
             
-            // Record in database with container type
-            try (PreparedStatement stmt = dbConnection.prepareStatement(
-                "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
-                stmt.setString(1, areaId);
-                stmt.setString(2, playerId);
-                stmt.setString(3, "container_accesses");
-                stmt.setString(4, containerType);
-                stmt.executeUpdate();
+            // Try to record in database with details column
+            boolean recorded = false;
+            try {
+                try (PreparedStatement stmt = dbConnection.prepareStatement(
+                    "INSERT INTO interactions (area_id, player_id, action_type, details) VALUES (?, ?, ?, ?)")) {
+                    stmt.setString(1, areaId);
+                    stmt.setString(2, playerId);
+                    stmt.setString(3, "container_accesses");
+                    stmt.setString(4, containerType);
+                    stmt.executeUpdate();
+                    recorded = true;
+                }
+            } catch (SQLException e) {
+                // Only fallback if the first attempt failed
+                if (!recorded) {
+                    // Fallback to insert without details column (backwards compatibility)
+                    try (PreparedStatement stmt = dbConnection.prepareStatement(
+                        "INSERT INTO interactions (area_id, player_id, action_type) VALUES (?, ?, ?)")) {
+                        stmt.setString(1, areaId);
+                        stmt.setString(2, playerId);
+                        stmt.setString(3, "container_accesses");
+                        stmt.executeUpdate();
+                    }
+                }
             }
             
-            // Update metrics
+            // Update metrics - only do this once
             Counter.builder("area.interactions")
                   .tag("area", areaId)
                   .tag("action", "container_accesses")
