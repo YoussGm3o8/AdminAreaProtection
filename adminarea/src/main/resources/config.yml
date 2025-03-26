@@ -1,28 +1,47 @@
-# Enable or disable sending messages to players when events are blocked
+# AdminAreaProtection Configuration
+# Version 1.0.1
+
+# Debug mode - set to true to enable detailed logging
+debug: false
+
+# Language setting (en_US or ru_RU)
+language: "en_US"
+
+# Wand item type (default: 280 = stick)
+wandItemType: 280
+
+# Selection cooldown in milliseconds (50-5000)
+selectionCooldown: 500
+
+# Visualization duration in seconds
+visualizationDuration: 10
+
+# Cache expiry time in minutes
+cacheExpiry: 5
+
+# Enable messages for area entry/exit
 enableMessages: true
 
-# Custom messages for blocked events
-messages:
-  blockBreak: "§cYou cannot break blocks in {area}."
-  blockPlace: "§cYou cannot place blocks in {area}."
-  pvp: "§cPVP is disabled in {area}."
+# Undo history size
+undoHistorySize: 10
 
-# Global title configuration for area enter/leave events:
-title:
-  enter:
-    main: "§aEntering {area}"
-    subtitle: "Welcome to {area}!"
-  leave:
-    main: "§eLeaving {area}"
-    subtitle: "Goodbye from {area}!"
+# Particle visualization settings
+particleVisualization: true
 
-# Area-specific title configurations:
-areaTitles:
-  MyArea:
-    enter:
-      main: "§6You are entering MyArea!"
-      subtitle: "Enjoy your stay at MyArea"
-    leave:
-      main: "§4You left MyArea!"
-      subtitle: "See you next time"
-  # Add additional area configurations here...
+# Area settings
+areaSettings:
+  # When true, overlapping areas use AND logic (most restrictive)
+  # When false, uses OR logic (least restrictive)
+  useMostRestrictiveMerge: true
+  description:
+    mergeBehavior: "When true, overlapping areas use AND logic (most restrictive). When false, uses OR logic (least restrictive)."
+  
+  # Maximum length for area titles
+  titles:
+    maxLength: 100
+
+# LuckPerms integration
+luckperms:
+  enabled: true
+  inheritPermissions: true
+  updateInterval: 300

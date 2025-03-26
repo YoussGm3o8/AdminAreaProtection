@@ -1,0 +1,43 @@
+# AdminAreaProtection - Area Titles Configuration
+# This file contains custom titles for each area
+
+# Default title formats that will be used when not specified for an area
+default:
+  enter:
+    main: "§6Welcome to {area}"
+    subtitle: "§eEnjoy your stay!"
+    fadeIn: 20
+    stay: 40
+    fadeOut: 20
+  leave:
+    main: "§6Leaving {area}"
+    subtitle: "§eThank you for visiting!"
+    fadeIn: 20
+    stay: 40
+    fadeOut: 20
+
+# Individual area title configurations
+# Titles defined here will override those stored in the database
+# Format:
+# areaName:
+#   enter:
+#     main: "Main title shown when entering"
+#     subtitle: "Subtitle shown when entering"
+#     fadeIn: 20
+#     stay: 40
+#     fadeOut: 20
+#   leave:
+#     main: "Main title shown when leaving"
+#     subtitle: "Subtitle shown when leaving"
+#     fadeIn: 20
+#     stay: 40
+#     fadeOut: 20
+
+# Example area configuration:
+# spawn:
+#   enter:
+#     main: "§a§lWelcome to Spawn"
+#     subtitle: "§eThe central hub of our server!"
+#   leave:
+#     main: "§c§lLeaving Spawn"
+#     subtitle: "§eReturn soon!" 

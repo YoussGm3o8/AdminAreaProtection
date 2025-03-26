@@ -1,0 +1,707 @@
+# General messages
+messages:
+  prefix: "§8[§6AdminArea§8]§r "
+  
+  # Core messages
+  reload: "§aКонфигурация успешно перезагружена."
+  noPermission: "§cУ вас нет разрешения на это действие."
+  positionsNotSet: "{prefix}§cСначала необходимо установить обе позиции."
+  areaNotFound: "{prefix}§cОбласть '{area}' не найдена."
+  # Area related messages
+  area:
+    exists: "{prefix}§cОбласть с названием {area} уже существует."
+    globalExists: "{prefix}§cГлобальная область уже существует для мира {world}: {area}"
+    created: "{prefix}§aОбласть §e{area}§a успешно создана в мире §7{world}§a с приоритетом §e{priority}"
+    deleted: "{prefix}§aОбласть §e{area}§a успешно удалена. Мир: §7{world}"
+    updated: "{prefix}§aОбласть §e{area}§a успешно обновлена. Изменено {count} настроек."
+    copied: "{prefix}§aОбласть §e{area}§a успешно скопирована."
+    noChanges: "{prefix}§cНикаких изменений в области не было сделано."
+    list:
+      empty: "{prefix}§cЗащищенные области не найдены."
+      header: "§2Защищенные области:"
+      entry: "§7- {area}\n  §7Мир: {world}\n  §7Приоритет: {priority}\n  §7Размер: {size} блоков"
+    merge:
+      success: "{prefix}Области успешно объединены в: {area}"
+      withFlags: "{prefix}§aОбъединены области в '{area}' с {count} объединенными разрешениями"
+    visualize:
+      success: "{prefix}Начата визуализация для области: {area}"
+      complete: "{prefix}§aВизуализация остановлена для области '{area}'."
+      tooLarge: "{prefix}§cЭта область слишком большая для визуализации (более 1,000,000 блоков)."
+      notInArea: "§7Вы не находитесь в защищенной области."
+      currentLocation: "§2Вы сейчас находитесь в следующей области:\n"
+    stats:
+      header: "{prefix}§2Статистика для области '{area}':"
+      general: "§7Размер: {size}\n§7Приоритет: {priority}"
+      activity: "§7Посещений: {visits}\n§7Блоков сломано: {blocks_broken}\n§7Блоков размещено: {blocks_placed}\n§7PvP сражений: {pvp_fights}\n§7Доступов к контейнерам: {container_accesses}"
+    currentLocationmessages:
+      protectedAreaEntry: "§2Вы сейчас находитесь в следующей области:\n§7{area}\n§7Мир: {world}\n§7Приоритет: {priority}"
+  # Debug messages
+  debug:
+    enabled: "{prefix}§aРежим отладки включен."
+    disabled: "{prefix}§cРежим отладки отключен."
+
+  # Bypass messages
+  bypass:
+    toggled: "{prefix}§aРежим обхода {status}"
+  # Missing messages found in AreaCommand
+  noProtectedAreas: "{prefix}§cЗащищенные области не найдены."
+  protectedAreasHeader: "§2Защищенные области:"
+  permissions:
+    createArea: "{prefix}§cУ вас нет разрешения на создание областей"
+    listAreas: "{prefix}§cУ вас нет разрешения на просмотр списка областей"
+    modifySelection: "{prefix}§cУ вас нет разрешения на изменение выделения"
+    clearSelection: "{prefix}§cУ вас нет разрешения на очистку выделения"
+    undoSelection: "{prefix}§cУ вас нет разрешения на отмену выделения"
+  selection:
+    wandGiven: "{prefix}§aВыдан инструмент для выделения области"
+  wand:
+    lore:
+      line1: "§7Левый клик для установки позиции 1"
+      line2: "§7Правый клик для установки позиции 2"
+      line3: "§7Shift + Левый клик для очистки выделения"
+      line4: "§7Shift + Правый клик для создания области"
+    positionSet: "§aУстановлена {position} в §7{x}, {y}, {z}"
+    selectionComplete: "§aВыделение завершено! Используйте /area create для создания области"
+    undoSuccess: "§aОтменено последнее изменение выделения"
+    noActionsToUndo: "§cНет действий для отмены"
+    positionsNeeded: "§cСначала необходимо установить обе позиции"
+
+  undoNoActions: "§cНет действий для отмены"
+  selectionCleared: "§aВыделение очищено"
+  positionsSetToCurrent: "§aПозиции установлены в текущее местоположение"
+
+  # Protection messages
+  protection:
+    blockBreak: "{prefix}§cВы не можете ломать блоки в {area}"
+    blockPlace: "{prefix}§cВы не можете размещать блоки в {area}"
+    interact: "{prefix}§cВы не можете взаимодействовать с этим в {area}"
+    container: "{prefix}§cВы не можете получить доступ к контейнерам в {area}"
+    pvp: "{prefix}§cPvP отключен в {area}"
+    entityDamage: "{prefix}§cВы не можете наносить урон сущностям в {area}"
+    itemDrop: "{prefix}§cВы не можете выбрасывать предметы в {area}"
+    itemPickup: "{prefix}§cВы не можете подбирать предметы в {area}"
+    vehicleBreak: "{prefix}§cВы не можете уничтожать транспорт в {area}"
+    vehiclePlace: "{prefix}§cВы не можете размещать транспорт в {area}"
+    vehicleEnter: "{prefix}§cВы не можете садиться в транспорт в {area}"
+    vehicleExit: "{prefix}§cВы не можете выходить из транспорта в {area}"
+    vehicleDamage: "{prefix}§cВы не можете наносить урон транспорту в {area}"
+    redstone: "{prefix}§cРедстоун не разрешен в {area}"
+    fire: "{prefix}§cОгонь не разрешен в {area}"
+    liquid: "{prefix}§cТечение жидкостей не разрешено в {area}"
+    explosion: "{prefix}§cВзрывы не разрешены в {area}"
+    pistons: "{prefix}§cПоршни не разрешены в {area}"
+    hangingBreak: "{prefix}§cВы не можете ломать висящие предметы в {area}"
+    blockSpread: "{prefix}§cРаспространение блоков не разрешено в {area}"
+    plantGrowth: "{prefix}§cРост растений не разрешен в {area}"
+    farmlandTrampling: "{prefix}§cВы не можете вытаптывать грядки в {area}"
+    breeding: "{prefix}§cРазмножение животных не разрешено в {area}"
+    taming: "{prefix}§cПриручение животных не разрешено в {area}"
+    projectile: "{prefix}§cСтрельба снарядами не разрешена в {area}"
+    itemRotation: "{prefix}§cВы не можете вращать предметы в рамках в {area}"
+    potionEffect: "{prefix}§cЗелье эффекта {effect} не разрешено в {area}"
+    monsterTarget: "{prefix}§cМонстры в этой области не могут нацеливаться на игроков"
+    monsterSpawn: "{prefix}§cПоявление монстров не разрешено в {area}"
+    animalSpawn: "{prefix}§cПоявление животных не разрешено в {area}"
+    denied: "{prefix}§cЭта область защищена"
+    enderPearl: "{prefix}§cЭндер-жемчуг не разрешен в {area}"
+    bucket: "{prefix}§cВы не можете использовать ведра в {area}"
+    door: "{prefix}§cВы не можете открывать двери в {area}"
+    noCreativeFlight: "{prefix}§cВы не можете летать в {area} в режиме креатива, добавьте разрешение игроку, чтобы разрешить это"
+    noFlight: "{prefix}§cВы не можете летать в {area}"
+    animalSpawn: "{prefix}§cВы не можете спавнить животных в {area}"
+    fallDamage: "{prefix}§cВы не можете получать урон от падения в {area}"
+    xpDrop: "{prefix}§cВаш опыт не был выброшен в {area}!"
+    chorusFruit: "{prefix}§cТелепортация с помощью плода хоруса не разрешена в {area}"
+    armorStand: "{prefix}§cВы не можете взаимодействовать со стойками для брони в {area}"
+    hopper: "{prefix}§cВоронкам не разрешено функционировать в {area}"
+    dispenser: "{prefix}§cРаздатчикам и дропперам не разрешено функционировать в {area}"
+    iceForm: "{prefix}§cЛьду не разрешено формироваться в {area}"
+    snowForm: "{prefix}§cСнегу не разрешено формироваться в {area}"
+  commands:
+    playerOnly: "{prefix}§cЭта команда может быть использована только в игре"
+    usage: "§eИспользование: /area <create|edit|delete|list|wand>"
+    header: "{prefix}§2Команды защиты области:"
+    edit: "§cИспользование: /area edit <названиеОбласти>"
+    delete: "§cИспользование: /area delete <названиеОбласти>"
+    help:
+      header: "{prefix}§2Команды защиты области:"
+      pos1: "§e/area pos1 §7- Установить первую позицию"
+      pos2: "§e/area pos2 §7- Установить вторую позицию"
+      wand: "§e/area wand §7- Получить инструмент выделения"
+      create: "§e/area create [global] §7- Создать новую область"
+      edit: "§e/area edit <название> §7- Редактировать область"
+      delete: "§e/area delete <название> §7- Удалить область"
+      list: "§e/area list §7- Список всех областей"
+      merge: "§e/area merge <область1> <область2> §7- Объединить области"
+      visualize: "§e/area visualize <n> §7- Показать границы"
+      here: "§e/area here §7- Показать, в какой области вы сейчас находитесь"
+      expand: "§e/area expand <направление> <количество> §7- Расширить выделение"
+      stats: "§e/area stats <название> [export|reset] §7- Просмотр статистики области"
+      reload: "§e/area reload §7- Перезагрузить конфигурацию плагина"
+      cachereload: "§e/area cache-reload [названиеОбласти] §7- Принудительно перезагрузить состояния переключателей области из базы данных"
+      undo: "§e/area undo §7- Отменить последнее выделение"
+      clear: "§e/area clear §7- Очистить точки выделения"
+      debug: "§e/area debug [on|off] §7- Переключить режим отладки"
+      bypass: "§e/area bypass §7- Переключить режим обхода"
+      reset: "§e/area reset §7- Сбросить состояние формы, если формы зависли"
+    usage:
+      expand: "{prefix}§cИспользование: /area expand <направление> <количество>"
+      merge: "{prefix}§cИспользование: /area merge <область1> <область2>"
+      visualize: "{prefix}§cИспользование: /area visualize <названиеОбласти>"
+      stats: "{prefix}§cИспользование: /area stats <названиеОбласти> [export|reset]"
+
+  # Error messages
+  error:
+    invalidToggle: "§cНеверный переключатель: {toggle}"
+    toggleUpdateFailed: "§cНе удалось обновить состояние переключателя"
+    positionsNotSet: "§cСначала необходимо установить обе позиции"
+    noPermission: "§cУ вас нет разрешения на это действие"
+    missingAreaName: "§cНеобходимо указать название области"
+    areaNotFound: "§cОбласть '{area}' не найдена"
+    playerOnly: "§cЭта команда может быть использована только в игре"
+    invalidArguments: "§cНеверные аргументы: {args}"
+    databaseError: "§cОшибка базы данных: {error}"
+    worldNotFound: "§cМир '{world}' не найден"
+    differentWorlds: "§cОбласти должны быть в одном мире"
+    cannotMergeGlobal: "§cГлобальные области не могут быть объединены"
+    positionsCrossWorld: "§cПозиции должны быть в одном мире"
+    selectionTooSmall: "§cВыделение слишком маленькое (минимум: {min} блоков)"
+    selectionTooLarge: "§cВыделение слишком большое (максимум: {max} блоков)"
+    areaExists: "§cОбласть с таким названием уже существует"
+    areaTooManyOverlaps: "§cЭта область перекрывала бы слишком много существующих областей"
+    priorityOutOfRange: "§cПриоритет должен быть между {min} и {max}"
+    invalidCoordinate: "§cНеверная координата: {coord}"
+    formError: "§cПроизошла ошибка с формой. Пожалуйста, попробуйте снова"
+    noSelectionPoints: "§cНе установлены точки выделения"
+    notInArea: "§cВы не находитесь в защищенной области"
+
+  form:
+    playerPermissionsUpdated: "§aРазрешения игрока успешно обновлены"
+    groupPermissionsUpdated: "§aРазрешения группы успешно обновлены"
+    permissionsUpdated: "§aРазрешения успешно обновлены"
+    permissionsReset: "§aРазрешения успешно сброшены"
+    playerPermissionsReset: "§aРазрешения игрока успешно сброшены"
+    permissionsListEmpty: "§cРазрешения не найдены"
+    noChanges: "{prefix}§eНастройки не были изменены"
+    trackAndGroupPermissionsUpdated: "{prefix}§aОбновлены разрешения для трека '{track}' в области '{area}', затрагивающие {groupCount} групп"
+    trackAndSingleGroupPermissionsUpdated: "{prefix}§aОбновлены разрешения для трека '{track}' в области '{area}', затрагивающие группу '{group}'"
+    trackPermissionsUpdated: "{prefix}§aОбновлены разрешения трека для '{track}' в области '{area}'"
+    selectTrack: "{prefix}§cПожалуйста, выберите трек"
+    permissionUpdateCancelled: "{prefix}§cОбновление разрешений было отменено другим плагином"
+    invalidSession: "{prefix}§cВаша сессия формы истекла. Пожалуйста, попробуйте снова."
+    error:
+      generic: "{prefix}§cПроизошла ошибка. Пожалуйста, попробуйте выполнить /area reset или сообщите об этом разработчику."
+      stateReset: "{prefix}§aСостояние формы было сброшено. Теперь вы можете снова открывать формы."
+      failedToUpdatePermissions: "{prefix}§cНе удалось обновить разрешения. Пожалуйста, попробуйте снова или обратитесь к администратору."
+      noAreaSelected: "{prefix}§cВ настоящее время не выбрана область для редактирования."
+      areaNotFound: "{prefix}§cВыбранная область не найдена."
+      playerNotFound: "{prefix}§cУказанный игрок не найден."
+      invalidPermission: "{prefix}§cНеверный переключатель разрешения: {toggle}"
+      
+  # Player permission specific messages
+  playerPermissions:
+    updated: "{prefix}§aОбновлены разрешения для игрока {player} в области {area}"
+    reset: "{prefix}§aСброшены все разрешения для игрока {player} в области {area}"
+    removed: "{prefix}§aУдалены все пользовательские разрешения для игрока {player} в области {area}"
+    notFound: "{prefix}§cНе найдены пользовательские разрешения для игрока {player} в области {area}"
+    list:
+      header: "{prefix}§2Пользовательские разрешения для {player} в {area}:"
+      entry: "§7- {permission}: {value}"
+      empty: "{prefix}§7Не установлены пользовательские разрешения"
+    error:
+      invalidPlayer: "{prefix}§cНеверное имя игрока"
+      noPermissions: "{prefix}§cНет разрешений для обновления"
+      saveFailed: "{prefix}§cНе удалось сохранить разрешения игрока"
+      updateFailed: "{prefix}§cНе удалось обновить разрешения игрока"
+      failedToResetPermissions: "{prefix}§cНе удалось сбросить разрешения игрока. Пожалуйста, попробуйте снова."
+
+  effect:
+    applied: "{prefix}§aЭффект {effect} (уровень {strength}) применен из области {area}"
+    removed: "{prefix}§eЭффект {effect} из области {area} закончился"
+
+  success:
+    statsExported: "{prefix}§aСтатистика области '{area}' успешно экспортирована в файл '{area}_stats.csv'"
+    statsReset: "{prefix}§aСтатистика области '{area}' успешно сброшена"
+
+# Form validation messages
+validation:
+  area:
+    name:
+      format: "{prefix}§cНеверное создание области, {error}"
+      tooShort: "{prefix}§cНазвание области должно быть не менее {min} символов"
+      tooLong: "{prefix}§cНазвание области не может быть длиннее {max} символов"
+      invalidChars: "{prefix}§cНазвание области может содержать только буквы, цифры и подчеркивания"
+      reserved: "{prefix}§cНазвание '{name}' зарезервировано и не может быть использовано"
+    priority:
+      outOfRange: "{prefix}§cПриоритет должен быть между {min} и {max}"
+      notNumber: "{prefix}§cПриоритет должен быть действительным числом"
+    bounds:
+      invalid: "{prefix}§cНеверные границы области: {error}"
+      tooSmall: "{prefix}§cОбласть должна быть не менее {min} блоков в размере"
+      tooLarge: "{prefix}§cОбласть не может быть больше {max} блоков"
+      overlap: "{prefix}§cОбласть будет перекрываться с существующей областью: {area}"
+    world:
+      notFound: "{prefix}§cМир '{world}' не существует"
+      notLoaded: "{prefix}§cМир '{world}' не загружен"
+      differentWorlds: "{prefix}§cОбе позиции должны быть в одном мире"
+
+  messages:
+    tooLong: "{prefix}§cСообщение не может быть длиннее {max} символов"
+    invalidPlaceholders: "{prefix}§cНедопустимые заполнители в сообщении: {placeholders}"
+    invalidFormat: "{prefix}§cНедопустимый формат сообщения. Доступные плейсхолдеры: {available}"
+
+  permissions:
+    invalidToggle: "{prefix}§cНеверный переключатель разрешения: {toggle}"
+    dependencyMissing: "{prefix}§cПереключатель '{toggle}' требует включения '{dependency}'"
+    conflict: "{prefix}§cПереключатель '{toggle}' конфликтует с '{conflict}'"
+    groupNotFound: "{prefix}§cГруппа LuckPerms '{group}' не найдена"
+    trackNotFound: "{prefix}§cТрек LuckPerms '{track}' не найден"
+
+  form:
+    # General form validation
+    session:
+      expired: "{prefix}§cВаша сессия формы истекла. Пожалуйста, попробуйте снова."
+      invalid: "{prefix}§cНедопустимые данные сессии формы."
+      mismatch: "{prefix}§cНесоответствие типа формы. Ожидалось {expected}, получено {actual}."
+    
+    # Area validation
+    area:
+      selection:
+        incomplete: "{prefix}§cНеполное выделение области. Пожалуйста, установите обе позиции."
+        invalid: "{prefix}§cНедопустимое выделение области: {error}"
+        tooSmall: "{prefix}§cВыделение области слишком маленькое. Минимальный размер: {min} блоков"
+        tooLarge: "{prefix}§cВыделение области слишком большое. Максимальный размер: {max} блоков"
+        overlap: "{prefix}§cОбласть будет перекрываться с: {areas}"
+      
+      name:
+        exists: "{prefix}§cОбласть с именем '{name}' уже существует."
+        reserved: "{prefix}§cИмя '{name}' зарезервировано и не может быть использовано."
+        format: "{prefix}§cНедопустимый формат имени области. Используйте только буквы, цифры и подчеркивания."
+        length: "{prefix}§cИмя области должно быть от {min} до {max} символов."
+      
+      priority:
+        invalid: "{prefix}§cНедопустимое значение приоритета: {value}"
+        outOfRange: "{prefix}§cПриоритет должен быть между {min} и {max}"
+        conflict: "{prefix}§cПриоритет {value} конфликтует с областью: {area}"
+      
+      world:
+        invalid: "{prefix}§cНедопустимый мир: {world}"
+        unloaded: "{prefix}§cМир '{world}' не загружен"
+        mismatch: "{prefix}§cПозиции должны быть в одном мире"
+    
+    # Settings validation
+    settings:
+      toggle:
+        invalid: "{prefix}§cНедопустимое значение переключателя для: {toggle}"
+        dependency: "{prefix}§cПереключатель '{toggle}' требует включения '{dependency}'"
+        conflict: "{prefix}§cПереключатель '{toggle}' конфликтует с '{conflict}'"
+      
+      message:
+        tooLong: "{prefix}§cСообщение слишком длинное. Максимальная длина: {max} символов"
+        format: "{prefix}§cНедопустимый формат сообщения. Доступные заполнители: {placeholders}"
+      
+      coordinates:
+        invalid: "{prefix}§cНедопустимое значение координаты: {value}"
+        outOfRange: "{prefix}§cКоордината {coord} вне диапазона: от {min} до {max}"
+
+    error:
+      generic: "{prefix}§cПроизошла ошибка. Пожалуйста, попробуйте выполнить /area reset или сообщите об этом разработчику."
+      stateReset: "{prefix}§aСостояние формы было сброшено. Теперь вы можете снова открывать формы."
+
+# Success messages for operations
+success:
+  area:
+    create:
+      normal: "{prefix}§aСоздана область '{area}' ({size} блоков)"
+      global: "{prefix}§aСоздана глобальная область '{area}' в мире '{world}'"
+      withFlags: "{prefix}§aСоздана область '{area}' с {count} флагами защиты"
+    
+    update:
+      settings: "{prefix}§aОбновлено {count} настроек для области '{area}'"
+      bounds: "{prefix}§aОбновлены границы области '{area}' до {size} блоков"
+      flags: "{prefix}§aОбновлено {count} флагов защиты для области '{area}'"
+    
+    delete:
+      single: "{prefix}§aУдалена область '{area}'"
+      multiple: "{prefix}§aУдалено {count} областей"
+      cleanup: "{prefix}§aУдалены все следы области '{area}'"
+    
+    copy:
+      success: "{prefix}§aСкопирована область '{source}' в '{target}'"
+      withSettings: "{prefix}§aСкопирована область '{source}' в '{target}' со всеми настройками"
+    
+    merge:
+      success: "{prefix}§aОбъединено {count} областей в '{area}'"
+      withFlags: "{prefix}§aОбъединены области с {count} комбинированными флагами"
+
+    expand:
+      bounds: "{prefix}§aРасширена область '{area}' до {size} блоков"
+      
+  settings:
+    save:
+      basic: "{prefix}§aСохранены основные настройки для '{area}'"
+      protection: "{prefix}§aСохранены настройки защиты для '{area}'"
+      technical: "{prefix}§aСохранены технические настройки для '{area}'"
+      environment: "{prefix}§aСохранены настройки окружения для '{area}'"
+      entity: "{prefix}§aСохранены настройки сущностей для '{area}'"
+      special: "{prefix}§aСохранены специальные настройки для '{area}'"
+    
+    toggle:
+      single: "{prefix}§aПереключено '{toggle}' на {value}"
+      multiple: "{prefix}§aОбновлено {count} переключателей"
+      category: "{prefix}§aОбновлены все настройки {category}"
+
+  plugin:
+    reload: "{prefix}§aКонфигурация плагина успешно перезагружена"
+    backup: "{prefix}§aСоздана резервная копия всех областей"
+    cache: "{prefix}§aОчищен и перестроен кэш областей"
+    statistics: "{prefix}§aОбновлена статистика областей"
+
+# GUI/Form related text
+gui:
+  # Main Menu
+  mainMenu:
+    title: "§6Защита Области"
+    content: "§8Выберите опцию для управления защищенными областями:"
+    buttons:
+      createArea: "§aСоздать Область\n§8Создать новую защищенную область"
+      editArea: "§eРедактировать Область\n§8Изменить существующую область"
+      deleteArea: "§cУдалить Область\n§8Удалить защищенную область"
+      pluginSettings: "§bНастройки\n§8Настроить параметры плагина"
+      back: "§8« Назад"
+
+  # Plugin Settings
+  pluginSettings:
+    title: "Настройки Плагина"
+    sections:
+      general: "§2Общие Настройки"
+      area: "\n§2Настройки Области"
+      tools: "\n§2Настройки Инструментов"
+      cache: "\n§2Настройки Кэша"
+      integrations: "\n§2Интеграции"
+    labels:
+      debugMode: "Режим Отладки"
+      debugStackTraces: "Трассировки Стека Отладки"
+      enableMessages: "Включить Сообщения"
+      maxAreaPriority: "Максимальный Приоритет Области"
+      maxAreaPriorityPlaceholder: "1-1000"
+      mostRestrictiveMerge: "Наиболее Ограничительное Объединение Областей"
+      wandItemType: "Тип Предмета Инструмента"
+      wandItemTypePlaceholder: "ID Предмета"
+      particleVisualization: "Визуализация Частиц"
+      visualizationDuration: "Длительность Визуализации"
+      visualizationDurationPlaceholder: "Секунды"
+      selectionCooldown: "Задержка Выделения"
+      selectionCooldownPlaceholder: "Миллисекунды"
+      cacheExpiryTime: "Время Истечения Кэша"
+      cacheExpiryTimePlaceholder: "Минуты"
+      undoHistorySize: "Размер Истории Отмены"
+      undoHistorySizePlaceholder: "1-50"
+      luckpermsIntegration: "Интеграция с LuckPerms"
+      inheritLuckpermsPermissions: "Наследовать Разрешения LuckPerms"
+      luckpermsUpdateInterval: "Интервал Обновления LuckPerms"
+      luckpermsUpdateIntervalPlaceholder: "Минуты"
+
+  # Common labels and buttons
+  labels:
+    areaName: "Название Области"
+    priority: "Приоритет"
+    enterMessage: "Сообщение При Входе"
+    leaveMessage: "Сообщение При Выходе"
+    showTitle: "Показывать Заголовок"
+    back: "Назад"
+    save: "Сохранить"
+    cancel: "Отмена"
+    confirm: "Подтвердить"
+    delete: "Удалить"
+    inheritedFrom: "Унаследовано от: {groups}"
+
+  # Permission toggle formatting
+  permissions:
+    toggle:
+      format: "§e{name}\n§8{description}"
+    toggles:
+      allowBlockBreak: "Контролирует, может ли {player} ломать блоки в этой области"
+      allowBlockPlace: "Контролирует, может ли {player} размещать блоки в этой области"
+      allowInteract: "Контролирует, может ли {player} взаимодействовать с блоками и предметами"
+      allowContainer: "Контролирует, может ли {player} получать доступ к контейнерам"
+      allowItemRotation: "Контролирует, может ли {player} взаимодействовать с рамками предметов"
+      allowHangingBreak: "Контролирует, может ли {player} вынимать предметы из рамок"
+      allowDoors: "Контролирует, может ли {player} открывать/закрывать двери"
+      allowArmorStand: "Контролирует, может ли {player} взаимодействовать со стойками для брони"
+      allowRedstone: "Контролирует, могут ли функционировать механизмы редстоуна"
+      allowPistons: "Контролирует, могут ли поршни толкать/тянуть блоки"
+      allowHopper: "Контролирует, могут ли воронки передавать предметы"
+      allowDispenser: "Контролирует, могут ли раздатчики/дропперы функционировать"
+      allowFire: "Контролирует, может ли распространяться огонь"
+      allowLiquid: "Контролирует, могут ли течь жидкости"
+      allowBlockSpread: "Контролирует распространение травы, мицелия и лиан"
+      allowLeafDecay: "Контролирует, разрушаются ли листья при удалении бревен"
+      allowBlockGravity: "Контролирует, могут ли блоки с гравитацией, такие как песок и гравий, падать"
+      allowIceForm: "Контролирует формирование и таяние льда"
+      allowSnowForm: "Контролирует формирование и таяние снега"
+      allowPvP: "Контролирует, может ли {player} участвовать в PvP сражениях"
+      allowMonsterSpawn: "Контролирует появление враждебных мобов"
+      allowAnimalSpawn: "Контролирует появление мирных мобов"
+      allowDamageEntities: "Контролирует, может ли {player} наносить урон сущностям"
+      allowBreeding: "Контролирует, может ли {player} разводить животных"
+      allowFarmlandTrampling: "Контролирует, могут ли грядки быть вытоптаны игроками или мобами"
+      allowMonsterTarget: "Контролирует, могут ли монстры нацеливаться на {player}"
+      allowLeashing: "Контролирует, может ли {player} использовать поводки на сущностях"
+      allowTaming: "Контролирует, может ли {player} приручать животных"
+      allowShootProjectile: "Контролирует, может ли {player} стрелять снарядами"
+      allowProjectile: "Контролирует, может ли {player} стрелять снарядами"
+      allowItemDrop: "Контролирует, может ли {player} выбрасывать предметы"
+      allowItemPickup: "Контролирует, может ли {player} подбирать предметы"
+      allowXPDrop: "Контролирует, выпадают ли сферы опыта"
+      allowXPPickup: "Контролирует, может ли {player} собирать опыт"
+      allowTNT: "Контролирует, может ли {player} использовать TNT"
+      allowCreeper: "Контролирует, могут ли криперы наносить урон {player}"
+      allowBedExplosion: "Контролирует, могут ли кровати взрываться"
+      allowCrystalExplosion: "Контролирует, могут ли кристаллы Края взрываться"
+      allowVehiclePlace: "Контролирует, может ли {player} размещать транспорт"
+      allowVehicleBreak: "Контролирует, может ли {player} ломать транспорт"
+      allowVehicleEnter: "Контролирует, может ли {player} садиться в транспорт"
+      allowVehicleCollide: "Контролирует, может ли транспорт сталкиваться с {player}"
+      allowFallDamage: "Контролирует, получает ли {player} урон от падения"
+      allowHunger: "Контролирует, теряет ли {player} голод"
+      allowFlight: "Контролирует, может ли {player} летать"
+      allowEnderPearl: "Контролирует, может ли {player} использовать жемчуг Края"
+      allowChorusFruit: "Контролирует, может ли {player} использовать плод хоруса"
+      showEffectMessages: "Контролирует, видит ли {player} сообщения о применении или снятии эффектов зелий"
+      allowHangingBreak: "Контролирует, может ли {player} ломать висящие предметы, такие как рамки"
+      allowPlantGrowth: "Контролирует, могут ли расти растения"
+      allowFarmlandTrampling: "Контролирует, могут ли быть вытоптаны грядки"
+      allowVehicleExit: "Контролирует, может ли {player} выходить из транспорта"
+      
+      
+      # Potion effect toggles
+      allowPotionSpeed: "Применяет эффект Скорости к игрокам в этой области с настраиваемой силой"
+      allowPotionSlowness: "Применяет эффект Медлительности к игрокам в этой области с настраиваемой силой"
+      allowPotionHaste: "Применяет эффект Спешки к игрокам в этой области с настраиваемой силой"
+      allowPotionMiningFatigue: "Применяет эффект Усталости от добычи к игрокам в этой области с настраиваемой силой"
+      allowPotionStrength: "Применяет эффект Силы к игрокам в этой области с настраиваемой силой"
+      allowPotionInstantHealth: "Применяет эффект Мгновенного Здоровья к игрокам в этой области с настраиваемой силой"
+      allowPotionInstantDamage: "Применяет эффект Мгновенного Урона к игрокам в этой области с настраиваемой силой"
+      allowPotionJumpBoost: "Применяет эффект Усиления Прыжка к игрокам в этой области с настраиваемой силой"
+      allowPotionNausea: "Применяет эффект Тошноты к игрокам в этой области с настраиваемой силой"
+      allowPotionRegeneration: "Применяет эффект Регенерации к игрокам в этой области с настраиваемой силой"
+      allowPotionResistance: "Применяет эффект Сопротивления к игрокам в этой области с настраиваемой силой"
+      allowPotionFireResistance: "Применяет эффект Огнестойкости к игрокам в этой области с настраиваемой силой"
+      allowPotionWaterBreathing: "Применяет эффект Подводного Дыхания к игрокам в этой области с настраиваемой силой"
+      allowPotionInvisibility: "Применяет эффект Невидимости к игрокам в этой области с настраиваемой силой"
+      allowPotionBlindness: "Применяет эффект Слепоты к игрокам в этой области с настраиваемой силой"
+      allowPotionNightVision: "Применяет эффект Ночного Зрения к игрокам в этой области с настраиваемой силой"
+      allowPotionHunger: "Применяет эффект Голода к игрокам в этой области с настраиваемой силой"
+      allowPotionWeakness: "Применяет эффект Слабости к игрокам в этой области с настраиваемой силой"
+      allowPotionPoison: "Применяет эффект Отравления к игрокам в этой области с настраиваемой силой"
+      allowPotionWither: "Применяет эффект Иссушения к игрокам в этой области с настраиваемой силой"
+      allowPotionHealthBoost: "Применяет эффект Повышения Здоровья к игрокам в этой области с настраиваемой силой"
+      allowPotionAbsorption: "Применяет эффект Поглощения к игрокам в этой области с настраиваемой силой"
+      allowPotionSaturation: "Применяет эффект Насыщения к игрокам в этой области с настраиваемой силой"
+      allowPotionLevitation: "Применяет эффект Левитации к игрокам в этой области с настраиваемой силой"
+
+  # Form-specific content
+  createArea:
+    title: "Создать Защищенную Область"
+    header: "§2Введите Детали Области\n§8Заполните необходимую информацию ниже"
+    labels:
+      name: "Название Области"
+      namePlaceholder: "Введите уникальное название для этой области"
+      priority: "Приоритет"
+      priorityPlaceholder: "Введите приоритет (0-100)"
+      defaultPriority: "50"
+      showTitle: "Показывать Заголовок Области"
+      protectWorld: "Защитить Весь Мир"
+      bounds: "\n§2Границы Области\n§8Текущие координаты выделения"
+      pos1x: "Первая Позиция X"
+      pos1y: "Первая Позиция Y"
+      pos1z: "Первая Позиция Z"
+      pos2x: "Вторая Позиция X"
+      pos2y: "Вторая Позиция Y"
+      pos2z: "Вторая Позиция Z"
+      coordPlaceholder: "Введите координату {axis}"
+      enterMessage: "Сообщение При Входе"
+      enterPlaceholder: "Сообщение, показываемое при входе в область"
+      leaveMessage: "Сообщение При Выходе"
+      leavePlaceholder: "Сообщение, показываемое при выходе из области"
+      enterTitle: "Заголовок При Входе"
+      enterTitlePlaceholder: "Заголовок, показываемый при входе в область"
+      leaveTitle: "Заголовок При Выходе"
+      leaveTitlePlaceholder: "Заголовок, показываемый при выходе из области"
+      protection: "\n§2Настройки Защиты\n§8Настройте разрешения области"
+      categoryHeader: "\n§6Настройки {category}"
+
+  editArea:
+    listtitle: "Редактировать Область"
+    title: "Редактировать Область: {area}"
+    content: "Выберите, что редактировать:"
+    buttons:
+      basicSettings: "§9Основные Настройки\n§8Имя, приоритет, сообщения"
+      buildingSettings: "§9Настройки Строительства\n§8Строительство и блоки"
+      environmentSettings: "§9Настройки Окружения\n§8Природные события"
+      entitySettings: "§9Настройки Сущностей\n§8Мобы и сущности"
+      technicalSettings: "§9Технические Настройки\n§8Редстоун и механизмы"
+      specialSettings: "§9Специальные Настройки\n§8Другие разрешения"
+      
+      itemsDropsSettings: "§9Предметы и Дропы\n§8Настройки подбора предметов и опыта"
+      potionEffectsSettings: "§9Эффекты Зелий\n§8Применить эффекты маяка области"
+      groupPermissions: "§9Разрешения Групп\n§8Группы LuckPerms"
+      playerPermissions: "§9Разрешения Игроков\n§8Разрешения игроков"
+
+  categorySettings:
+    title: "{category}: {area}"
+    header: "§2Настройка Разрешений {category}\n§8Переключите настройки ниже"
+
+  basicSettings:
+    title: "Основные настройки: {area}"
+    sections:
+      general: "§2Общие настройки"
+      display: "\n§2Настройки отображения"
+    labels:
+      name: "Название области"
+      namePlaceholder: "Введите название области"
+      priority: "Приоритет"
+      priorityPlaceholder: "Введите приоритет (0-100)"
+      showTitle: "Показывать заголовок области"
+      enterTitle: "Заголовок При Входе"
+      enterTitlePlaceholder: "Заголовок, показываемый при входе в область"
+      enterMessage: "Сообщение при входе"
+      enterPlaceholder: "Сообщение, показываемое при входе"
+      leaveTitle: "Заголовок При Выходе"
+      leaveTitlePlaceholder: "Заголовок, показываемый при выходе из области"
+      leaveMessage: "Сообщение при выходе"
+      leavePlaceholder: "Сообщение, показываемое при выходе"
+
+  deleteArea:
+    title: "Удалить Область"
+    content: "Выберите область для удаления:"
+    confirmTitle: "Подтвердить Удаление"
+    confirmPrompt: "Вы уверены, что хотите удалить область '{area}'?"
+    buttons:
+      confirm: "§cПодтвердить Удаление"
+      cancel: "§aОтмена"
+
+  luckperms:
+    title:
+      main: "§6Настройки LuckPerms"
+      group: "§6Редактировать Разрешения {group}"
+      track: "§6Редактировать Разрешения Трека"
+    header:
+      groups: "§2Настройка Разрешений Групп\n§7Выберите группу для редактирования ее разрешений"
+      tracks: "§2Настройка Разрешений Трека\n§7Выберите трек для редактирования разрешений для всех групп в нем"
+      permissions: "§2Настройка Разрешений\n§7Переключите разрешения для Групп Luckperms"
+    labels:
+      allGroups: "Все Группы"
+      selectGroup: "Выберите Группу"
+      selectTrack: "Выберите Трек"
+      selectGroups: "§6Выберите Группы для Обновления\n§7Выберите, к каким группам применить эти разрешения"
+      noGroups: "§cНет доступных групп"
+      noTracks: "§cНет доступных треков"
+      inheritedFrom: "Унаследовано от: {groups}"
+    buttons:
+      back: "§8« Назад"
+      save: "§aСохранить Изменения"
+      cancel: "§cОтмена"
+    messages:
+      noGroupSelected: "§cПожалуйста, сначала выберите группу"
+      noTrackSelected: "§cПожалуйста, сначала выберите трек"
+      noPermissionsSelected: "§cНе выбраны разрешения для обновления"
+      groupUpdated: "§aОбновлены разрешения для группы {group}"
+      trackUpdated: "§aОбновлены разрешения для трека {track}, затрагивающие {count} групп"
+      error:
+        groupNotFound: "§cГруппа {group} не найдена"
+        trackNotFound: "§cТрек {track} не найден"
+        updateFailed: "§cНе удалось обновить разрешения: {error}"
+        invalidGroup: "§cВыбрана недопустимая группа"
+        invalidTrack: "§cВыбран недопустимый трек"
+        noLuckPerms: "§cИнтеграция с LuckPerms не включена"
+        noConnection: "§cНе удалось подключиться к LuckPerms"
+
+  buildingSettings:
+    title: "Настройки Строительства: {area}"
+    header: "§2Настройка Разрешений Строительства\n§8Переключите настройки ниже"
+    sections:
+      blocks: "§2Разрешения Блоков"
+      containers: "§2Доступ к Контейнерам"
+      special: "§2Специальные Взаимодействия"
+
+  environmentSettings:
+    title: "Настройки Окружения: {area}"
+    header: "§2Настройка Разрешений Окружения\n§8Переключите настройки ниже"
+    sections:
+      natural: "§2Природные События"
+      weather: "§2Погодные Эффекты"
+      growth: "§2Рост Растений"
+
+  technicalSettings:
+    title: "Технические Настройки: {area}"
+    header: "§2Настройка Технических Разрешений\n§8Переключите настройки ниже"
+
+  specialSettings:
+    title: "Специальные Настройки: {area}"
+    header: "§2Настройка Специальных Разрешений\n§8Переключите настройки ниже"
+
+  itemsDropsSettings:
+    title: "Предметы и Дропы: {area}"
+    header: "§2Настройка Разрешений Предметов и Опыта\n§8Переключите настройки ниже"
+
+  potionEffectsSettings:
+    title: "Эффекты Зелий: {area}"
+    header: "§2Настройка Эффектов Маяка Области\n§8Установите, какие эффекты зелий и их силу (0-10) применять к игрокам в этой области"
+    sections:
+      effects: "§2Эффекты Маяка"
+    labels:
+      strength: "Сила Эффекта"
+      strengthPlaceholder: "Введите 0-10 (0 = отключено)"
+      effectDescription: "§7Усилитель: {strength}"
+
+  entitySettings:
+    title: "Настройки Сущностей: {area}"
+    header: "§2Настройка Разрешений Сущностей\n§8Переключите настройки ниже"
+
+  # Player Settings Form
+  playerSettings:
+    title: "Разрешения Игрока - {area}"
+    playerTitle: "Редактировать Разрешения {player}"
+    header: "§2Настройка Разрешений Игрока\n§7Выберите игрока или введите имя вручную"
+    playerHeader: "§2Разрешения Игрока для {player}\n§7Эти разрешения будут переопределять разрешения треков и групп.\n§7Изменения разрешений области сбросят эти настройки."
+    labels:
+      onlinePlayers: "Игроки Онлайн"
+      defaultOption: "-- Выберите Игрока --"
+      manualEntry: "Или введите имя игрока вручную:"
+      playerNamePlaceholder: "Имя игрока"
+      existingPermissions: "\n§6Игроки с Пользовательскими Разрешениями:"
+      resetAllPermissions: "\n§cСбросить Все Разрешения Игроков\n§7Это очистит все разрешения, специфичные для игроков"
+
+# Area titles and messages
+titles:
+  enter:
+    default:
+      main: "§aВход в {area}"
+      subtitle: "Добро пожаловать в {area}, {player}!"
+  leave:
+    default:
+      main: "§eВыход из {area}"
+      subtitle: "До свидания {player}, возвращайтесь скорее в {area}!"
+
+# Area list format
+protectedAreaEntry: "§8- %s\n  §8Мир: %s\n  §8Приоритет: %d"
+
+# Toggle list messages
+toggleList: "§2Доступные переключатели:"
+
+# Potion effect messages
+potionEffect:
+  applied: "{prefix}§aЭффект {effect} (уровень {strength}) применен из области {area}"
+  removed: "{prefix}§eЭффект {effect} из области {area} закончился"
+  strength:
+    set: "{prefix}§aУстановлена сила эффекта {effect} на {strength} в области {area}"
+    outOfRange: "{prefix}§cЗначение силы должно быть между 0 и 10"
+    invalid: "{prefix}§cНедопустимое значение силы, должно быть числом"
+
+# New titles validation messages
+titles:
+  tooLong: "{prefix}§cЗаголовок не может быть длиннее {max} символов"
+  invalidFormat: "{prefix}§cНедопустимый формат заголовка"
+
