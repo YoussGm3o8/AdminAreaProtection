@@ -6,7 +6,7 @@
   
   <groupId>com.youssgm3o8</groupId>
   <artifactId>AdminAreaProtectionPlugin</artifactId>
-  <version>1.0.1-SNAPSHOT</version>
+  <version>1.2.0</version>
   <packaging>jar</packaging>
   
   <name>AdminAreaProtectionPlugin</name>

@@ -1,5 +1,5 @@
 # AdminAreaProtection Configuration
-# Version 1.0.1
+# Version 1.2.0
 
 # Debug mode - set to true to enable detailed logging
 debug: false
