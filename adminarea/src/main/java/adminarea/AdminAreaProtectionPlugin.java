@@ -4,8 +4,8 @@ package adminarea;
  * Main plugin class for AdminAreaProtection.
  * Handles initialization, configuration management, and core functionality.
  * 
- * @version 1.0
- * @author roki
+ * @version 1.2.0
+ * @author YoussGm3o8
  */
 import cn.nukkit.plugin.PluginBase;
 import cn.nukkit.event.Listener;
