@@ -49,6 +49,7 @@ import adminarea.area.Area;
 import adminarea.area.AreaCommand;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
+import adminarea.util.LogFilter;
 import adminarea.util.PerformanceMonitor;
 import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
@@ -112,6 +113,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             instance = this;
             performanceMonitor = new PerformanceMonitor(this);
             Timer.Sample startupTimer = performanceMonitor.startTimer();
+            LogFilter.registerFilter();
             
             long startTime = System.currentTimeMillis();
 
@@ -158,22 +160,33 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     getLogger().info("Debug mode enabled from config");
                 }
 
-                // Configure HikariCP logging levels
-                ch.qos.logback.classic.Logger hikariLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari");
-                hikariLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
+                // Configure logging levels for HikariCP - using SLF4J directly instead of casting
+                try {
+                    // Get SLF4J LoggerFactory - avoid direct casts to specific implementation
+                    org.slf4j.Logger hikariLogger = org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari");
+                    
+                    // Set Hikari's logging level to ERROR to minimize verbose output
+                    if (hikariLogger instanceof ch.qos.logback.classic.Logger) {
+                        ((ch.qos.logback.classic.Logger) hikariLogger).setLevel(ch.qos.logback.classic.Level.ERROR);
+                    }
+                    
+                    // Also try to set the pool logger specifically
+                    org.slf4j.Logger poolLogger = org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.pool.HikariPool");
+                    if (poolLogger instanceof ch.qos.logback.classic.Logger) {
+                        ((ch.qos.logback.classic.Logger) poolLogger).setLevel(ch.qos.logback.classic.Level.ERROR);
+                    }
+                    
+                    // Log that we're configuring HikariCP logging
+                    if (isDebugMode()) {
+                        debug("Configured HikariCP logging to minimize verbose output");
+                    }
+                } catch (Exception e) {
+                    // Just log and continue if this fails - it's not critical
+                    if (isDebugMode()) {
+                        debug("Failed to configure HikariCP logging: " + e.getMessage());
+                    }
+                }
                 
-                ch.qos.logback.classic.Logger poolBaseLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.pool.PoolBase");
-                poolBaseLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
-                
-                ch.qos.logback.classic.Logger hikariPoolLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.pool.HikariPool");
-                hikariPoolLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
-                
-                ch.qos.logback.classic.Logger hikariDataSourceLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.HikariDataSource");
-                hikariDataSourceLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
-                
-                ch.qos.logback.classic.Logger hikariConfigLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("com.zaxxer.hikari.HikariConfig");
-                hikariConfigLogger.setLevel(ch.qos.logback.classic.Level.ERROR);
-
                 // Ensure data folder exists and copy config.yml if missing
                 if (!getDataFolder().exists()) {
                     getDataFolder().mkdirs();
@@ -434,14 +447,20 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getServer().getPluginManager().disablePlugin(this);
             }
 
-            // Defer non-critical initialization tasks
-            getServer().getScheduler().scheduleDelayedTask(this, () -> {
-                // Perform any initialization that doesn't need to happen immediately
-                // For example: pre-caching data, background cleanups, etc.
-                if (isDebugMode()) {
-                    debug("Running deferred initialization tasks");
+            // Defer non-critical initialization tasks - only if plugin is still enabled
+            if (this.isEnabled()) {
+                try {
+                    getServer().getScheduler().scheduleDelayedTask(this, () -> {
+                        // Perform any initialization that doesn't need to happen immediately
+                        // For example: pre-caching data, background cleanups, etc.
+                        if (isDebugMode()) {
+                            debug("Running deferred initialization tasks");
+                        }
+                    }, 20); // 1-second delay
+                } catch (Exception e) {
+                    getLogger().error("Failed to schedule delayed task", e);
                 }
-            }, 20); // 1-second delay
+            }
             
             // Log startup time
             long elapsedTime = System.currentTimeMillis() - startTime;
