@@ -7,6 +7,7 @@ import cn.nukkit.Player;
 import cn.nukkit.entity.Entity;
 import cn.nukkit.entity.EntityLiving;
 import cn.nukkit.entity.mob.EntityMob;
+import cn.nukkit.entity.mob.EntityWalkingMob;
 import cn.nukkit.entity.passive.EntityAnimal;
 import cn.nukkit.entity.passive.EntityWaterAnimal;
 import cn.nukkit.entity.projectile.EntityEnderPearl;
@@ -31,8 +32,6 @@ import java.util.WeakHashMap;
 public class EntityListener implements Listener {
     private final AdminAreaProtectionPlugin plugin;
     private final ProtectionListener protectionListener;
-    private final Class<?> mobPluginMonster; // Track MobPlugin's monster class
-    private final Class<?> walkingMonsterClass; // Track MobPlugin's WalkingMonster class
     // Replace ConcurrentHashMap with WeakHashMap for better memory management of entity classes
     private final Map<Class<?>, Boolean> isMonster = new WeakHashMap<>();
     
@@ -47,32 +46,8 @@ public class EntityListener implements Listener {
         this.breedingFoods = new HashMap<>();
         initializeBreedingFoods();
         
-        // Initialize MobPlugin's monster class for instanceof checks
-        Class<?> monsterClass = null;
-        Class<?> walkingMonsterClass = null;
-        try {
-            monsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.Monster");
-            plugin.getLogger().info("Found MobPlugin Monster interface for monster checks");
-        } catch (ClassNotFoundException ignored) {
-            plugin.getLogger().warning("Could not find MobPlugin Monster interface, using WalkingMonster for checks");
-            try {
-                monsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.WalkingMonster");
-                plugin.getLogger().info("Found MobPlugin WalkingMonster class for monster checks");
-            } catch (ClassNotFoundException e) {
-                plugin.getLogger().warning("Could not find WalkingMonster class, monster protection will be limited to Nukkit's EntityMob");
-                monsterClass = null;
-            }
-        }
-        
-        // Initialize WalkingMonster class separately
-        try {
-            walkingMonsterClass = Class.forName("nukkitcoders.mobplugin.entities.monster.WalkingMonster");
-        } catch (ClassNotFoundException e) {
-            walkingMonsterClass = null;
-        }
-        
-        this.mobPluginMonster = monsterClass;
-        this.walkingMonsterClass = walkingMonsterClass;
+        // NukkitMOT mob classes are directly available, no reflection needed
+        plugin.getLogger().info("Using NukkitMOT monster entities for monster checks");
     }
     
     /**
@@ -249,7 +224,7 @@ public class EntityListener implements Listener {
             }
 
             // Handle monster targeting through damage events - safely check for MobPlugin's WalkingMonster
-            if (walkingMonsterClass != null && walkingMonsterClass.isInstance(damager) && victim instanceof Player player) {
+            if (EntityWalkingMob.class.isInstance(damager) && victim instanceof Player player) {
                 // Only call MonsterTargetEvent if the WalkingMonster class is available
                 try {
                     // Call MonsterTargetEvent - use direct call with Entity instead of reflection
@@ -880,25 +855,16 @@ public class EntityListener implements Listener {
     }
 
     /**
-     * Safely check if an entity is a MobPlugin monster without risking ClassNotFoundException
+     * Safely check if an entity is a NukkitMOT monster
+     * 
      * @param entity The entity to check
-     * @return true if the entity is a MobPlugin monster
+     * @return true if the entity is a monster
      */
     private boolean isMobPluginMonster(Entity entity) {
         if (entity == null) return false;
         
-        // Fast path: check if it's an EntityMob (Nukkit core class)
-        if (entity instanceof EntityMob) return true;
-        
-        // Check for MobPlugin monsters if the class is available
-        if (mobPluginMonster != null) {
-            // Get from cache or compute
-            return isMonster.computeIfAbsent(entity.getClass(), 
-                cls -> mobPluginMonster.isAssignableFrom(cls));
-        }
-        
-        // If MobPlugin is not available, just use EntityMob check
-        return false;
+        // Direct instance check for NukkitMOT mobs
+        return entity instanceof EntityMob;
     }
 }
 

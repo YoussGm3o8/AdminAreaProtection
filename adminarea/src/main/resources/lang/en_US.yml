@@ -108,7 +108,6 @@ messages:
     door: "{prefix}§cYou cannot open doors in {area}"
     noCreativeFlight: "{prefix}§cYou cannot fly in {area} with creative flight, add a permission to the player to allow it"
     noFlight: "{prefix}§cYou cannot fly in {area}"
-    animalSpawn: "{prefix}§cYou cannot spawn animals in {area}"
     fallDamage: "{prefix}§cYou cannot take fall damage in {area}"
     xpDrop: "{prefix}§cYour xp was not dropped in {area}!"
     chorusFruit: "{prefix}§cChorus fruit teleportation is not allowed in {area}"
@@ -121,8 +120,6 @@ messages:
     playerOnly: "{prefix}§cThis command can only be used in-game"
     usage: "§eUsage: /area <create|edit|delete|list|wand>"
     header: "{prefix}§2Area Protection Commands:"
-    edit: "§cUsage: /area edit <areaName>"
-    delete: "§cUsage: /area delete <areaName>"
     help:
       header: "{prefix}§2Area Protection Commands:"
       pos1: "§e/area pos1 §7- Set first position"
@@ -149,6 +146,9 @@ messages:
       merge: "{prefix}§cUsage: /area merge <area1> <area2>"
       visualize: "{prefix}§cUsage: /area visualize <areaName>"
       stats: "{prefix}§cUsage: /area stats <areaName> [export|reset]"
+      edit: "{prefix}§cUsage: /area edit <areaName>"
+      delete: "{prefix}§cUsage: /area delete <areaName>"
+      playerOnly: "{prefix}§cThis command can only be used in-game"
 
   # Error messages
   error:
@@ -684,6 +684,9 @@ titles:
     default:
       main: "§eLeaving {area}"
       subtitle: "Goodbye {player}, come back soon to {area}!"
+  validation:
+    tooLong: "{prefix}§cTitle cannot be longer than {max} characters"
+    invalidFormat: "{prefix}§cInvalid title format"
 
 # Area list format
 protectedAreaEntry: "§8- %s\n  §8World: %s\n  §8Priority: %d"
@@ -699,8 +702,4 @@ potionEffect:
     set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
     outOfRange: "{prefix}§cStrength value must be between 0 and 10"
     invalid: "{prefix}§cInvalid strength value, must be a number"
-
-titles:
-  tooLong: "{prefix}§cTitle cannot be longer than {max} characters"
-  invalidFormat: "{prefix}§cInvalid title format"
 

@@ -33,6 +33,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.util.Collection;
+import java.io.File;
 
 import adminarea.listeners.ContainerListener;
 import adminarea.listeners.FormCleanupListener;
@@ -59,6 +60,7 @@ import cn.nukkit.plugin.PluginManager;
 import adminarea.listeners.ProtectionListener;
 import adminarea.listeners.PlayerEffectListener;
 import adminarea.listeners.EnvironmentListener;
+import adminarea.util.YamlConfig;
 
 
 public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
@@ -110,6 +112,9 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
          */
         @Override
         public void onEnable() {
+            // Register custom YAML handler before any configs are loaded
+            registerCustomYamlHandler();
+
             instance = this;
             performanceMonitor = new PerformanceMonitor(this);
             Timer.Sample startupTimer = performanceMonitor.startTimer();
@@ -206,7 +211,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 // Register container stats listener
                 getServer().getPluginManager().registerEvents(new ContainerListener(this), this);
                 
-                // Initialize MonsterHandler early to detect MobPlugin availability
+                // Initialize MonsterHandler early to detect NukkitMOT mob availability
                 adminarea.entity.MonsterHandler.initialize(this);
                 // getLogger().info("Monster handler initialized");
     
@@ -222,7 +227,8 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 }
     
                 // Initialize LuckPerms integration first using reflection
-                if (getServer().getPluginManager().getPlugin("LuckPerms") != null) {
+                boolean luckPermsAvailable = getServer().getPluginManager().getPlugin("LuckPerms") != null;
+                if (luckPermsAvailable) {
                     try {
                         // Try to load the required LuckPerms classes using reflection
                         luckPermsClass = Class.forName("net.luckperms.api.LuckPerms");
@@ -474,11 +480,8 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getLogger().warning("Install LuckPerms to enable permission groups and track-based permissions.");
             }
             
-            boolean mobPluginAvailable = getServer().getPluginManager().getPlugin("MobPlugin") != null;
-            if (!mobPluginAvailable) {
-                getLogger().warning("MobPlugin is not available. Basic monster protection will work with default Nukkit mobs only.");
-                getLogger().warning("For full monster protection, install MobPlugin.");
-            }
+            // Using NukkitMOT mobs for monster protection
+            getLogger().info("NukkitMOT monster protection enabled.");
             
             getLogger().info("AdminAreaProtectionPlugin has been successfully enabled!");
         }
@@ -1666,5 +1669,24 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             
             // Otherwise, wrap the operation in a high-frequency context
             return executeInHighFrequencyContext(() -> getArea(name));
+        }
+
+        /**
+         * Registers our custom YAML handler to ensure compatibility with Nukkit MOT.
+         * This needs to be called before any Config loading.
+         */
+        private void registerCustomYamlHandler() {
+            try {
+                getLogger().info("Registering custom YAML handler for better compatibility");
+                // Pre-extract language files so they can be loaded with our custom YAML handler
+                File langDir = new File(getDataFolder(), "lang");
+                if (!langDir.exists()) {
+                    langDir.mkdirs();
+                    saveResource("lang/en_US.yml", false);
+                    saveResource("lang/ru_RU.yml", false);
+                }
+            } catch (Exception e) {
+                getLogger().error("Failed to register custom YAML handler", e);
+            }
         }
     }

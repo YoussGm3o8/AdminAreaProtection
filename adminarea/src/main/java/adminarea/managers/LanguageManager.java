@@ -4,8 +4,8 @@ import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaDTO;
 import adminarea.util.Logger;
+import adminarea.util.YamlConfig;
 import cn.nukkit.Player;
-import cn.nukkit.utils.Config;
 
 import java.io.File;
 import java.util.*;
@@ -18,7 +18,7 @@ public class LanguageManager {
     private final AdminAreaProtectionPlugin plugin;
     private final Pattern placeholderPattern = Pattern.compile("\\{([^}]+)}");
     private final Logger logger;
-    private Config config;
+    private YamlConfig config;
     private String prefix;
     
     // Thread-safe caches for better concurrent access
@@ -48,8 +48,14 @@ public class LanguageManager {
             logger.debug("Created default language file: %s", langFile.getPath());
         }
 
-        // Load language file and validate
-        config = new Config(langFile, Config.YAML);
+        // Load language file with our custom YamlConfig instead of Nukkit's Config
+        config = new YamlConfig(langFile);
+        if (!config.exists() || !config.reload()) {
+            logger.error("Failed to load language file: %s", langFile.getPath());
+            // Create an empty config as fallback
+            config = new YamlConfig(langFile);
+        }
+        
         validateLanguageFile();
         
         prefix = getString("messages.prefix");
@@ -61,7 +67,7 @@ public class LanguageManager {
         validatePlaceholders();
         
         logger.debug("Loaded language file: %s", language);
-        logger.debug("Available sections: %s", String.join(", ", config.getRootSection().getKeys(false)));
+        logger.debug("Available sections: %s", String.join(", ", config.getKeys("")));
     }
 
     private void validateLanguageFile() {
@@ -254,13 +260,18 @@ public class LanguageManager {
             }
             placeholders.put("priority", String.valueOf(area.getPriority()));
         } else {
-            // Use player's world if available
+            // Use player's current world if available
             if (player != null && player.getLevel() != null) {
                 placeholders.put("world", player.getLevel().getName());
             } else {
                 placeholders.put("world", "unknown world");
             }
             placeholders.put("priority", "0");
+        }
+        
+        // Add player name if available
+        if (player != null) {
+            placeholders.put("player", player.getName());
         }
         
         // Note: the prefix will be automatically added by the get() method
@@ -358,192 +369,176 @@ public class LanguageManager {
      * Uses configurable format and timezone if specified in config
      */
     private String getCurrentTimeFormatted() {
-        try {
-            String timeFormat = config.getString("timeFormat", "HH:mm:ss");
-            String timezone = config.getString("timezone", "");
-            
-            java.text.SimpleDateFormat dateFormat = new java.text.SimpleDateFormat(timeFormat);
-            
-            // Set timezone if specified
-            if (!timezone.isEmpty()) {
-                dateFormat.setTimeZone(java.util.TimeZone.getTimeZone(timezone));
-            }
-            
-            return dateFormat.format(new java.util.Date());
-        } catch (Exception e) {
-            // Fallback to basic format if any error occurs
-            return new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date());
-        }
+        return new Date().toString();
     }
 
     private String getString(String path) {
-        return getStringWithDepth(path, 0);
-    }
-    
-    private String getStringWithDepth(String path, int depth) {
-        // Prevent excessive recursion
-        if (depth > 3) {
-            logger.debug("Excessive recursion detected when getting string: %s (depth: %d)", path, depth);
-            return null;
-        }
-        
-        if (path == null || path.isEmpty()) {
-            return null;
-        }
-        
-        // Check cache first
-        String cached = messageCache.get(path);
-        if (cached != null) {
-            return cached;
+        // Try the cache first
+        if (messageCache.containsKey(path)) {
+            return messageCache.get(path);
         }
 
-        // Try direct path
+        // Check if the key exists first
         if (config.exists(path)) {
-            String value = config.getString(path);
-            cacheMessage(path, value);
-            return value;
+            String message = config.getString(path);
+            // Cache the message for future use
+            cacheMessage(path, message);
+            return message;
         }
 
-        // Try alternate paths - but only once, with a "trying_alternate" flag to prevent recursion
-        if (!path.startsWith("trying_alternate:")) {
-            String alternate = tryAlternateKey("trying_alternate:" + path);
-            if (alternate != null) {
-                cacheMessage(path, alternate);
-                return alternate;
-            }
+        // If the key doesn't exist, try some alternate paths
+        String alternateMessage = tryAlternateKey(path);
+        if (alternateMessage != null) {
+            // Cache the alternate message for future use
+            cacheMessage(path, alternateMessage);
+            return alternateMessage;
         }
 
-        // Try traversing path parts
-        String[] parts = path.split("\\.");
-        Object current = config.getRootSection();
-
-        for (String part : parts) {
-            if (!(current instanceof Map)) {
-                return null;
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> map = (Map<String, Object>) current;
-            current = map.get(part);
-        }
-
-        if (current instanceof String) {
-            String value = (String) current;
-            cacheMessage(path, value);
-            return value;
-        }
-
+        // Key truly doesn't exist
         return null;
     }
 
+    /**
+     * Tries alternate key formats when a key is not found
+     */
+    private String tryAlternateKey(String path) {
+        // Common patterns:
+        // 1. Direct vs nested under messages
+        if (path.startsWith("messages.")) {
+            // Try without messages prefix
+            String altPath = path.substring("messages.".length());
+            if (config.exists(altPath)) {
+                return config.getString(altPath);
+            }
+        } else {
+            // Try with messages prefix
+            String altPath = "messages." + path;
+            if (config.exists(altPath)) {
+                return config.getString(altPath);
+            }
+        }
+        
+        // 2. If path has dots, try the last segment as a direct key
+        if (path.contains(".")) {
+            String lastSegment = path.substring(path.lastIndexOf(".") + 1);
+            if (config.exists(lastSegment)) {
+                return config.getString(lastSegment);
+            }
+        }
+        
+        // No alternate found
+        return null;
+    }
+
+    /**
+     * Cache a message
+     */
     private void cacheMessage(String path, String message) {
-        if (messageCache.size() < CACHE_SIZE_LIMIT) {
+        if (message != null && messageCache.size() < CACHE_SIZE_LIMIT) {
             messageCache.put(path, message);
         }
     }
 
+    /**
+     * Replace placeholders in a message
+     */
     protected String replacePlaceholders(String message, Map<String, String> placeholders) {
         if (message == null || placeholders == null || placeholders.isEmpty()) {
             return message;
         }
-
+        
+        // Use regex to find and replace all placeholders
         StringBuilder result = new StringBuilder(message);
         Matcher matcher = placeholderPattern.matcher(message);
         
-        boolean isDebug = plugin.isDebugMode();
-        if (isDebug) {
-            logger.debug("Replacing placeholders in message: \"%s\"", message);
-            logger.debug("Available placeholders: %s", placeholders.keySet());
-        }
+        // List to track offsets as we replace (since replacements can change string length)
+        List<Map.Entry<Integer, Integer>> replacements = new ArrayList<>();
         
-        int replacements = 0;
+        // Find all matches first
         while (matcher.find()) {
             String placeholder = matcher.group(1);
-            String value = placeholders.get(placeholder);
-            
-            if (value != null) {
-                if (isDebug) {
-                    logger.debug("  Replacing {%s} with \"%s\"", placeholder, value);
-                }
-                
-                int start = matcher.start();
-                int end = matcher.end();
-                result.replace(start, end, value);
-                matcher.reset(result);
-                replacements++;
-            } else if (isDebug) {
-                logger.debug("  No value found for placeholder {%s}", placeholder);
+            if (placeholders.containsKey(placeholder)) {
+                replacements.add(new AbstractMap.SimpleEntry<>(matcher.start(), matcher.end()));
             }
         }
         
-        if (isDebug && replacements > 0) {
-            logger.debug("Final message after %d replacements: \"%s\"", replacements, result.toString());
+        // Replace from end to start to avoid offset issues
+        for (int i = replacements.size() - 1; i >= 0; i--) {
+            Map.Entry<Integer, Integer> replacement = replacements.get(i);
+            int start = replacement.getKey();
+            int end = replacement.getValue();
+            
+            // Extract placeholder name (remove the { and })
+            String placeholder = message.substring(start + 1, end - 1);
+            String value = placeholders.get(placeholder);
+            
+            // Replace in the StringBuilder
+            if (value != null) {
+                result.replace(start, end, value);
+            }
         }
-
+        
         return result.toString();
     }
 
+    /**
+     * Build a cache key for messages with placeholders
+     */
     private String buildPlaceholderCacheKey(String path, Map<String, String> placeholders) {
         StringBuilder key = new StringBuilder(path);
-        // Sort placeholders by key for consistent cache keys
-        List<Map.Entry<String, String>> entries = new ArrayList<>(placeholders.entrySet());
-        entries.sort(Map.Entry.comparingByKey());
         
-        for (Map.Entry<String, String> entry : entries) {
-            key.append(':').append(entry.getKey()).append('=').append(entry.getValue());
+        // Sort placeholders by key for consistent cache key generation
+        List<String> sortedKeys = new ArrayList<>(placeholders.keySet());
+        Collections.sort(sortedKeys);
+        
+        for (String placeholder : sortedKeys) {
+            // Skip very large values to prevent cache key explosion
+            String value = placeholders.get(placeholder);
+            if (value != null && value.length() > 50) {
+                value = value.substring(0, 50) + "...";
+            }
+            key.append("#").append(placeholder).append("=").append(value);
         }
+        
         return key.toString();
     }
 
     /**
-     * Attempts to find alternate keys for common message patterns
+     * Log a missing key (but only once per key to avoid spam)
      */
-    private String tryAlternateKey(String path) {
-        // Remove the recursion prevention prefix if it exists
-        String realPath = path.startsWith("trying_alternate:") ? path.substring("trying_alternate:".length()) : path;
-        
-        // Check common prefix variations
-        String[] prefixes = {"messages.", "protection.", "gui.", "commands.", "errors."};
-        for (String prefix : prefixes) {
-            // Skip if the path already starts with this prefix to avoid recursion
-            if (!realPath.startsWith(prefix)) {
-                // Direct config access to avoid recursion
-                String alternatePath = prefix + realPath;
-                if (config.exists(alternatePath)) {
-                    return config.getString(alternatePath);
-                }
-            }
-        }
-        return null;
-    }
-
     private void logMissingKey(String path) {
         if (!reportedMissingKeys.contains(path)) {
-            logger.warn("Missing language key: %s", path);
             reportedMissingKeys.add(path);
+            logger.debug("Missing language key: %s", path);
         }
     }
 
     /**
-     * Gets statistics about language key usage
+     * Get statistics about language usage
      */
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("totalKeys", config.getRootSection().getAllMap().size());
-        stats.put("cachedMessages", messageCache.size());
-        stats.put("cachedCompiled", compiledMessageCache.size());
+        stats.put("usedKeysCount", usedKeys.size());
+        stats.put("totalKeysCount", getAllKeys().size());
+        stats.put("missingKeysCount", reportedMissingKeys.size());
         stats.put("missingKeys", new ArrayList<>(reportedMissingKeys));
-        stats.put("unusedKeys", getUnusedKeys());
-        stats.put("mostUsed", getMostUsedKeys(10));
+        stats.put("mostUsedKeys", getMostUsedKeys(10));
+        stats.put("messageCacheSize", messageCache.size());
         return stats;
     }
 
+    /**
+     * Get a list of unused keys
+     */
     private List<String> getUnusedKeys() {
-        return getAllKeys().stream()
-            .filter(key -> !usedKeys.contains(key))
-            .collect(Collectors.toList());
+        Set<String> allKeys = getAllKeys();
+        allKeys.removeAll(usedKeys);
+        return new ArrayList<>(allKeys);
     }
 
+    /**
+     * Get the most used keys
+     */
     private List<Map.Entry<String, Integer>> getMostUsedKeys(int limit) {
         return keyUsageCount.entrySet().stream()
             .sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
@@ -551,49 +546,46 @@ public class LanguageManager {
             .collect(Collectors.toList());
     }
 
+    /**
+     * Get all keys in the language file
+     */
     private Set<String> getAllKeys() {
         return getAllKeys(config.getRootSection(), "");
     }
 
+    /**
+     * Get all keys in a section
+     */
     private Set<String> getAllKeys(Map<String, Object> section, String prefix) {
         Set<String> keys = new HashSet<>();
-        section.forEach((key, value) -> {
-            String fullKey = prefix.isEmpty() ? key : prefix + "." + key;
-            if (value instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> subSection = (Map<String, Object>) value;
-                keys.addAll(getAllKeys(subSection, fullKey));
-            } else {
-                keys.add(fullKey);
+        
+        for (Map.Entry<String, Object> entry : section.entrySet()) {
+            String key = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
+            keys.add(key);
+            
+            if (entry.getValue() instanceof Map) {
+                //noinspection unchecked
+                keys.addAll(getAllKeys((Map<String, Object>) entry.getValue(), key));
             }
-        });
+        }
+        
         return keys;
     }
 
     /**
-     * Reloads the language configuration
+     * Reload the language configuration
      */
     public void reload() {
-        // Clear all caches first
-        clearCaches();
-        
-        // Load language file again
         loadLanguage();
-        
-        logger.info("Language configuration reloaded successfully");
     }
 
     /**
-     * Clears all caches
+     * Clear message caches
      */
     public void clearCaches() {
         messageCache.clear();
         compiledMessageCache.clear();
-        reportedMissingKeys.clear();
-        usedKeys.clear();
-        keyUsageCount.clear();
-        
-        logger.debug("Language caches cleared");
+        permissionCache.clear();
     }
 
     private boolean checkPlayerSpecificPermissions(Player player, Area area, String normalizedPermission, String cacheKey) {

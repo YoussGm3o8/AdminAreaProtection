@@ -108,7 +108,6 @@ messages:
     door: "{prefix}§cВы не можете открывать двери в {area}"
     noCreativeFlight: "{prefix}§cВы не можете летать в {area} в режиме креатива, добавьте разрешение игроку, чтобы разрешить это"
     noFlight: "{prefix}§cВы не можете летать в {area}"
-    animalSpawn: "{prefix}§cВы не можете спавнить животных в {area}"
     fallDamage: "{prefix}§cВы не можете получать урон от падения в {area}"
     xpDrop: "{prefix}§cВаш опыт не был выброшен в {area}!"
     chorusFruit: "{prefix}§cТелепортация с помощью плода хоруса не разрешена в {area}"
@@ -149,6 +148,9 @@ messages:
       merge: "{prefix}§cИспользование: /area merge <область1> <область2>"
       visualize: "{prefix}§cИспользование: /area visualize <названиеОбласти>"
       stats: "{prefix}§cИспользование: /area stats <названиеОбласти> [export|reset]"
+      edit: "{prefix}§cИспользование: /area edit <названиеОбласти>"
+      delete: "{prefix}§cИспользование: /area delete <названиеОбласти>"
+      playerOnly: "{prefix}§cЭта команда может быть использована только в игре"
 
   # Error messages
   error:
@@ -678,12 +680,15 @@ gui:
 titles:
   enter:
     default:
-      main: "§aВход в {area}"
+      main: "§aВы входите в {area}"
       subtitle: "Добро пожаловать в {area}, {player}!"
   leave:
     default:
-      main: "§eВыход из {area}"
-      subtitle: "До свидания {player}, возвращайтесь скорее в {area}!"
+      main: "§eВы покидаете {area}"
+      subtitle: "До свидания, {player}, возвращайтесь скорее в {area}!"
+  validation:
+    tooLong: "{prefix}§cЗаголовок не может быть длиннее {max} символов"
+    invalidFormat: "{prefix}§cНедопустимый формат заголовка"
 
 # Area list format
 protectedAreaEntry: "§8- %s\n  §8Мир: %s\n  §8Приоритет: %d"
@@ -693,15 +698,10 @@ toggleList: "§2Доступные переключатели:"
 
 # Potion effect messages
 potionEffect:
-  applied: "{prefix}§aЭффект {effect} (уровень {strength}) применен из области {area}"
-  removed: "{prefix}§eЭффект {effect} из области {area} закончился"
+  applied: "{prefix}§aЭффект {effect} (уровень {strength}) применен из зоны {area}"
+  removed: "{prefix}§eЭффект {effect} из зоны {area} истек"
   strength:
-    set: "{prefix}§aУстановлена сила эффекта {effect} на {strength} в области {area}"
-    outOfRange: "{prefix}§cЗначение силы должно быть между 0 и 10"
+    set: "{prefix}§aУстановлена сила эффекта {effect} на {strength} в зоне {area}"
+    outOfRange: "{prefix}§cЗначение силы должно быть от 0 до 10"
     invalid: "{prefix}§cНедопустимое значение силы, должно быть числом"
-
-# New titles validation messages
-titles:
-  tooLong: "{prefix}§cЗаголовок не может быть длиннее {max} символов"
-  invalidFormat: "{prefix}§cНедопустимый формат заголовка"
 
