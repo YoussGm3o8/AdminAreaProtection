@@ -699,8 +699,4 @@ potionEffect:
     set: "{prefix}§aSet {effect} effect strength to {strength} in area {area}"
     outOfRange: "{prefix}§cStrength value must be between 0 and 10"
     invalid: "{prefix}§cInvalid strength value, must be a number"
-
-titles:
-  tooLong: "{prefix}§cTitle cannot be longer than {max} characters"
-  invalidFormat: "{prefix}§cInvalid title format"
-
+  
