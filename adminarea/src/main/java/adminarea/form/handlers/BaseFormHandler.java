@@ -3,6 +3,7 @@ package adminarea.form.handlers;
 import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.form.IFormHandler;
+import adminarea.form.adapter.FormResponseAdapter;
 import cn.nukkit.Player;
 import cn.nukkit.form.response.FormResponseCustom;
 import cn.nukkit.form.response.FormResponseModal;
@@ -18,9 +19,11 @@ import java.util.HashMap;
  */
 public abstract class BaseFormHandler implements IFormHandler {
     protected final AdminAreaProtectionPlugin plugin;
+    protected FormResponseAdapter adapter;
     
     public BaseFormHandler(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
+        this.adapter = plugin.getFormRegistry().getFormResponseAdapter();
     }
     
     /**
@@ -72,7 +75,12 @@ public abstract class BaseFormHandler implements IFormHandler {
             } else {
                 // Direct response handling (already processed by FormWindow)
                 if (response instanceof FormResponseCustom) {
-                    handleCustomResponse(player, (FormResponseCustom) response);
+                    // Log all responses for debugging
+                    FormResponseCustom customResponse = (FormResponseCustom) response;
+                    if (plugin.isDebugMode()) {
+                        adapter.logAllResponses(customResponse);
+                    }
+                    handleCustomResponse(player, customResponse);
                 } else if (response instanceof FormResponseSimple) {
                     handleSimpleResponse(player, (FormResponseSimple) response);
                 } else if (response instanceof FormResponseModal) {
@@ -197,6 +205,54 @@ public abstract class BaseFormHandler implements IFormHandler {
         return node;
     }
 
+    /**
+     * Safely gets a string input response from a custom form.
+     * Uses the adapter to handle API differences.
+     * 
+     * @param response The form response
+     * @param index The index of the input element
+     * @return The string value or empty string if null
+     */
+    protected String getInputResponse(FormResponseCustom response, int index) {
+        return adapter.getInputResponse(response, index);
+    }
+    
+    /**
+     * Safely gets a boolean toggle response from a custom form.
+     * Uses the adapter to handle API differences.
+     * 
+     * @param response The form response
+     * @param index The index of the toggle element
+     * @return The boolean value or false if error
+     */
+    protected boolean getToggleResponse(FormResponseCustom response, int index) {
+        return adapter.getToggleResponse(response, index);
+    }
+    
+    /**
+     * Safely gets a dropdown response from a custom form.
+     * Uses the adapter to handle API differences.
+     * 
+     * @param response The form response
+     * @param index The index of the dropdown element
+     * @return The selected index or -1 if error
+     */
+    protected int getDropdownResponse(FormResponseCustom response, int index) {
+        return adapter.getDropdownResponse(response, index);
+    }
+    
+    /**
+     * Safely gets a slider response from a custom form.
+     * Uses the adapter to handle API differences.
+     * 
+     * @param response The form response
+     * @param index The index of the slider element
+     * @return The slider value or 0 if error
+     */
+    protected float getSliderResponse(FormResponseCustom response, int index) {
+        return adapter.getSliderResponse(response, index);
+    }
+    
     /**
      * Updates area toggle states consistently and returns the number of changes made
      * @param area The area to update

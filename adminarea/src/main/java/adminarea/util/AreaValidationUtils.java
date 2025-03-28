@@ -226,18 +226,99 @@ public class AreaValidationUtils {
             return getGlobalCoordinates();
         }
         
+        String x1Str = response.getInputResponse(startIndex);
+        String y1Str = response.getInputResponse(startIndex + 1);
+        String z1Str = response.getInputResponse(startIndex + 2);
+        String x2Str = response.getInputResponse(startIndex + 3);
+        String y2Str = response.getInputResponse(startIndex + 4);
+        String z2Str = response.getInputResponse(startIndex + 5);
+        
         try {
-            int x1 = Integer.parseInt(response.getInputResponse(startIndex));
-            int y1 = Integer.parseInt(response.getInputResponse(startIndex + 1));
-            int z1 = Integer.parseInt(response.getInputResponse(startIndex + 2));
-            int x2 = Integer.parseInt(response.getInputResponse(startIndex + 3));
-            int y2 = Integer.parseInt(response.getInputResponse(startIndex + 4));
-            int z2 = Integer.parseInt(response.getInputResponse(startIndex + 5));
+            int x1 = Integer.parseInt(x1Str);
+            int y1 = Integer.parseInt(y1Str);
+            int z1 = Integer.parseInt(z1Str);
+            int x2 = Integer.parseInt(x2Str);
+            int y2 = Integer.parseInt(y2Str);
+            int z2 = Integer.parseInt(z2Str);
             
+            // Validate coordinate ranges
+            validateCoordinateRange(x1, "X");
+            validateCoordinateRange(x2, "X");
+            validateCoordinateRange(y1, "Y");
+            validateCoordinateRange(y2, "Y");
+            validateCoordinateRange(z1, "Z");
+            validateCoordinateRange(z2, "Z");
+            
+            // Return normalized coordinates
             return validateAndNormalizeCoordinates(x1, y1, z1, x2, y2, z2);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid coordinate format. All coordinates must be valid numbers.");
+            throw new IllegalArgumentException("Invalid coordinate format. Please use valid numbers.");
         }
+    }
+    
+    /**
+     * Parses coordinates from form inputs, handling relative coordinates.
+     * 
+     * @param player Player for relative coordinates
+     * @param x1Str First X coordinate string
+     * @param y1Str First Y coordinate string
+     * @param z1Str First Z coordinate string
+     * @param x2Str Second X coordinate string
+     * @param y2Str Second Y coordinate string
+     * @param z2Str Second Z coordinate string
+     * @return Normalized coordinates array [x1, x2, y1, y2, z1, z2]
+     */
+    public int[] parseCoordinates(Player player, String x1Str, String y1Str, String z1Str, 
+                                String x2Str, String y2Str, String z2Str) {
+        try {
+            // Parse coordinate strings, handle relative notation
+            int x1 = parseCoordinate(x1Str, player != null ? player.getFloorX() : 0);
+            int y1 = parseCoordinate(y1Str, player != null ? player.getFloorY() : 0);
+            int z1 = parseCoordinate(z1Str, player != null ? player.getFloorZ() : 0);
+            int x2 = parseCoordinate(x2Str, player != null ? player.getFloorX() : 0);
+            int y2 = parseCoordinate(y2Str, player != null ? player.getFloorY() : 0);
+            int z2 = parseCoordinate(z2Str, player != null ? player.getFloorZ() : 0);
+            
+            // Validate coordinate ranges
+            validateCoordinateRange(x1, "X");
+            validateCoordinateRange(x2, "X");
+            validateCoordinateRange(y1, "Y");
+            validateCoordinateRange(y2, "Y");
+            validateCoordinateRange(z1, "Z");
+            validateCoordinateRange(z2, "Z");
+            
+            // Return normalized coordinates
+            return validateAndNormalizeCoordinates(x1, y1, z1, x2, y2, z2);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid coordinate format. Please use valid numbers.");
+        }
+    }
+    
+    /**
+     * Parses a single coordinate string, handling relative notation.
+     *
+     * @param coordStr The coordinate string
+     * @param baseCoord The base coordinate for relative values
+     * @return The parsed coordinate
+     */
+    private int parseCoordinate(String coordStr, int baseCoord) {
+        if (coordStr == null || coordStr.isEmpty()) {
+            throw new IllegalArgumentException("Coordinate cannot be empty");
+        }
+        
+        if (coordStr.equals("~")) {
+            return baseCoord;
+        }
+        
+        if (coordStr.startsWith("~")) {
+            // Relative coordinate (e.g. ~5 or ~-10)
+            String offsetStr = coordStr.substring(1);
+            int offset = Integer.parseInt(offsetStr);
+            return baseCoord + offset;
+        }
+        
+        // Absolute coordinate
+        return Integer.parseInt(coordStr);
     }
     
     /**
@@ -320,60 +401,116 @@ public class AreaValidationUtils {
     }
     
     /**
-     * Validates toggle settings from form data and creates a JSONObject
+     * Validates and creates a JSONObject of toggle settings from form responses.
+     * Updates the changedSettings counter with the number of modified toggles.
      * 
      * @param response The form response
-     * @param toggleStartIndex The index of the first toggle 
-     * @param changedSettings Reference to count number of changed settings
-     * @return JSONObject with validated toggle settings
+     * @param toggleStartIndex The index where toggles start in the form
+     * @param changedSettings An array with a single int to update with count of changes
+     * @return A JSONObject containing all toggle settings
      */
     public JSONObject validateAndCreateToggleSettings(FormResponseCustom response, int toggleStartIndex, int[] changedSettings) {
         JSONObject settings = new JSONObject();
+        changedSettings[0] = 0;
+        
+        // Get default toggles directly instead of going through a manager
+        List<PermissionToggle> defaultToggles = PermissionToggle.getDefaultToggles();
         int toggleIndex = toggleStartIndex;
         
-        // Process toggle settings by category
-        for (PermissionToggle.Category category : PermissionToggle.Category.values()) {
-            // Skip category label (increment toggle index)
-            toggleIndex++;
+        // Process toggle settings
+        for (PermissionToggle toggle : defaultToggles) {
+            String key = toggle.getPermissionNode();
+            boolean defaultValue = toggle.getDefaultValue();
             
-            List<PermissionToggle> toggles = PermissionToggle.getTogglesByCategory().get(category);
-            if (toggles != null) {
-                for (PermissionToggle toggle : toggles) {
-                    try {
-                        String permissionNode = toggle.getPermissionNode();
-                        // Get toggle response at current index
-                        Object rawResponse = response.getResponse(toggleIndex);
-                        if (rawResponse instanceof Boolean) {
-                            boolean toggleValue = (Boolean) rawResponse;
-                            settings.put(permissionNode, toggleValue);
-                            changedSettings[0]++;
-                            logDebug("Set toggle " + permissionNode + " to " + toggleValue);
-                        } else {
-                            // Use default value if response is invalid
-                            settings.put(permissionNode, toggle.getDefaultValue());
-                            logDebug("Using default value for " + permissionNode + ": " + toggle.getDefaultValue());
-                        }
-                        toggleIndex++; // Move to next toggle position
-                    } catch (Exception e) {
-                        plugin.getLogger().debug("Error processing toggle " + toggle.getPermissionNode() + ": " + e.getMessage());
-                        settings.put(toggle.getPermissionNode(), toggle.getDefaultValue());
-                        toggleIndex++; // Still need to move to next position even on error
-                    }
+            try {
+                // Get toggle response
+                boolean isEnabled = response.getToggleResponse(toggleIndex);
+                
+                // Store in settings object
+                settings.put(key, isEnabled);
+                
+                // Count changed settings from default
+                if (isEnabled != defaultValue) {
+                    changedSettings[0]++;
+                }
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Toggle " + key + " at index " + toggleIndex + ": " + isEnabled + 
+                        (isEnabled != defaultValue ? " (changed from default)" : ""));
+                }
+            } catch (Exception e) {
+                // Use default on error
+                settings.put(key, defaultValue);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Error getting toggle for " + key + " at index " + toggleIndex + 
+                        ": " + e.getMessage() + " - using default: " + defaultValue);
                 }
             }
-        }
-        
-        // Validate toggle dependencies and conflicts
-        try {
-            ValidationUtils.validateToggleDependencies(settings);
-            ValidationUtils.validateToggleConflicts(settings);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid toggle configuration: " + e.getMessage());
+            
+            toggleIndex++;
         }
         
         return settings;
     }
-
+    
+    /**
+     * Validates and creates a JSONObject of toggle settings from form responses.
+     * Uses the FormResponseAdapter for consistent handling across API versions.
+     * Updates the changedSettings counter with the number of modified toggles.
+     * 
+     * @param response The form response
+     * @param toggleStartIndex The index where toggles start in the form
+     * @param changedSettings An array with a single int to update with count of changes
+     * @param adapter The form response adapter
+     * @return A JSONObject containing all toggle settings
+     */
+    public JSONObject validateAndCreateToggleSettings(FormResponseCustom response, int toggleStartIndex, 
+                                                int[] changedSettings, adminarea.form.adapter.FormResponseAdapter adapter) {
+        JSONObject settings = new JSONObject();
+        changedSettings[0] = 0;
+        
+        // Get default toggles directly instead of going through a manager
+        List<PermissionToggle> defaultToggles = PermissionToggle.getDefaultToggles();
+        int toggleIndex = toggleStartIndex;
+        
+        // Process toggle settings
+        for (PermissionToggle toggle : defaultToggles) {
+            String key = toggle.getPermissionNode();
+            boolean defaultValue = toggle.getDefaultValue();
+            
+            try {
+                // Get toggle response using adapter
+                boolean isEnabled = adapter.getToggleResponse(response, toggleIndex);
+                
+                // Store in settings object
+                settings.put(key, isEnabled);
+                
+                // Count changed settings from default
+                if (isEnabled != defaultValue) {
+                    changedSettings[0]++;
+                }
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Toggle " + key + " at index " + toggleIndex + ": " + isEnabled + 
+                        (isEnabled != defaultValue ? " (changed from default)" : ""));
+                }
+            } catch (Exception e) {
+                // Use default on error
+                settings.put(key, defaultValue);
+                
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Error getting toggle for " + key + " at index " + toggleIndex + 
+                        ": " + e.getMessage() + " - using default: " + defaultValue);
+                }
+            }
+            
+            toggleIndex++;
+        }
+        
+        return settings;
+    }
+    
     /**
      * Validates that an area doesn't overlap with existing areas
      * 

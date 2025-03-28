@@ -1,15 +1,19 @@
 package adminarea.form;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.form.adapter.FormRegistryFactory;
+import adminarea.form.adapter.FormResponseAdapter;
 import adminarea.form.handlers.*;
 import java.util.*;
 
 public class FormRegistry {
     private final AdminAreaProtectionPlugin plugin;
     private final Map<String, IFormHandler> handlers = new HashMap<>();
+    private FormResponseAdapter formResponseAdapter;
 
     public FormRegistry(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
+        this.formResponseAdapter = FormRegistryFactory.getFormResponseAdapter(plugin);
     }
 
     public void initialize() {
@@ -20,7 +24,7 @@ public class FormRegistry {
     }
 
     private void registerDefaultHandlers() {
-        plugin.debug("Registering default form handlers...");
+        plugin.debug("Registerin    ndlers...");
         try {
             // Core handlers
             registerHandler(new MainMenuHandler(plugin));
@@ -62,6 +66,15 @@ public class FormRegistry {
 
     public IFormHandler getHandler(String formId) {
         return handlers.get(formId);
+    }
+    
+    /**
+     * Gets the form response adapter for consistent handling of form inputs.
+     * 
+     * @return The FormResponseAdapter instance
+     */
+    public FormResponseAdapter getFormResponseAdapter() {
+        return formResponseAdapter;
     }
 
     @Override

@@ -157,7 +157,7 @@ public class EditAreaHandler extends BaseFormHandler {
         plugin.getGuiManager().openFormById(player, formId, area);
     }
 
-    private Area getEditingArea(Player player) {
+    protected Area getEditingArea(Player player) {
         var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
         if (areaData == null) return null;
         return plugin.getArea(areaData.getFormId());

@@ -154,7 +154,7 @@ public class CategorySettingsHandler extends BaseFormHandler {
         updateAreaAndNotifyPlayer(player, area, changedToggles, FormIds.EDIT_AREA, category.name().toLowerCase());
     }
 
-    private Area getEditingArea(Player player) {
+    protected Area getEditingArea(Player player) {
         var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
         if (areaData == null) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));

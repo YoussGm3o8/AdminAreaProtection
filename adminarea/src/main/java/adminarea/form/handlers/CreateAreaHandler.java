@@ -23,21 +23,21 @@ import adminarea.area.AreaDTO;
 
 public class CreateAreaHandler extends BaseFormHandler {
 
-    private static final int NAME_INDEX = 1;
-    private static final int PRIORITY_INDEX = 2;
-    private static final int SHOW_TITLE_INDEX = 3;
-    private static final int PROTECT_WORLD_INDEX = 4;
-    private static final int POS1_X_INDEX = 6;
-    private static final int POS1_Y_INDEX = 7;
-    private static final int POS1_Z_INDEX = 8;
-    private static final int POS2_X_INDEX = 9;
-    private static final int POS2_Y_INDEX = 10;
-    private static final int POS2_Z_INDEX = 11;
-    private static final int ENTER_TITLE_INDEX = 12;
-    private static final int ENTER_MESSAGE_INDEX = 13;
-    private static final int LEAVE_TITLE_INDEX = 14;
-    private static final int LEAVE_MESSAGE_INDEX = 15;
-    private static final int TOGGLE_START_INDEX = 17;
+    private static final int NAME_INDEX = 2;
+    private static final int PRIORITY_INDEX = 3;
+    private static final int SHOW_TITLE_INDEX = 4;
+    private static final int PROTECT_WORLD_INDEX = 6;
+    private static final int POS1_X_INDEX = 8;
+    private static final int POS1_Y_INDEX = 9;
+    private static final int POS1_Z_INDEX = 10;
+    private static final int POS2_X_INDEX = 11;
+    private static final int POS2_Y_INDEX = 12;
+    private static final int POS2_Z_INDEX = 13;
+    private static final int ENTER_TITLE_INDEX = 14;
+    private static final int ENTER_MESSAGE_INDEX = 15;
+    private static final int LEAVE_TITLE_INDEX = -1;
+    private static final int LEAVE_MESSAGE_INDEX = -1;
+    private static final int TOGGLE_START_INDEX = 19;
 
     private final AreaValidationUtils areaValidationUtils;
 
@@ -59,8 +59,15 @@ public class CreateAreaHandler extends BaseFormHandler {
         }
 
         try {
-            // Get basic info
-            String name = response.getInputResponse(NAME_INDEX);
+            // Log all form responses in debug mode
+            if (plugin.isDebugMode()) {
+                plugin.debug("Processing form response for CreateAreaHandler");
+                adapter.logAllResponses(response);
+            }
+            
+            // Get area name - use simpler approach with exact index
+            String name = getInputResponse(response, NAME_INDEX);
+            
             if (name == null || name.trim().isEmpty()) {
                 player.sendMessage(plugin.getLanguageManager().get("validation.form.area.name.required"));
                 cleanup(player);
@@ -92,7 +99,7 @@ public class CreateAreaHandler extends BaseFormHandler {
             
             int priority;
             try {
-                priority = Integer.parseInt(response.getInputResponse(PRIORITY_INDEX));
+                priority = Integer.parseInt(getInputResponse(response, PRIORITY_INDEX));
                 if (!areaValidationUtils.validatePriority(priority, player, FormIds.CREATE_AREA)) {
                     cleanup(player);
                     markValidationErrorShown(); // Mark that we've already shown a specific error
@@ -106,17 +113,23 @@ public class CreateAreaHandler extends BaseFormHandler {
                 return;
             }
             
-            boolean showTitle = response.getToggleResponse(SHOW_TITLE_INDEX);
-            boolean isGlobal = response.getToggleResponse(PROTECT_WORLD_INDEX);
+            boolean showTitle = getToggleResponse(response, SHOW_TITLE_INDEX);
+            boolean isGlobal = getToggleResponse(response, PROTECT_WORLD_INDEX);
             String worldName = player.getLevel().getName();
 
             // Get title messages if show title is enabled
             String enterTitle = "", enterMsg = "", leaveTitle = "", leaveMsg = "";
             if (showTitle) {
-                enterTitle = response.getInputResponse(ENTER_TITLE_INDEX);
-                enterMsg = response.getInputResponse(ENTER_MESSAGE_INDEX);
-                leaveTitle = response.getInputResponse(LEAVE_TITLE_INDEX);
-                leaveMsg = response.getInputResponse(LEAVE_MESSAGE_INDEX);
+                enterTitle = getInputResponse(response, ENTER_TITLE_INDEX);
+                enterMsg = getInputResponse(response, ENTER_MESSAGE_INDEX);
+                
+                // Only try to get leave messages if the form has those fields
+                if (LEAVE_TITLE_INDEX > 0) {
+                    leaveTitle = getInputResponse(response, LEAVE_TITLE_INDEX);
+                }
+                if (LEAVE_MESSAGE_INDEX > 0) {
+                    leaveMsg = getInputResponse(response, LEAVE_MESSAGE_INDEX);
+                }
                 
                 if (enterTitle == null) enterTitle = "";
                 if (enterMsg == null) enterMsg = "";
@@ -134,7 +147,33 @@ public class CreateAreaHandler extends BaseFormHandler {
             // Extract and validate coordinates
             int[] coords;
             try {
-                coords = areaValidationUtils.extractCoordinatesFromForm(response, POS1_X_INDEX, isGlobal);
+                if (isGlobal) {
+                    // For global areas, use world bounds
+                    coords = new int[] {
+                        -30000000, 30000000, // x1, x2
+                        0, 256,              // y1, y2
+                        -30000000, 30000000  // z1, z2
+                    };
+                } else {
+                    // Extract coordinates from form
+                    String x1Str = getInputResponse(response, POS1_X_INDEX);
+                    String y1Str = getInputResponse(response, POS1_Y_INDEX);
+                    String z1Str = getInputResponse(response, POS1_Z_INDEX);
+                    String x2Str = getInputResponse(response, POS2_X_INDEX);
+                    String y2Str = getInputResponse(response, POS2_Y_INDEX);
+                    String z2Str = getInputResponse(response, POS2_Z_INDEX);
+                    
+                    // Log the coordinates for debugging
+                    if (plugin.isDebugMode()) {
+                        plugin.debug("Extracted coordinates: " + 
+                            "x1=" + x1Str + ", y1=" + y1Str + ", z1=" + z1Str + ", " +
+                            "x2=" + x2Str + ", y2=" + y2Str + ", z2=" + z2Str);
+                    }
+                    
+                    // Parse coordinates, handling relative values
+                    coords = areaValidationUtils.parseCoordinates(
+                        player, x1Str, y1Str, z1Str, x2Str, y2Str, z2Str);
+                }
             } catch (IllegalArgumentException e) {
                 player.sendMessage(plugin.getLanguageManager().get("validation.form.area.selection.invalid", 
                     Map.of("error", e.getMessage())));
@@ -170,13 +209,12 @@ public class CreateAreaHandler extends BaseFormHandler {
                 .build()
                 .toDTO();
             
-            // Process permission toggles using centralized validation
+            // Use the original validateAndCreateToggleSettings method
             int[] changedSettings = new int[1]; // Use array to pass by reference
             JSONObject settings;
             
             try {
-                settings = areaValidationUtils.validateAndCreateToggleSettings(
-                    response, TOGGLE_START_INDEX, changedSettings);
+                settings = areaValidationUtils.validateAndCreateToggleSettings(response, TOGGLE_START_INDEX, changedSettings);
             } catch (IllegalArgumentException e) {
                 player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidToggles") + ": " + e.getMessage());
                 // Clean up form data on validation failure
@@ -198,70 +236,29 @@ public class CreateAreaHandler extends BaseFormHandler {
                 plugin.debug("  Toggle states: " + settings.toString());
             }
             
-            // Save title configuration if enabled
-            if (showTitle) {
-                areaValidationUtils.configureAreaTitles(name, enterTitle, enterMsg, leaveTitle, leaveMsg);
-            }
+            // Add the area to the plugin
+            plugin.getAreaManager().addArea(area);
             
-            // Save the area
-            if (plugin.isDebugMode()) {
-                plugin.debug("Saving area to database: " + area.getName());
-            }
-            
+            // Save to database if available
             try {
-                // Save directly to the database
-                plugin.getDatabaseManager().saveArea(area);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Area saved successfully to database");
-                }
-                
-                // Explicitly add to memory through area manager
-                plugin.getAreaManager().addArea(area);
-                
-                if (plugin.isDebugMode()) {
-                    plugin.debug("Area added to memory cache: " + area.getName());
-                    plugin.debug("Area cache size: " + plugin.getAreaManager().getAllAreas().size());
+                if (plugin.getDatabaseManager() != null) {
+                    plugin.getDatabaseManager().saveArea(area);
                 }
             } catch (Exception e) {
-                // Skip handling if it's a validation error already handled
-                if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
-                    // Just rethrow to let the parent handler deal with it
-                    throw (RuntimeException) e;
-                }
-                
-                plugin.getLogger().error("Failed to save area to database", e);
-                player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotSaved"));
-                cleanup(player);
-                markValidationErrorShown(); // Mark that we've already shown a specific error
-                return;
+                plugin.getLogger().error("Error saving area to database", e);
+                // Continue anyway - the area is already in memory
             }
             
-            player.sendMessage(plugin.getLanguageManager().get("messages.area.created",
-                Map.of("area", area.getName(),
-                       "world", area.getWorld(),
-                       "priority", String.valueOf(area.getPriority()))));
-
-            // Clear all form tracking data
-            cleanup(player);
+            player.sendMessage(plugin.getLanguageManager().get("messages.area.created", Map.of("area", name)));
             
-            // Open main menu instead of edit form
-            plugin.getFormIdMap().put(player.getName(), 
-                new FormTrackingData(FormIds.MAIN_MENU, System.currentTimeMillis()));
+            // Return to main menu
             plugin.getGuiManager().openMainMenu(player);
-
         } catch (Exception e) {
-            // Skip handling if it's a validation error already handled
-            if (e instanceof RuntimeException && e.getMessage() != null && e.getMessage().contains("_validation_error_already_shown")) {
-                // Just rethrow to let the parent handler deal with it
-                throw (RuntimeException) e;
+            if (plugin.isDebugMode()) {
+                plugin.debug("Error in CreateAreaHandler: " + e.getMessage());
+                e.printStackTrace();
             }
-            
-            plugin.getLogger().error("Error handling form response", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.errorProcessingInput"));
-            cleanup(player);
-            // Try to reopen the form
-            plugin.getGuiManager().openFormById(player, FormIds.CREATE_AREA, null);
+            throw e;
         }
     }
 
@@ -275,7 +272,7 @@ public class CreateAreaHandler extends BaseFormHandler {
         if (response == null) return false;
         
         // Basic info validation
-        String name = response.getInputResponse(NAME_INDEX);
+        String name = getInputResponse(response, NAME_INDEX);
         if (name == null || name.trim().isEmpty()) return false;
         
         // Check if area name already exists
@@ -283,15 +280,15 @@ public class CreateAreaHandler extends BaseFormHandler {
             return false;
         }
         
-        String priority = response.getInputResponse(PRIORITY_INDEX);
+        String priority = getInputResponse(response, PRIORITY_INDEX);
         if (priority == null || !priority.matches("\\d+")) return false;
         
         // Skip coordinates check if protecting entire world
-        boolean protectWorld = response.getToggleResponse(PROTECT_WORLD_INDEX);
+        boolean protectWorld = getToggleResponse(response, PROTECT_WORLD_INDEX);
         if (!protectWorld) {
             // Check all coordinate fields have valid numbers
             for (int i = POS1_X_INDEX; i <= POS2_Z_INDEX; i++) {
-                String coord = response.getInputResponse(i);
+                String coord = getInputResponse(response, i);
                 if (coord == null || !coord.matches("-?\\d+")) return false;
             }
         }

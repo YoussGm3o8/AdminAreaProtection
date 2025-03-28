@@ -171,7 +171,7 @@ public class TechnicalSettingsHandler extends BaseFormHandler {
         plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
     }
 
-    private Area getEditingArea(Player player) {
+    protected Area getEditingArea(Player player) {
         var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
         if (areaData == null) {
             player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
