@@ -1,367 +1,269 @@
 package adminarea.form.handlers;
 
 import adminarea.AdminAreaProtectionPlugin;
-import adminarea.area.Area;
-import adminarea.area.AreaBuilder;
-import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
-import adminarea.data.FormTrackingData;
-import adminarea.event.LuckPermsGroupChangeEvent;
+import adminarea.area.Area;
 import adminarea.permissions.PermissionToggle;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementButton;
+import cn.nukkit.form.element.ElementLabel;
 import cn.nukkit.form.element.ElementToggle;
-import cn.nukkit.form.response.FormResponseCustom;
-import cn.nukkit.form.response.FormResponseSimple;
-import cn.nukkit.form.window.FormWindow;
+import cn.nukkit.form.response.FormResponseData;
 import cn.nukkit.form.window.FormWindowCustom;
 import cn.nukkit.form.window.FormWindowSimple;
-import net.luckperms.api.model.group.Group;
-import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class GroupPermissionsHandler extends BaseFormHandler {
-
+/**
+ * Handler for group-specific permissions settings
+ */
+public class GroupPermissionsHandler {
+    private final AdminAreaProtectionPlugin plugin;
+    
+    /**
+     * Constructor
+     * 
+     * @param plugin Plugin instance
+     */
     public GroupPermissionsHandler(AdminAreaProtectionPlugin plugin) {
-        super(plugin);
+        this.plugin = plugin;
     }
-
-    @Override
-    public String getFormId() {
-        return FormIds.GROUP_PERMISSIONS;
+    
+    /**
+     * Open the group settings form for a player
+     * 
+     * @param player Player to open form for
+     */
+    public void open(Player player) {
+        player.sendMessage("§cYou need to select an area first.");
+        plugin.getFormModuleManager().openEditListForm(player);
     }
-
-    @Override
-    public FormWindow createForm(Player player) {
-        FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        if (areaData == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
-            return null;
-        }
-
-        Area area = plugin.getArea(areaData.getFormId());
+    
+    /**
+     * Open the group settings form for a player with a specific area
+     * 
+     * @param player Player to open form for
+     * @param area   Area to open form for
+     */
+    public void open(Player player, Area area) {
         if (area == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.areaNotFound"));
-            return null;
+            player.sendMessage("§cNo area selected.");
+            plugin.getFormModuleManager().openEditListForm(player);
+            return;
         }
-
-        // Check if we're selecting a group or editing permissions
-        FormTrackingData groupData = plugin.getFormIdMap().get(player.getName() + "_group");
-        if (groupData == null) {
-            // Show group selection form
-            FormWindowSimple form = new FormWindowSimple(
-                "Select Group - " + area.getName(),
-                "Choose a group to edit permissions for:"
-            );
-
-            Set<Group> groups = null;
-            try {
-                // Use reflection to safely access the group manager
-                Object luckPermsApi = plugin.getLuckPermsApi();
-                if (luckPermsApi != null) {
-                    Object groupManager = luckPermsApi.getClass().getMethod("getGroupManager").invoke(luckPermsApi);
-                    if (groupManager != null) {
-                        // Cast the result to the appropriate collection type
-                        groups = (Set<Group>) groupManager.getClass().getMethod("getLoadedGroups").invoke(groupManager);
-                    }
-                }
-            } catch (Exception e) {
-                plugin.getLogger().error("Error accessing LuckPerms groups", e);
-            }
-
-            if (groups != null) {
-                for (Group group : groups) {
-                    form.addButton(new ElementButton(group.getName()));
-                }
-            } else {
-                form.addButton(new ElementButton("No groups available"));
-            }
-
-            return form;
-        } else {
-            // Show permission editing form for selected group
-            String groupName = groupData.getFormId();
-            return createGroupPermissionForm(area, groupName);
-        }
+        
+        openGroupSelectionForm(player, area);
     }
-
-    private FormWindow createGroupPermissionForm(Area area, String groupName) {
-        FormWindowCustom form = new FormWindowCustom("Edit " + groupName + " Permissions - " + area.getName());
-
-        // Get current DTO
-        AreaDTO currentDTO = area.toDTO();
-        Map<String, Map<String, Boolean>> groupPerms = currentDTO.groupPermissions();
-        Map<String, Boolean> currentPerms = groupPerms.getOrDefault(groupName, new HashMap<>());
-
-        // Add toggles for each permission
+    
+    /**
+     * Open the group selection form
+     * 
+     * @param player Player to open form for
+     * @param area   Area to configure permissions for
+     */
+    private void openGroupSelectionForm(Player player, Area area) {
+        FormWindowSimple form = new FormWindowSimple(
+                "Select Group - " + area.getName(),
+                "Choose a group to edit permissions for:");
+        
+        // Get available groups from LuckPerms
+        List<String> groups = new ArrayList<>();
+        try {
+            Set<String> groupNames = plugin.getGroupNames();
+            if (groupNames != null && !groupNames.isEmpty()) {
+                for (String groupName : groupNames) {
+                    groups.add(groupName);
+                    form.addButton(new ElementButton(groupName));
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().error("Error accessing LuckPerms groups: " + e.getMessage());
+        }
+        
+        if (groups.isEmpty()) {
+            form.addButton(new ElementButton("No groups available"));
+        }
+        
+        // Show form to player
+        player.showFormWindow(form);
+        
+        // The form response will be handled by the FormResponseListener in the plugin
+        // We'll implement response handling in the next update
+    }
+    
+    /**
+     * Open group permission form for a specific group
+     * 
+     * @param player      Player to open form for
+     * @param area        Area to configure permissions for
+     * @param groupName   Group to configure permissions for
+     */
+    private void openGroupPermissionForm(Player player, Area area, String groupName) {
+        FormWindowCustom form = new FormWindowCustom("Group Permissions: " + groupName);
+        
+        // Get current permissions for this group
+        Map<String, Boolean> currentPerms = new HashMap<>();
+        Map<String, Map<String, Boolean>> groupPerms = area.getGroupPermissions();
+        if (groupPerms != null && groupPerms.containsKey(groupName)) {
+            Map<String, Boolean> perms = groupPerms.get(groupName);
+            if (perms != null) {
+                currentPerms.putAll(perms);
+            }
+        }
+        
+        // Add header with instructions
+        form.addElement(new ElementLabel("Configure permissions for group: " + groupName));
+        
+        // Add toggles for relevant permissions
         for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-            String description = plugin.getLanguageManager().get(
-                "gui.permissions.toggles." + toggle.getPermissionNode());
-            form.addElement(new ElementToggle(
-                toggle.getDisplayName() + "\n§7" + description,
-                currentPerms.getOrDefault(toggle.getPermissionNode(), false)
-            ));
+            boolean currentValue = currentPerms.getOrDefault(toggle.getPermissionNode(), false);
+            form.addElement(new ElementToggle(toggle.getDisplayName(), currentValue));
         }
         
         // Add toggle for deleting permissions
-        form.addElement(new ElementToggle(
-            plugin.getLanguageManager().get("gui.permissions.deletePermissions", 
-                Map.of("default", plugin.getLanguageManager().get("gui.labels.delete"))),
-            false
-        ));
-
-        return form;
+        form.addElement(new ElementToggle("Delete all permissions for this group", false));
+        
+        // Show form to player
+        player.showFormWindow(form);
+        
+        // The form response will be handled by the FormResponseListener in the plugin
     }
-
-    @Override
-    public FormWindow createForm(Player player, Area area) {
-        if (area == null) return null;
-        return createForm(player);
-    }
-
-    @Override
-    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
+    
+    /**
+     * Process the response from the group selection form
+     * 
+     * @param player    Player who submitted the form
+     * @param area      Area being edited
+     * @param response  The form response
+     */
+    public void handleGroupSelectionResponse(Player player, Area area, Object response) {
         if (response == null) {
-            handleCancel(player);
+            // Handle cancellation
+            plugin.getFormModuleManager().openEditForm(player, area);
             return;
         }
-
-        FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
-        if (areaData == null) return;
-
-        Area area = plugin.getArea(areaData.getFormId());
-        if (area == null) return;
-
-        // Get selected group
-        String groupName = null;
+        
         try {
-            // Use reflection to access the group list
-            Object luckPermsApi = plugin.getLuckPermsApi();
-            if (luckPermsApi != null) {
-                Object groupManager = luckPermsApi.getClass().getMethod("getGroupManager").invoke(luckPermsApi);
-                if (groupManager != null) {
-                    Set<Group> loadedGroups = (Set<Group>) groupManager.getClass().getMethod("getLoadedGroups").invoke(groupManager);
-                    if (loadedGroups != null) {
-                        // Skip to the selected group and get its name
-                        groupName = loadedGroups.stream()
-                            .skip(response.getClickedButtonId())
-                            .findFirst()
-                            .map(Group::getName)
-                            .orElse(null);
-                    }
-                }
+            int buttonId = ((cn.nukkit.form.response.FormResponseSimple) response).getClickedButtonId();
+            
+            // Get available groups
+            List<String> groups = new ArrayList<>(plugin.getGroupNames());
+            
+            if (groups.isEmpty() || buttonId >= groups.size()) {
+                player.sendMessage("§cNo groups available or invalid selection.");
+                plugin.getFormModuleManager().openEditForm(player, area);
+                return;
             }
+            
+            String selectedGroup = groups.get(buttonId);
+            
+            // Store the selected group in form tracking data
+            plugin.getFormIdMap().put(player.getName() + "_selected_group", 
+                new adminarea.data.FormTrackingData(selectedGroup, System.currentTimeMillis()));
+            
+            if (plugin.isDebugMode()) {
+                plugin.debug("Stored selected group in tracking data: " + selectedGroup);
+            }
+            
+            openGroupPermissionForm(player, area, selectedGroup);
         } catch (Exception e) {
-            plugin.getLogger().error("Error getting selected group", e);
+            plugin.getLogger().error("Error processing group selection: " + e.getMessage());
+            e.printStackTrace();
+            player.sendMessage("§cAn error occurred while selecting a group.");
+            plugin.getFormModuleManager().openEditForm(player, area);
         }
-
-        if (groupName == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.invalidGroup"));
-            return;
-        }
-
-        // Store selected group and show permission form
-        plugin.getFormIdMap().put(player.getName() + "_group",
-            new FormTrackingData(groupName, System.currentTimeMillis()));
-        plugin.getGuiManager().openFormById(player, FormIds.GROUP_PERMISSIONS, area);
     }
-
-    @Override
-    protected void handleCustomResponse(Player player, FormResponseCustom response) {
+    
+    /**
+     * Process the response from the group permission form
+     * 
+     * @param player     Player who submitted the form
+     * @param area       Area being edited
+     * @param groupName  Group being edited
+     * @param response   The form response
+     */
+    public void handleGroupPermissionResponse(Player player, Area area, String groupName, Object response) {
         if (response == null) {
-            handleCancel(player);
+            // Handle cancellation
+            plugin.getFormModuleManager().openEditForm(player, area);
             return;
         }
-
+        
         try {
-            FormTrackingData areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
-            FormTrackingData groupData = plugin.getFormIdMap().get(player.getName() + "_group");
-
-            if (areaData == null || groupData == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.form.invalidSession"));
-                return;
-            }
-
-            Area area = plugin.getArea(areaData.getFormId());
-            String groupName = groupData.getFormId();
-
-            if (area == null) {
-                player.sendMessage(plugin.getLanguageManager().get("messages.areaNotFound"));
-                return;
-            }
-
-            // Get current DTO
-            AreaDTO currentDTO = area.toDTO();
-
-            // Get current group permissions
-            Map<String, Map<String, Boolean>> currentGroupPerms = currentDTO.groupPermissions();
-            Map<String, Boolean> oldPerms = currentGroupPerms.getOrDefault(groupName, new HashMap<>());
+            Map<Integer, Object> responseData = ((cn.nukkit.form.response.FormResponseCustom) response).getResponses();
             
-            // Check if we should delete permissions (last toggle)
-            boolean shouldDeletePermissions = response.getToggleResponse(PermissionToggle.getDefaultToggles().size());
-            
-            if (shouldDeletePermissions) {
-                // Create updated permissions map with the group removed
-                Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
-                updatedGroupPerms.remove(groupName);
-                
-                // Create updated area using builder
-                AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
-                areaBuilder.groupPermissions(updatedGroupPerms);
-                Area updatedArea = areaBuilder.build();
-                
-                // Fire event for permissions deletion
-                LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, new HashMap<>());
-                plugin.getServer().getPluginManager().callEvent(event);
-                
-                if (!event.isCancelled()) {
-                    try {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Deleting group permissions for group " + groupName + " in area " + area.getName());
-                        }
-                        
-                        // Remove permissions from database
-                        plugin.getPermissionOverrideManager().setGroupPermissions(
-                            area.getName(),
-                            groupName,
-                            new HashMap<>() // Empty map effectively removes permissions
-                        );
-                        
-                        // Save area to database
-                        plugin.getDatabaseManager().saveArea(updatedArea);
-                        
-                        // Update in plugin
-                        plugin.updateArea(updatedArea);
-                        
-                        player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupPermissionsDeleted",
-                            Map.of("group", groupName, "area", area.getName())));
-                    } catch (Exception e) {
-                        plugin.getLogger().error("Failed to delete group permissions", e);
-                        throw e;
-                    }
+            // Check if delete permissions was selected (last toggle)
+            int lastIndex = PermissionToggle.getDefaultToggles().size() + 1;
+            if (responseData.containsKey(lastIndex) && responseData.get(lastIndex) instanceof Boolean && (Boolean) responseData.get(lastIndex)) {
+                // Delete all permissions for this group
+                // Get fresh copy of area to avoid concurrent modification issues
+                Area updatedArea = plugin.getAreaManager().getArea(area.getName());
+                if (updatedArea == null) {
+                    player.sendMessage("§cArea no longer exists.");
+                    plugin.getFormModuleManager().openEditListForm(player);
+                    return;
                 }
-            } else {
-                // Process permissions
-                Map<String, Boolean> newPerms = new HashMap<>();
-                int index = 0;
-                for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
-                    Boolean value = response.getToggleResponse(index);
-                    newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
-                    index++;
-                }
-
-                // Create updated permissions map
-                Map<String, Map<String, Boolean>> updatedGroupPerms = new HashMap<>(currentGroupPerms);
-                updatedGroupPerms.put(groupName, newPerms);
-
-                // Create updated area using builder - FIXED: Ensure we preserve all permission types
-                AreaBuilder areaBuilder = AreaBuilder.fromDTO(currentDTO);
-                areaBuilder.groupPermissions(updatedGroupPerms);
-                // We don't need to explicitly set player or track permissions as they're already part of the DTO
-                // and will be preserved by the fromDTO() method
-                Area updatedArea = areaBuilder.build();
-
-                // Fire event
-                LuckPermsGroupChangeEvent event = new LuckPermsGroupChangeEvent(area, groupName, oldPerms, newPerms);
-                plugin.getServer().getPluginManager().callEvent(event);
-
-                if (!event.isCancelled()) {
-                    // IMPORTANT: Explicitly save group permissions to the permission database first
-                    try {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Explicitly saving group permissions for group " + groupName + " in area " + updatedArea.getName());
-                            plugin.debug("  Permission count: " + newPerms.size());
-                            plugin.debug("  Permissions: " + newPerms);
-                        }
-                        
-                        plugin.getPermissionOverrideManager().setGroupPermissions(
-                            updatedArea.getName(), 
-                            groupName, 
-                            newPerms
-                        );
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("  Successfully saved group permissions to PermissionOverrideManager");
-                            
-                            // Verify permissions were saved
-                            Map<String, Boolean> verifyPerms = plugin.getPermissionOverrideManager().getGroupPermissions(
-                                updatedArea.getName(), groupName);
-                            plugin.debug("  Verification - retrieved permissions: " + 
-                                        (verifyPerms != null ? verifyPerms.size() : "null") + " permissions");
-                        }
-                    } catch (Exception e) {
-                        plugin.getLogger().error("Failed to explicitly save group permissions", e);
-                        throw e;
-                    }
-                    
-                    // Save area to database
-                    try {
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Saving updated area to database: " + updatedArea.getName());
-                        }
-                        
-                        plugin.getDatabaseManager().saveArea(updatedArea);
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("  Area saved successfully");
-                        }
-                        
-                        // Force synchronize permissions to ensure they're saved
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("  Now synchronizing all permissions from area to database");
-                        }
-                        
-                        plugin.getPermissionOverrideManager().synchronizeFromArea(updatedArea);
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("  Synchronization complete");
-                            
-                            // Verify area was updated correctly
-                            Area verifyArea = plugin.getArea(updatedArea.getName());
-                            if (verifyArea != null) {
-                                Map<String, Map<String, Boolean>> groupPerms = verifyArea.getGroupPermissions();
-                                plugin.debug("  Verification - area group permissions: " + 
-                                            (groupPerms != null ? groupPerms.size() : "null") + " groups");
-                                
-                                if (groupPerms != null && groupPerms.containsKey(groupName)) {
-                                    plugin.debug("  Verification - permissions for " + groupName + ": " + 
-                                               groupPerms.get(groupName).size() + " permissions");
-                                } else {
-                                    plugin.debug("  Verification - group " + groupName + " not found in permissions");
-                                }
-                            } else {
-                                plugin.debug("  Verification - area not found: " + updatedArea.getName());
-                            }
-                        }
-                    } catch (Exception e) {
-                        plugin.getLogger().error("Failed to save area to database", e);
-                        throw e;
-                    }
-                    
-                    // Update area in plugin
+                
+                // Remove group permissions
+                Map<String, Map<String, Boolean>> groupPerms = updatedArea.getGroupPermissions();
+                if (groupPerms != null) {
+                    groupPerms.remove(groupName);
+                    // Update area with modified permissions
                     plugin.updateArea(updatedArea);
-                    player.sendMessage(plugin.getLanguageManager().get("messages.permissions.groupUpdated",
-                        Map.of("group", groupName, "area", area.getName())));
                 }
+                
+                player.sendMessage("§aDeleted all permissions for group §e" + 
+                        groupName + "§a in area §e" + 
+                        area.getName() + "§a.");
+                
+                // Return to edit area form
+                plugin.getFormModuleManager().openEditForm(player, updatedArea);
+                return;
             }
-
-            // Clear group selection and return to edit menu
-            plugin.getFormIdMap().remove(player.getName() + "_group");
-            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
-
+            
+            // Process permissions
+            Map<String, Boolean> newPerms = new HashMap<>();
+            int index = 1; // Skip the header label
+            for (PermissionToggle toggle : PermissionToggle.getDefaultToggles()) {
+                if (responseData.containsKey(index) && responseData.get(index) instanceof Boolean) {
+                    Boolean value = (Boolean) responseData.get(index);
+                    newPerms.put(toggle.getPermissionNode(), value != null ? value : false);
+                }
+                index++;
+            }
+            
+            // Update area with new group permissions
+            Area updatedArea = plugin.getAreaManager().getArea(area.getName());
+            if (updatedArea == null) {
+                player.sendMessage("§cArea no longer exists.");
+                plugin.getFormModuleManager().openEditListForm(player);
+                return;
+            }
+            
+            // Update group permissions
+            Map<String, Map<String, Boolean>> groupPerms = updatedArea.getGroupPermissions();
+            if (groupPerms == null) {
+                groupPerms = new HashMap<>();
+            }
+            groupPerms.put(groupName, newPerms);
+            
+            // Update the area
+            plugin.updateArea(updatedArea);
+            
+            player.sendMessage("§aUpdated permissions for group §e" + 
+                    groupName + "§a.");
+            
+            // Return to edit area form
+            plugin.getFormModuleManager().openEditForm(player, updatedArea);
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling group permissions response", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            handleCancel(player);
+            plugin.getLogger().error("Error processing group permissions form: " + e.getMessage());
+            e.printStackTrace();
+            player.sendMessage("§cAn error occurred while processing the form.");
+            plugin.getFormModuleManager().openEditForm(player, area);
         }
     }
-
-    @Override
-    public void handleCancel(Player player) {
-        plugin.getFormIdMap().remove(player.getName() + "_group");
-        cleanup(player);
-    }
-} 
+}

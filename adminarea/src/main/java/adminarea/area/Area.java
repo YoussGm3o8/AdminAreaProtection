@@ -2067,4 +2067,58 @@ public final class Area {
     public static ThreadLocal<Set<String>> getPermissionOperationsThreadLocal() {
         return permissionOperations;
     }
+
+    /**
+     * Gets the area's metadata as a Map
+     * 
+     * @return The metadata as a Map
+     */
+    public Map<String, Object> getMetaData() {
+        JSONObject settings = dto.settings();
+        if (settings == null) {
+            return new HashMap<>();
+        }
+        
+        if (!settings.has("metadata")) {
+            return new HashMap<>();
+        }
+        
+        // Get the metadata object
+        Object metadataObj = settings.opt("metadata");
+        if (metadataObj instanceof JSONObject) {
+            JSONObject metadata = (JSONObject) metadataObj;
+            
+            // Convert JSONObject to Map
+            Map<String, Object> result = new HashMap<>();
+            for (String key : metadata.keySet()) {
+                result.put(key, metadata.opt(key));
+            }
+            return result;
+        }
+        
+        return new HashMap<>();
+    }
+    
+    /**
+     * Sets the area's metadata
+     * 
+     * @param metadata The metadata to set
+     */
+    public void setMetaData(Map<String, Object> metadata) {
+        JSONObject settings = dto.settings();
+        if (settings == null) {
+            settings = new JSONObject();
+        }
+        
+        // Convert Map to JSONObject
+        JSONObject metadataJson = new JSONObject();
+        for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+            metadataJson.put(entry.getKey(), entry.getValue());
+        }
+        
+        settings.put("metadata", metadataJson);
+        
+        // Save the area to persist the metadata
+        saveToggleStates();
+    }
 }

@@ -4,21 +4,24 @@ import adminarea.AdminAreaProtectionPlugin;
 import adminarea.area.Area;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
+import adminarea.form.utils.FormUtils;
 import cn.nukkit.Player;
 import cn.nukkit.form.element.ElementLabel;
 import cn.nukkit.form.element.ElementSlider;
-import cn.nukkit.form.response.FormResponseCustom;
-import cn.nukkit.form.response.FormResponseSimple;
-import cn.nukkit.form.window.FormWindow;
+import cn.nukkit.form.handler.FormResponseHandler;
 import cn.nukkit.form.window.FormWindowCustom;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 
-public class PotionEffectsHandler extends BaseFormHandler {
+/**
+ * Custom form for editing potion effects of an area.
+ */
+public class PotionEffectsHandler {
+    private final AdminAreaProtectionPlugin plugin;
 
     // Define potion effect toggles
     private static final List<ToggleDefinition> POTION_TOGGLES = new ArrayList<>();
@@ -65,23 +68,33 @@ public class PotionEffectsHandler extends BaseFormHandler {
     }
 
     public PotionEffectsHandler(AdminAreaProtectionPlugin plugin) {
-        super(plugin);
-        validateFormId();
+        this.plugin = plugin;
     }
 
-    @Override
-    public String getFormId() {
-        return FormIds.POTION_EFFECTS_SETTINGS;
+    /**
+     * Open the potion effects settings form for a player with no pre-selected area
+     */
+    public void open(Player player) {
+        Area area = getEditingArea(player);
+        if (area == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
+            FormUtils.cleanup(player);
+            plugin.getGuiManager().openMainMenu(player);
+            return;
+        }
+        open(player, area);
     }
 
-    @Override
-    public FormWindow createForm(Player player) {
-        return createForm(player, getEditingArea(player));
-    }
-
-    @Override
-    public FormWindow createForm(Player player, Area area) {
-        if (area == null) return null;
+    /**
+     * Open the potion effects settings form for a player and area
+     */
+    public void open(Player player, Area area) {
+        if (area == null) {
+            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
+            FormUtils.cleanup(player);
+            plugin.getGuiManager().openMainMenu(player);
+            return;
+        }
 
         try {
             // Force reload the area from the database to ensure we have the latest data
@@ -105,6 +118,7 @@ public class PotionEffectsHandler extends BaseFormHandler {
                 plugin.getLogger().error("Failed to reload area from database for potion effects form", e);
             }
             
+            // Create the form
             FormWindowCustom form = new FormWindowCustom(plugin.getLanguageManager().get("gui.potionEffectsSettings.title", 
                 Map.of("area", area.getName())));
             
@@ -116,9 +130,10 @@ public class PotionEffectsHandler extends BaseFormHandler {
             
             // Get area settings
             AreaDTO dto = area.toDTO();
-            JSONObject settings = dto.settings();
             
-            // Skip loading potion effects log to reduce spam
+            // Store the sliders and their indices for easier response handling
+            Map<Integer, String> sliderIndices = new HashMap<>();
+            int elementIndex = 2; // Start at 2 because index 0 and 1 are the header labels
             
             // Add sliders for potion effects strength (no toggles)
             for (ToggleDefinition toggle : POTION_TOGGLES) {
@@ -145,114 +160,112 @@ public class PotionEffectsHandler extends BaseFormHandler {
                     "§e" + toggle.displayName + "\n§8" + description,
                     0, 10, 1, currentStrength
                 ));
+                
+                // Store the index for this slider
+                sliderIndices.put(elementIndex, permissionNode);
+                elementIndex++;
             }
             
-            return form;
-        } catch (Exception e) {
-            plugin.getLogger().error("Error creating potion effects settings form", e);
-            player.sendMessage(plugin.getLanguageManager().get("messages.form.error.createError",
-                Map.of("error", e.getMessage())));
-            return null;
-        }
-    }
-
-    @Override
-    protected void handleCustomResponse(Player player, FormResponseCustom response) {
-        try {
-            Area area = getEditingArea(player);
-            if (area == null) return;
-
-            // Skip header labels (index 0 and 1)
-            // Create a map to store all potion effect changes
-            Map<String, Integer> effectStrengths = new HashMap<>();
+            // Store reference to the current area for the response handler
+            final Area finalArea = area;
+            final Map<Integer, String> finalSliderIndices = sliderIndices;
             
-            // Process each slider starting at index 2 (one per effect)
-            for (int i = 0; i < POTION_TOGGLES.size(); i++) {
+            // Add response handler
+            form.addHandler(FormResponseHandler.withoutPlayer(ignored -> {
+                if (form.wasClosed()) {
+                    handleCancel(player);
+                    return;
+                }
+                
                 try {
-                    ToggleDefinition toggle = POTION_TOGGLES.get(i);
-                    String permissionNode = toggle.permissionNode;
+                    Map<String, Integer> effectStrengths = new HashMap<>();
+                    int changedCount = 0;
                     
-                    // Calculate index for slider (2 + index of effect)
-                    int sliderIndex = 2 + i;
-                    
-                    // Get current strength value from area
-                    int currentStrengthValue = area.getPotionEffectStrength(permissionNode);
-                    
-                    // Get and validate strength value from response
-                    int strengthValue = 0;
-                    Object rawResponse = response.getResponse(sliderIndex);
-                    
-                    if (rawResponse != null) {
-                        if (rawResponse instanceof Number) {
-                            strengthValue = ((Number) rawResponse).intValue();
-                        } else {
-                            try {
-                                strengthValue = Integer.parseInt(rawResponse.toString());
-                            } catch (NumberFormatException e) {
-                                if (plugin.isDebugMode()) {
-                                    plugin.debug("Invalid strength value: " + rawResponse);
-                                }
-                                continue;
+                    // Process all sliders
+                    for (Map.Entry<Integer, String> entry : finalSliderIndices.entrySet()) {
+                        int index = entry.getKey();
+                        String effectKey = entry.getValue();
+                        
+                        // Get current value from area
+                        int currentValue = finalArea.getPotionEffectStrength(effectKey);
+                        
+                        // Get and validate strength value from response
+                        int newValue = 0;
+                        float sliderValue = form.getResponse().getSliderResponse(index);
+                        newValue = Math.round(sliderValue);
+                        
+                        // Ensure strength is within valid range
+                        newValue = Math.max(0, Math.min(10, newValue));
+                        
+                        // Only track changes, don't apply yet
+                        if (currentValue != newValue) {
+                            effectStrengths.put(effectKey, newValue);
+                            changedCount++;
+                            
+                            if (plugin.isDebugMode()) {
+                                plugin.debug("Changed effect " + effectKey + " from " + currentValue + " to " + newValue);
                             }
                         }
                     }
                     
-                    // Ensure strength is within valid range
-                    strengthValue = Math.max(0, Math.min(10, strengthValue));
-                    
-                    // Only track changes, don't apply yet
-                    if (currentStrengthValue != strengthValue) {
-                        // Add to the effects map
-                        effectStrengths.put(permissionNode, strengthValue);
-                        
-                        if (plugin.isDebugMode()) {
-                            plugin.debug("Will update strength " + permissionNode + " from " + 
-                                currentStrengthValue + " to " + strengthValue);
-                        }
+                    // Only update if something changed
+                    if (changedCount > 0) {
+                        // Update the potion effects in the area and notify the player
+                        FormUtils.updatePotionEffectsAndNotifyPlayer(player, finalArea, effectStrengths, FormIds.EDIT_AREA);
+                    } else {
+                        // No changes made, return to edit form
+                        player.sendMessage(plugin.getLanguageManager().get("messages.form.noChanges"));
+                        FormUtils.cleanup(player);
+                        plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, finalArea);
                     }
                 } catch (Exception e) {
-                    plugin.getLogger().error("Error processing effect at index " + i, e);
+                    plugin.getLogger().error("Error processing potion effects form", e);
+                    player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+                    FormUtils.cleanup(player);
                 }
-            }
+            }));
             
-            // Use the standardized method to update potion effects and notify the player
-            updatePotionEffectsAndNotifyPlayer(player, area, effectStrengths, FormIds.EDIT_AREA);
-
+            // Add error handler as fallback
+            form.addHandler(FormUtils.createErrorHandler(player));
+            
+            // Send the form to the player
+            player.showFormWindow(form);
+            
+            // Update form tracking
+            plugin.getFormIdMap().put(player.getName(), new adminarea.data.FormTrackingData(
+                FormIds.POTION_EFFECTS_SETTINGS, System.currentTimeMillis()));
+            
         } catch (Exception e) {
-            plugin.getLogger().error("Error handling potion effects settings", e);
+            plugin.getLogger().error("Error creating potion effects form", e);
             player.sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+            FormUtils.cleanup(player);
+        }
+    }
+
+    /**
+     * Handle form cancellation
+     */
+    private void handleCancel(Player player) {
+        // Get the area being edited
+        Area area = getEditingArea(player);
+        
+        // Return to the edit area form
+        FormUtils.cleanup(player);
+        if (area != null) {
+            plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, area);
+        } else {
             plugin.getGuiManager().openMainMenu(player);
         }
     }
 
-    @Override
-    protected void handleSimpleResponse(Player player, FormResponseSimple response) {
-        plugin.getGuiManager().openFormById(player, FormIds.EDIT_AREA, getEditingArea(player));
-    }
-
-    protected Area getEditingArea(Player player) {
+    /**
+     * Get the area being edited by a player
+     */
+    private Area getEditingArea(Player player) {
         var areaData = plugin.getFormIdMap().get(player.getName() + "_editing");
         if (areaData == null) {
-            player.sendMessage(plugin.getLanguageManager().get("messages.error.noAreaSelected"));
             return null;
         }
         return plugin.getArea(areaData.getFormId());
-    }
-
-    /**
-     * Ensures permission nodes have the correct prefix
-     */
-    protected String normalizePermissionNode(String permission) {
-        if (permission == null || permission.isEmpty()) {
-            return "gui.permissions.toggles.default";
-        }
-        
-        // If it already has the prefix, return as is
-        if (permission.startsWith("gui.permissions.toggles.")) {
-            return permission;
-        }
-        
-        // Add prefix for simple permission names
-        return "gui.permissions.toggles." + permission;
     }
 }

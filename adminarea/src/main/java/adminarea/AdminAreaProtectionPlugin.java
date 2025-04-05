@@ -45,6 +45,7 @@ import adminarea.managers.DatabaseManager;
 import adminarea.managers.GuiManager;
 import adminarea.managers.LanguageManager;
 import adminarea.managers.ListenerManager;
+import adminarea.managers.FormModuleManager;
 import adminarea.permissions.PermissionOverrideManager;
 import adminarea.area.Area;
 import adminarea.area.AreaCommand;
@@ -54,7 +55,6 @@ import adminarea.util.LogFilter;
 import adminarea.util.PerformanceMonitor;
 import adminarea.util.ValidationUtils;
 import io.micrometer.core.instrument.Timer;
-import adminarea.form.FormRegistry;
 import adminarea.permissions.LuckPermsCache;
 import cn.nukkit.plugin.PluginManager;
 import adminarea.listeners.ProtectionListener;
@@ -80,6 +80,7 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
     private PerformanceMonitor performanceMonitor; // Add performance monitor
     private GuiManager guiManager;
     private ListenerManager listenerManager; // Add listener manager
+    private FormModuleManager formModuleManager; // Add FormModuleManager
 
     private WandListener wandListener; // Add WandListener
 
@@ -92,8 +93,6 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
 
     private ValidationUtils validationUtils;
 
-    private FormRegistry formRegistry;
-    
     private RecentSaveTracker recentSaveTracker;
     
     // Store LuckPerms class references to avoid direct dependencies
@@ -352,21 +351,9 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                     return;
                 }
 
-                // Initialize FormRegistry before GUI manager
-                formRegistry = new FormRegistry(this);
-                formRegistry.initialize();
-                
-                // Verify handlers were registered
-                if (formRegistry.getHandler(FormIds.MAIN_MENU) == null) {
-                    getLogger().error("MainMenuHandler was not registered!");
-                }
-                if (formRegistry.getHandler(FormIds.CREATE_AREA) == null) {
-                    getLogger().error("CreateAreaHandler was not registered!");
-                }
-    
-                // Initialize GUI managers after form registry
+                // Initialize GUI manager directly without FormRegistry
                 guiManager = new GuiManager(this);
-    
+
                 wandListener = new WandListener(this); // Initialize WandListener
     
                 validationUtils = new ValidationUtils();
@@ -484,6 +471,9 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
             getLogger().info("NukkitMOT monster protection enabled.");
             
             getLogger().info("AdminAreaProtectionPlugin has been successfully enabled!");
+
+            // Initialize FormModuleManager in onEnable after form registry initialization
+            this.formModuleManager = new FormModuleManager(this);
         }
     
         /**
@@ -1051,176 +1041,11 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
         }
 
         /**
-         * Gets the form registry instance
-         * @return The FormRegistry instance
+         * Gets the form module manager instance
+         * @return The FormModuleManager instance
          */
-        public FormRegistry getFormRegistry() {
-            return formRegistry;
-        }
-
-        public boolean isPlayerInTrack(Player player, String trackName) {
-            if (!isLuckPermsEnabled() || player == null || trackName == null) {
-                return false;
-            }
-            
-            try {
-                // Use reflection to interact with LuckPerms API
-                // Get the track manager
-                Object trackManager = luckPermsClass.getMethod("getTrackManager").invoke(luckPermsApi);
-                
-                // Get the track
-                Object track = trackManager.getClass().getMethod("getTrack", String.class).invoke(trackManager, trackName);
-                if (track == null) {
-                    if (isDebugMode()) {
-                        debug("Track " + trackName + " does not exist");
-                    }
-                    return false;
-                }
-                
-                // Get all groups in this track
-                List<String> trackGroups = (List<String>) track.getClass().getMethod("getGroups").invoke(track);
-                
-                // Get the player's primary group for debugging
-                String primaryGroup = getPrimaryGroup(player);
-                
-                // Check ALL groups the player is in, not just primary group
-                String playerName = player.getName();
-                List<String> playerGroups = getLuckPermsCache().getGroups(playerName);
-                
-                if (isDebugMode()) {
-                    debug("Player " + player.getName() + " has primary group: " + primaryGroup);
-                    debug("Player " + player.getName() + " belongs to groups: " + String.join(", ", playerGroups));
-                    debug("Track " + trackName + " has groups: " + String.join(", ", trackGroups));
-                }
-                
-                // Check if any of the player's groups are in the track
-                boolean isInTrack = false;
-                for (String group : playerGroups) {
-                    if (trackGroups.contains(group)) {
-                        if (isDebugMode()) {
-                            debug("Player group " + group + " is in track " + trackName);
-                        }
-                        isInTrack = true;
-                        break;
-                    }
-                }
-                
-                if (isDebugMode()) {
-                    debug("Player has group in track: " + isInTrack);
-                }
-                
-                // If not directly in track by group membership, check inheritance
-                if (!isInTrack) {
-                    for (String group : playerGroups) {
-                        boolean inheritedGroupInTrack = isPlayerInTrackByInheritance(player, trackName, group, trackGroups);
-                        if (inheritedGroupInTrack) {
-                            if (isDebugMode()) {
-                                debug("Player has inherited group from " + group + " in track: " + inheritedGroupInTrack);
-                            }
-                            isInTrack = true;
-                            break;
-                        }
-                    }
-                }
-                
-                return isInTrack;
-            } catch (Exception e) {
-                getLogger().error("Error checking track membership", e);
-                return false;
-            }
-        }
-
-        /**
-         * Checks if a player is in a track through inheritance
-         * @param player The player to check
-         * @param trackName The name of the track
-         * @param groupName The name of the group to check inheritance from
-         * @param trackGroups The groups in the track
-         * @return True if the player is in the track through inheritance
-         */
-        public boolean isPlayerInTrackByInheritance(Player player, String trackName, String groupName, List<String> trackGroups) {
-            if (!isLuckPermsEnabled() || player == null || trackName == null || groupName == null || trackGroups == null) {
-                return false;
-            }
-            
-            try {
-                // Get all groups the specified group inherits from
-                List<String> inheritedGroups = getGroupInheritance(groupName);
-                
-                if (isDebugMode()) {
-                    debug("Group " + groupName + " inherits from groups: " + String.join(", ", inheritedGroups));
-                }
-                
-                // Check if any of the group's inherited groups are in the track
-                for (String group : inheritedGroups) {
-                    if (trackGroups.contains(group)) {
-                        if (isDebugMode()) {
-                            debug("Group " + groupName + " inherits from " + group + " which is in track " + trackName);
-                        }
-                        return true;
-                    }
-                }
-                
-                return false;
-            } catch (Exception e) {
-                getLogger().error("Error checking track membership through inheritance", e);
-                return false;
-            }
-        }
-
-        public String getPrimaryGroup(Player player) {
-            if (!isLuckPermsEnabled() || player == null) {
-                return null;
-            }
-            
-            try {
-                // Get the user manager
-                Object userManager = luckPermsClass.getMethod("getUserManager").invoke(luckPermsApi);
-                
-                // Get the user
-                Object user = userManager.getClass().getMethod("getUser", UUID.class)
-                    .invoke(userManager, player.getUniqueId());
-                
-                if (user != null) {
-                    return (String) user.getClass().getMethod("getPrimaryGroup").invoke(user);
-                }
-                return null;
-            } catch (Exception e) {
-                getLogger().error("Error getting primary group", e);
-                return null;
-            }
-        }
-
-        /**
-         * Gets the listener manager instance
-         * @return The ListenerManager instance
-         */
-        public ListenerManager getListenerManager() {
-            return listenerManager;
-        }
-
-        public PermissionOverrideManager getPermissionOverrideManager() {
-            // If permissionOverrideManager is null, this is a critical error,
-            // as it should never be accessed before initialization
-            if (permissionOverrideManager == null) {
-                getLogger().error("CRITICAL: PermissionOverrideManager was accessed before initialization");
-                
-                // Log stack trace to help identify where this is being called from
-                try {
-                    throw new IllegalStateException("PermissionOverrideManager not initialized");
-                } catch (IllegalStateException e) {
-                    getLogger().error("Call stack:", e);
-                }
-                
-                // Create emergency instance but log warning
-                try {
-                    getLogger().warning("Creating emergency PermissionOverrideManager instance");
-                    permissionOverrideManager = new PermissionOverrideManager(this);
-                } catch (Exception e) {
-                    getLogger().error("Failed to create emergency PermissionOverrideManager", e);
-                }
-            }
-            return permissionOverrideManager;
+        public FormModuleManager getFormModuleManager() {
+            return formModuleManager;
         }
 
         private void logStartupPerformance(long startTime) {
@@ -1689,4 +1514,169 @@ public class AdminAreaProtectionPlugin extends PluginBase implements Listener {
                 getLogger().error("Failed to register custom YAML handler", e);
             }
         }
-    }
+
+        public boolean isPlayerInTrack(Player player, String trackName) {
+            if (!isLuckPermsEnabled() || player == null || trackName == null) {
+                return false;
+            }
+            
+            try {
+                // Use reflection to interact with LuckPerms API
+                // Get the track manager
+                Object trackManager = luckPermsClass.getMethod("getTrackManager").invoke(luckPermsApi);
+                
+                // Get the track
+                Object track = trackManager.getClass().getMethod("getTrack", String.class).invoke(trackManager, trackName);
+                if (track == null) {
+                    if (isDebugMode()) {
+                        debug("Track " + trackName + " does not exist");
+                    }
+                    return false;
+                }
+                
+                // Get all groups in this track
+                List<String> trackGroups = (List<String>) track.getClass().getMethod("getGroups").invoke(track);
+                
+                // Get the player's primary group for debugging
+                String primaryGroup = getPrimaryGroup(player);
+                
+                // Check ALL groups the player is in, not just primary group
+                String playerName = player.getName();
+                List<String> playerGroups = getLuckPermsCache().getGroups(playerName);
+                
+                if (isDebugMode()) {
+                    debug("Player " + player.getName() + " has primary group: " + primaryGroup);
+                    debug("Player " + player.getName() + " belongs to groups: " + String.join(", ", playerGroups));
+                    debug("Track " + trackName + " has groups: " + String.join(", ", trackGroups));
+                }
+                
+                // Check if any of the player's groups are in the track
+                boolean isInTrack = false;
+                for (String group : playerGroups) {
+                    if (trackGroups.contains(group)) {
+                        if (isDebugMode()) {
+                            debug("Player group " + group + " is in track " + trackName);
+                        }
+                        isInTrack = true;
+                        break;
+                    }
+                }
+                
+                if (isDebugMode()) {
+                    debug("Player has group in track: " + isInTrack);
+                }
+                
+                // If not directly in track by group membership, check inheritance
+                if (!isInTrack) {
+                    for (String group : playerGroups) {
+                        boolean inheritedGroupInTrack = isPlayerInTrackByInheritance(player, trackName, group, trackGroups);
+                        if (inheritedGroupInTrack) {
+                            if (isDebugMode()) {
+                                debug("Player has inherited group from " + group + " in track: " + inheritedGroupInTrack);
+                            }
+                            isInTrack = true;
+                            break;
+                        }
+                    }
+                }
+                
+                return isInTrack;
+            } catch (Exception e) {
+                getLogger().error("Error checking track membership", e);
+                return false;
+            }
+        }
+
+        /**
+         * Checks if a player is in a track through inheritance
+         * @param player The player to check
+         * @param trackName The name of the track
+         * @param groupName The name of the group to check inheritance from
+         * @param trackGroups The groups in the track
+         * @return True if the player is in the track through inheritance
+         */
+        public boolean isPlayerInTrackByInheritance(Player player, String trackName, String groupName, List<String> trackGroups) {
+            if (!isLuckPermsEnabled() || player == null || trackName == null || groupName == null || trackGroups == null) {
+                return false;
+            }
+            
+            try {
+                // Get all groups the specified group inherits from
+                List<String> inheritedGroups = getGroupInheritance(groupName);
+                
+                if (isDebugMode()) {
+                    debug("Group " + groupName + " inherits from groups: " + String.join(", ", inheritedGroups));
+                }
+                
+                // Check if any of the group's inherited groups are in the track
+                for (String group : inheritedGroups) {
+                    if (trackGroups.contains(group)) {
+                        if (isDebugMode()) {
+                            debug("Group " + groupName + " inherits from " + group + " which is in track " + trackName);
+                        }
+                        return true;
+                    }
+                }
+                
+                return false;
+            } catch (Exception e) {
+                getLogger().error("Error checking track membership through inheritance", e);
+                return false;
+            }
+        }
+
+        public String getPrimaryGroup(Player player) {
+            if (!isLuckPermsEnabled() || player == null) {
+                return null;
+            }
+            
+            try {
+                // Get the user manager
+                Object userManager = luckPermsClass.getMethod("getUserManager").invoke(luckPermsApi);
+                
+                // Get the user
+                Object user = userManager.getClass().getMethod("getUser", UUID.class)
+                    .invoke(userManager, player.getUniqueId());
+                
+                if (user != null) {
+                    return (String) user.getClass().getMethod("getPrimaryGroup").invoke(user);
+                }
+                return null;
+            } catch (Exception e) {
+                getLogger().error("Error getting primary group", e);
+                return null;
+            }
+        }
+
+        /**
+         * Gets the listener manager instance
+         * @return The ListenerManager instance
+         */
+        public ListenerManager getListenerManager() {
+            return listenerManager;
+        }
+
+        public PermissionOverrideManager getPermissionOverrideManager() {
+            // If permissionOverrideManager is null, this is a critical error,
+            // as it should never be accessed before initialization
+            if (permissionOverrideManager == null) {
+                getLogger().error("CRITICAL: PermissionOverrideManager was accessed before initialization");
+                
+                // Log stack trace to help identify where this is being called from
+                try {
+                    throw new IllegalStateException("PermissionOverrideManager not initialized");
+                } catch (IllegalStateException e) {
+                    getLogger().error("Call stack:", e);
+                }
+                
+                // Create emergency instance but log warning
+                try {
+                    getLogger().warning("Creating emergency PermissionOverrideManager instance");
+                    permissionOverrideManager = new PermissionOverrideManager(this);
+                } catch (Exception e) {
+                    getLogger().error("Failed to create emergency PermissionOverrideManager", e);
+                }
+            }
+            return permissionOverrideManager;
+        }
+}

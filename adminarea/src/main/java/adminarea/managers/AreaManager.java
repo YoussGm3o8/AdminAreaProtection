@@ -2344,16 +2344,22 @@ public class AreaManager implements IAreaManager {
         // Use the direct method for all permission updates
         return directUpdatePlayerPermissions(areaName, playerName, permissions);
     }
-
+    
     /**
-     * Direct method to update player permissions with minimal overhead
-     * This method bypasses the normal area update process for efficiency and reliability
+     * Updates player permissions for an area
      * 
-     * @param areaName The area name
-     * @param playerName The player name
-     * @param permissionUpdates The new permission values to apply
+     * @param area Area to update permissions for
+     * @param playerName Player name
+     * @param permissions Map of permissions to set
      * @return True if successful
      */
+    public boolean updatePlayerPermissions(Area area, String playerName, Map<String, Boolean> permissions) {
+        if (area == null) {
+            return false;
+        }
+        return updatePlayerPermissions(area.getName(), playerName, permissions);
+    }
+
     public boolean directUpdatePlayerPermissions(String areaName, String playerName, Map<String, Boolean> permissionUpdates) {
         if (areaName == null || playerName == null || permissionUpdates == null || permissionUpdates.isEmpty()) {
             return false;
@@ -2743,8 +2749,8 @@ public class AreaManager implements IAreaManager {
      * @return True if successful, false otherwise
      */
     public boolean updateTrackPermissions(String areaName, String trackName, Map<String, Boolean> permissions) {
-        // Use the direct method for all permission updates
-        return directUpdateTrackPermissions(areaName, trackName, permissions);
+        // Implementation here
+        return false; // Placeholder
     }
 
     // Recreate an area from its DTO
@@ -2827,6 +2833,108 @@ public class AreaManager implements IAreaManager {
         nameCache.invalidate(dto.name());
         
         return area;
+    }
+
+    /**
+     * Gets all track permissions for an area
+     * 
+     * @param area The area to get track permissions for
+     * @return Map of track permissions (track name -> permission string)
+     */
+    public Map<String, String> getTrackPermissions(Area area) {
+        if (area == null) {
+            return new HashMap<>();
+        }
+        
+        Map<String, Object> metaData = area.getMetaData();
+        if (metaData != null && metaData.containsKey("trackPermissions")) {
+            @SuppressWarnings("unchecked")
+            Map<String, String> trackPermissions = (Map<String, String>) metaData.get("trackPermissions");
+            return trackPermissions != null ? trackPermissions : new HashMap<>();
+        }
+        
+        return new HashMap<>();
+    }
+
+    /**
+     * Sets a track permission for an area
+     * 
+     * @param area The area to set the track permission for
+     * @param trackName The name of the track
+     * @param permission The permission string
+     * @return True if the operation was successful
+     */
+    public boolean setTrackPermission(Area area, String trackName, String permission) {
+        if (area == null || trackName == null || permission == null) {
+            return false;
+        }
+        
+        try {
+            // Get the current metadata
+            Map<String, Object> metaData = area.getMetaData();
+            if (metaData == null) {
+                metaData = new HashMap<>();
+                area.setMetaData(metaData);
+            }
+            
+            // Get or create track permissions map
+            @SuppressWarnings("unchecked")
+            Map<String, String> trackPermissions = (Map<String, String>) metaData.get("trackPermissions");
+            if (trackPermissions == null) {
+                trackPermissions = new HashMap<>();
+                metaData.put("trackPermissions", trackPermissions);
+            }
+            
+            // Set the permission
+            trackPermissions.put(trackName, permission);
+            
+            // Update the area
+            updateArea(area);
+            
+            return true;
+        } catch (Exception e) {
+            logger.error("Error setting track permission: " + e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * Removes a track permission from an area
+     * 
+     * @param area The area to remove the track permission from
+     * @param trackName The name of the track to remove
+     * @return True if the operation was successful
+     */
+    public boolean removeTrackPermission(Area area, String trackName) {
+        if (area == null || trackName == null) {
+            return false;
+        }
+        
+        try {
+            // Get the current metadata
+            Map<String, Object> metaData = area.getMetaData();
+            if (metaData == null || !metaData.containsKey("trackPermissions")) {
+                return false;
+            }
+            
+            // Get track permissions map
+            @SuppressWarnings("unchecked")
+            Map<String, String> trackPermissions = (Map<String, String>) metaData.get("trackPermissions");
+            if (trackPermissions == null) {
+                return false;
+            }
+            
+            // Remove the permission
+            trackPermissions.remove(trackName);
+            
+            // Update the area
+            updateArea(area);
+            
+            return true;
+        } catch (Exception e) {
+            logger.error("Error removing track permission: " + e.getMessage(), e);
+            return false;
+        }
     }
 }
 

@@ -1,10 +1,10 @@
 package adminarea.listeners;
 
 import adminarea.AdminAreaProtectionPlugin;
+import adminarea.area.Area;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.form.FormRegistry;
-import adminarea.form.IFormHandler;
+import adminarea.form.utils.FormUtils;
 import adminarea.util.FormLogger;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
@@ -22,11 +22,9 @@ public class FormResponseListener implements Listener {
     private static final long CLEANUP_INTERVAL = 900000; // 15 minutes
     private long lastCleanup = 0;
     private final AdminAreaProtectionPlugin plugin;
-    private final FormRegistry formRegistry;
 
     public FormResponseListener(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
-        this.formRegistry = plugin.getFormRegistry();
         this.formLogger = new FormLogger(plugin);
     }
 
@@ -39,7 +37,7 @@ public class FormResponseListener implements Listener {
                     event.wasClosed() ? "closed" : "submitted null response for"));
                 formLogger.logFormData(event.getPlayer().getName());
             }
-            handleFormCancel(event);
+            // No need to handle form cancel with the MOT structure - it's handled automatically
             return;
         }
 
@@ -116,31 +114,23 @@ public class FormResponseListener implements Listener {
 
             String formId = formData.getFormId();
             if (plugin.isDebugMode()) {
-                plugin.debug("Looking up handler for formId: " + formId);
+                plugin.debug("Processing form response for formId: " + formId);
                 formLogger.logFormData(event.getPlayer().getName());
             }
 
-            IFormHandler handler = formRegistry.getHandler(formId);
+            logDebugInfo(event, formId);
             
-            if (handler == null) {
-                if (plugin.isDebugMode()) {
-                    plugin.debug(String.format("[Form] No handler found for form ID: %s", formId));
-                    // Add form registry debug info
-                    plugin.debug("Available handlers in registry:");
-                    plugin.debug(formRegistry.toString());
-                }
-                return;
+            // Handle special cases for forms that need additional processing
+            if (formId.equals(FormIds.GROUP_PERMISSIONS)) {
+                handleGroupPermissionsForm(event);
+            } else if (formId.equals(FormIds.PLAYER_SETTINGS)) {
+                handlePlayerSettingsForm(event);
+            } else if (formId.equals(FormIds.PLUGIN_SETTINGS)) {
+                handlePluginSettingsForm(event);
             }
-
-            logDebugInfo(event, handler, formId);
             
             // Only remove form data after successful response handling
-            try {
-                handleFormResponse(event, handler, formId);
-            } catch (Exception e) {
-                plugin.getLogger().error("Error handling form response", e);
-                throw e; // Re-throw to be caught by outer catch
-            }
+            ensureFormDataCleanup(event.getPlayer().getName());
 
         } catch (Exception e) {
             handleFormError(event, e);
@@ -149,13 +139,12 @@ public class FormResponseListener implements Listener {
         }
     }
 
-    private void logDebugInfo(PlayerFormRespondedEvent event, IFormHandler handler, String formId) {
-        if (!plugin.isDebugMode() || handler == null) return;
+    private void logDebugInfo(PlayerFormRespondedEvent event, String formId) {
+        if (!plugin.isDebugMode()) return;
         
         plugin.debug(String.format("[Form] Processing form response:"));
         plugin.debug(String.format("  Player: %s", event.getPlayer().getName()));
         plugin.debug(String.format("  Form ID: %s", formId));
-        plugin.debug(String.format("  Handler: %s", handler.getClass().getSimpleName()));
         plugin.debug(String.format("  Response Type: %s", event.getResponse().getClass().getSimpleName()));
 
         if (event.getResponse() instanceof FormResponseCustom response) {
@@ -167,121 +156,126 @@ public class FormResponseListener implements Listener {
                 response.getClickedButtonId()));
         }
     }
-
-    private void handleFormCancel(PlayerFormRespondedEvent event) {
-        FormTrackingData formData = plugin.getFormIdMap().remove(event.getPlayer().getName());
-        if (formData != null) {
-            try {
-                IFormHandler handler = formRegistry.getHandler(formData.getFormId());
-                if (handler != null) {
-                    handler.handleCancel(event.getPlayer());
+    
+    private void handleGroupPermissionsForm(PlayerFormRespondedEvent event) {
+        try {
+            // Get current area being edited
+            FormTrackingData areaData = plugin.getFormIdMap().get(event.getPlayer().getName() + "_editing");
+            if (areaData == null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("No area data found for group permissions form");
                 }
-            } catch (Exception e) {
-                // Check for validation errors that are already shown to the player
-                if (e instanceof RuntimeException && e.getMessage() != null && 
-                    e.getMessage().contains("_validation_error_already_shown")) {
+                return;
+            }
+            
+            // Get the area from the area manager
+            Area area = plugin.getArea(areaData.getFormId());
+            if (area == null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area not found: " + areaData.getFormId());
+                }
+                return;
+            }
+            
+            // Check if we're in group selection or permission editing mode
+            FormWindow window = event.getWindow();
+            if (window instanceof FormWindowSimple) {
+                // This is the group selection form
+                plugin.getFormModuleManager().getGroupPermissionsHandler()
+                    .handleGroupSelectionResponse(event.getPlayer(), area, event.getResponse());
+            } else if (window instanceof FormWindowCustom) {
+                // This is the permission editing form
+                // Get the selected group from the form title
+                String selectedGroup = "default"; // Fallback
+                
+                // Extract the group name from the form title
+                // The title format is expected to be "Group Permissions: [group]"
+                String formTitle = ((FormWindowCustom) window).getTitle();
+                if (formTitle != null && formTitle.contains(": ")) {
+                    selectedGroup = formTitle.substring(formTitle.lastIndexOf(": ") + 2);
                     if (plugin.isDebugMode()) {
-                        plugin.debug("[Form] Not showing generic error for validation error in form cancel handler");
+                        plugin.debug("Extracted group name from form title: " + selectedGroup);
                     }
                 } else {
-                    plugin.getLogger().error("Error handling form cancel", e);
-                    event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+                    // Try to get from form tracking data
+                    FormTrackingData groupData = plugin.getFormIdMap().get(event.getPlayer().getName() + "_selected_group");
+                    if (groupData != null) {
+                        selectedGroup = groupData.getFormId();
+                        if (plugin.isDebugMode()) {
+                            plugin.debug("Retrieved group name from tracking data: " + selectedGroup);
+                        }
+                    } else if (plugin.isDebugMode()) {
+                        plugin.debug("Using default group name: " + selectedGroup);
+                    }
                 }
+                
+                plugin.getFormModuleManager().getGroupPermissionsHandler()
+                    .handleGroupPermissionResponse(event.getPlayer(), area, selectedGroup, event.getResponse());
             }
-        }
-        // Always ensure form data is cleaned up
-        ensureFormDataCleanup(event.getPlayer().getName());
-    }
-
-    private void handleFormResponse(PlayerFormRespondedEvent event, IFormHandler handler, String formId) {
-        if (event.getResponse() instanceof FormResponseCustom) {
-            handleCustomForm(event, handler, formId);
-        } else if (event.getResponse() instanceof FormResponseSimple) {
-            handleSimpleForm(event, handler);
-        } else {
-            plugin.getLogger().error("Unknown form response type: " + event.getResponse().getClass().getName());
-        }
-    }
-
-    private void handleCustomForm(PlayerFormRespondedEvent event, IFormHandler handler, String formId) {
-        FormResponseCustom response = (FormResponseCustom) event.getResponse();
-        
-        try {
-            // Use GuiManager for validation - this will now throw an exception for validation errors
-            plugin.getGuiManager().validateForm(event.getPlayer(), response, formId);
-            
-            // Only handle the response if validation succeeds
-            handler.handleResponse(event.getPlayer(), response);
         } catch (Exception e) {
-            // Check for validation errors that are already shown to the player
-            if (e instanceof RuntimeException && e.getMessage() != null && 
-                e.getMessage().contains("_validation_error_already_shown")) {
-                if (plugin.isDebugMode()) {
-                    plugin.debug("[Form] Not showing generic error for validation error in custom form handler");
-                }
-            } else {
-                plugin.getLogger().error("Error handling custom form response", e);
-                event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
-            }
-            // Clean up form data
-            ensureFormDataCleanup(event.getPlayer().getName());
+            plugin.getLogger().error("Error handling group permissions form", e);
+            event.getPlayer().sendMessage("§cAn error occurred while processing your form submission.");
         }
     }
 
-    private void handleSimpleForm(PlayerFormRespondedEvent event, IFormHandler handler) {
+    private void handlePlayerSettingsForm(PlayerFormRespondedEvent event) {
         try {
-            // Save the editing area data before handling response
-            var editingData = plugin.getFormIdMap().get(event.getPlayer().getName() + "_editing");
-            var currentFormData = plugin.getFormIdMap().get(event.getPlayer().getName());
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("Before handling simple form response:");
-                if (currentFormData != null) {
-                    plugin.debug("  Current form: " + currentFormData.getFormId());
-                }
-                if (editingData != null) {
-                    plugin.debug("  Editing area: " + editingData.getFormId());
-                }
-            }
-            
-            // Handle the form response
-            handler.handleResponse(event.getPlayer(), event.getResponse());
-            
-            // Check if we need to restore form tracking data
-            var newFormData = plugin.getFormIdMap().get(event.getPlayer().getName());
-            var newEditingData = plugin.getFormIdMap().get(event.getPlayer().getName() + "_editing");
-            
-            if (plugin.isDebugMode()) {
-                plugin.debug("After handling simple form response:");
-                if (newFormData != null) {
-                    plugin.debug("  New form: " + newFormData.getFormId());
-                }
-                if (newEditingData != null) {
-                    plugin.debug("  New editing area: " + newEditingData.getFormId());
-                }
-            }
-            
-            // If we had editing data and it wasn't cleaned up by the handler, restore it
-            if (editingData != null && newEditingData == null && 
-                (newFormData != null && !newFormData.equals(currentFormData))) {
-                plugin.getFormIdMap().put(event.getPlayer().getName() + "_editing", editingData);
+            // Get current area being edited
+            FormTrackingData areaData = plugin.getFormIdMap().get(event.getPlayer().getName() + "_editing");
+            if (areaData == null) {
                 if (plugin.isDebugMode()) {
-                    plugin.debug("Restored editing area data after form transition");
+                    plugin.debug("No area data found for player settings form");
+                }
+                return;
+            }
+            
+            // Get the area from the area manager
+            Area area = plugin.getArea(areaData.getFormId());
+            if (area == null) {
+                if (plugin.isDebugMode()) {
+                    plugin.debug("Area not found: " + areaData.getFormId());
+                }
+                return;
+            }
+            
+            // Check if we're in player selection or permission editing mode
+            FormWindow window = event.getWindow();
+            if (window instanceof FormWindowCustom) {
+                String formTitle = ((FormWindowCustom) window).getTitle();
+                
+                if (formTitle.startsWith("Player Permissions for ")) {
+                    // This is the player selection form
+                    plugin.getFormModuleManager().getPlayerSettingsHandler()
+                        .handlePlayerSelectionResponse(event.getPlayer(), area, event.getResponse());
+                } else if (formTitle.startsWith("Permissions for ")) {
+                    // This is the permission editing form - extract the player name from the title
+                    String targetPlayer = formTitle.substring("Permissions for ".length());
+                    plugin.getFormModuleManager().getPlayerSettingsHandler()
+                        .handlePlayerPermissionResponse(event.getPlayer(), area, targetPlayer, event.getResponse());
                 }
             }
         } catch (Exception e) {
-            // Check for validation errors that are already shown to the player
-            if (e instanceof RuntimeException && e.getMessage() != null && 
-                e.getMessage().contains("_validation_error_already_shown")) {
-                if (plugin.isDebugMode()) {
-                    plugin.debug("[Form] Not showing generic error for validation error in simple form handler");
+            plugin.getLogger().error("Error handling player settings form", e);
+            event.getPlayer().sendMessage("§cAn error occurred while processing your form submission.");
+        }
+    }
+
+    private void handlePluginSettingsForm(PlayerFormRespondedEvent event) {
+        try {
+            // This is a simpler form without area context
+            FormWindow window = event.getWindow();
+            if (window instanceof FormWindowCustom) {
+                String formTitle = ((FormWindowCustom) window).getTitle();
+                
+                if (formTitle.equals("Plugin Settings")) {
+                    // Process the plugin settings form
+                    plugin.getFormModuleManager().getPluginSettingsHandler()
+                        .handleResponse(event.getPlayer(), event.getResponse());
                 }
-            } else {
-                plugin.getLogger().error("Error handling simple form response", e);
-                event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
             }
-            // Don't automatically open main menu
-            ensureFormDataCleanup(event.getPlayer().getName());
+        } catch (Exception e) {
+            plugin.getLogger().error("Error handling plugin settings form", e);
+            event.getPlayer().sendMessage("§cAn error occurred while processing your form submission.");
         }
     }
 
@@ -290,53 +284,29 @@ public class FormResponseListener implements Listener {
         if (e instanceof RuntimeException && e.getMessage() != null && 
             e.getMessage().contains("_validation_error_already_shown")) {
             if (plugin.isDebugMode()) {
-                plugin.debug("[Form] Validation error already shown to player " + event.getPlayer().getName() + 
-                    ", suppressing generic error");
+                plugin.debug("Validation error already shown to player: " + e.getMessage());
             }
-            // Still clean up form tracking data
-            String playerName = event.getPlayer().getName();
-            plugin.getFormIdMap().remove(playerName);
-            plugin.getFormIdMap().remove(playerName + "_editing");
             return;
         }
         
-        plugin.getLogger().error("Error handling form response", e);
-        if (plugin.isDebugMode()) {
-            plugin.debug("[Form] Error processing form response:");
-            plugin.debug("  Player: " + event.getPlayer().getName());
-            plugin.debug("  Exception: " + e.getMessage());
-            e.printStackTrace();
-        }
-        
-        // Clean up form tracking data
-        String playerName = event.getPlayer().getName();
-        plugin.getFormIdMap().remove(playerName);
-        plugin.getFormIdMap().remove(playerName + "_editing");
-        
-        event.getPlayer().sendMessage(plugin.getLanguageManager().get("messages.form.error.generic"));
+        plugin.getLogger().error(String.format("Error handling form response from %s: %s", 
+            event.getPlayer().getName(), e.getMessage()), e);
+        event.getPlayer().sendMessage("§cAn error occurred while processing your form submission.");
     }
 
     private void checkCleanup() {
         long currentTime = System.currentTimeMillis();
         if (currentTime - lastCleanup > CLEANUP_INTERVAL) {
-            // Only cleanup forms, not handlers
-            plugin.getGuiManager().cleanup();
-            // Remove formRegistry.clearHandlers() to maintain handlers
             lastCleanup = currentTime;
-            
+            plugin.getGuiManager().cleanup();
             if (plugin.isDebugMode()) {
-                plugin.debug("Performed form cleanup");
+                plugin.debug("Performed scheduled form data cleanup");
             }
         }
     }
 
     private void ensureFormDataCleanup(String playerName) {
-        // Remove all form tracking data for player
+        // Clean up form tracking data
         plugin.getFormIdMap().remove(playerName);
-        plugin.getFormIdMap().remove(playerName + "_editing");
-        
-        if (plugin.isDebugMode()) {
-            plugin.debug("Cleaned up form data for player: " + playerName);
-        }
     }
 }

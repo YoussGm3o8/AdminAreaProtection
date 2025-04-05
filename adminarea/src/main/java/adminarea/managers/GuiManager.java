@@ -5,7 +5,6 @@ import adminarea.area.Area;
 import adminarea.area.AreaDTO;
 import adminarea.constants.FormIds;
 import adminarea.data.FormTrackingData;
-import adminarea.form.FormRegistry;
 import adminarea.form.validation.FormValidator;
 import adminarea.form.validation.ValidationResult;
 import adminarea.util.FormLogger;
@@ -24,7 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GuiManager {
     private final AdminAreaProtectionPlugin plugin;
-    private final FormRegistry formRegistry;
     private final AtomicBoolean cleanupRunning = new AtomicBoolean(false);
     private final Map<String, Deque<String>> navigationHistory = new ConcurrentHashMap<>();
     private final long FORM_EXPIRY_TIME = 900000; // 15 minutes
@@ -33,126 +31,54 @@ public class GuiManager {
 
     public GuiManager(AdminAreaProtectionPlugin plugin) {
         this.plugin = plugin;
-        this.formRegistry = plugin.getFormRegistry();
-        this.formRegistry.initialize();
         this.formLogger = new FormLogger(plugin);
     }
 
     public void openLuckPermsOverrideForm(Player player, Area area) {
-        openFormById(player, FormIds.GROUP_PERMISSIONS, area);
+        plugin.getFormModuleManager().openGroupPermissions(player, area);
     }
 
     public void openLuckPermsGroupList(Player player, Area area) {
-        openFormById(player, FormIds.GROUP_SELECT, area);
+        plugin.getFormModuleManager().openGroupPermissions(player, area);
     }
 
     public void openBasicSettings(Player player, Area area) {
-        openFormById(player, FormIds.BASIC_SETTINGS, area);
+        plugin.getFormModuleManager().openBasicSettings(player, area);
     }
 
     public void openBuildingPermissions(Player player, Area area) {
-        openFormById(player, FormIds.BUILDING_SETTINGS, area);
+        plugin.getFormModuleManager().openBuildingSettings(player, area);
     }
 
     public void openMainMenu(Player player) {
-        openFormById(player, FormIds.MAIN_MENU, null);
+        plugin.getFormModuleManager().openMainMenu(player);
     }
 
     public void openEditForm(Player player, Area area) {
-        openFormById(player, FormIds.EDIT_AREA, area); 
+        plugin.getFormModuleManager().openEditForm(player, area);
     }
 
     public void openSettingsMenu(Player player) {
-        openFormById(player, FormIds.PLUGIN_SETTINGS, null);
+        plugin.getFormModuleManager().openPluginSettings(player);
     }
 
     public void openEditListForm(Player player) {
-        openFormById(player, FormIds.EDIT_LIST, null);
+        plugin.getFormModuleManager().openEditListForm(player);
     }
 
     public void openCreateForm(Player player) {
-        openFormById(player, FormIds.CREATE_AREA, null);
+        plugin.getFormModuleManager().openCreateForm(player);
     }
 
     public void openDeleteList(Player player) {
-        openFormById(player, FormIds.DELETE_LIST, null);
+        plugin.getFormModuleManager().openDeleteAreaForm(player);
     }
 
     public void openFormById(Player player, String formId, Area area) {
         Timer.Sample formTimer = plugin.getPerformanceMonitor().startTimer();
         try {
-            // Get handler and validate
-            var handler = formRegistry.getHandler(formId);
-            if (handler == null) {
-                plugin.getLogger().error("No handler found for form ID: " + formId);
-                return;
-            }
-
-            // Set form tracking data before creating form
-            plugin.getFormIdMap().put(player.getName(),
-                new FormTrackingData(formId, System.currentTimeMillis()));
-
-            // Create and send form
-            FormWindow form;
-            if (area != null) {
-                // IMPORTANT: When possible, load a fresh copy of the area from the database
-                // to prevent duplicate areas in cache when editing permissions
-                try {
-                    // Only attempt this for edit-related forms, not for creation forms
-                    if (formId.startsWith("edit") || formId.endsWith("_settings") || 
-                        formId.contains("permission")) {
-                        Area freshArea = plugin.getDatabaseManager().loadArea(area.getName());
-                        if (freshArea != null) {
-                            if (plugin.isDebugMode()) {
-                                plugin.debug("Using fresh area from database for form: " + formId);
-                            }
-                            area = freshArea;
-                        }
-                    }
-                } catch (Exception e) {
-                    if (plugin.isDebugMode()) {
-                        plugin.debug("Failed to load fresh area from database: " + e.getMessage());
-                    }
-                    // Continue with the original area if refresh fails
-                }
-                
-                form = handler.createForm(player, area);
-                // Store area being edited if provided
-                plugin.getFormIdMap().put(player.getName() + "_editing",
-                    new FormTrackingData(area.getName(), System.currentTimeMillis()));
-            } else {
-                form = handler.createForm(player);
-            }
-
-            if (form != null) {
-                if (plugin.isDebugMode()) {
-                    plugin.debug(String.format("[Form] Sending form %s to %s:", formId, player.getName()));
-                    if (form instanceof FormWindowCustom customForm) {
-                        plugin.debug(String.format("  Type: Custom\n  Title: %s\n  Elements: %d",
-                            customForm.getTitle(), customForm.getElements().size()));
-                    } else if (form instanceof FormWindowSimple simpleForm) {
-                        plugin.debug(String.format("  Type: Simple\n  Title: %s\n  Buttons: %d",
-                            simpleForm.getTitle(), simpleForm.getButtons().size()));
-                    }
-                    plugin.debug("[Form] Current form tracking data:");
-                    var currentData = plugin.getFormIdMap().get(player.getName());
-                    if (currentData != null) {
-                        plugin.debug(String.format("  Current Form: %s (%.1fs ago)",
-                            currentData.getFormId(),
-                            (System.currentTimeMillis() - currentData.getCreationTime()) / 1000.0));
-                    }
-                    var editingData = plugin.getFormIdMap().get(player.getName() + "_editing");
-                    if (editingData != null) {
-                        plugin.debug(String.format("  Editing Area: %s (%.1fs ago)",
-                            editingData.getFormId(),
-                            (System.currentTimeMillis() - editingData.getCreationTime()) / 1000.0));
-                    }
-                }
-
-                // Push current form to navigation history
-                pushForm(player, formId);
-                player.showFormWindow(form);
-            }
+            // Forward to the FormModuleManager for MOT-style forms
+            plugin.getFormModuleManager().openFormById(player, formId, area);
         } catch (Exception e) {
             plugin.getPerformanceMonitor().stopTimer(formTimer, "form_open_failed");
             // Check for validation errors first
