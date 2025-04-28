@@ -327,14 +327,15 @@ public class EntityListener implements Listener {
                     pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
                 
                 if (area != null && !area.getToggleState("allowTNT")) {
-                    // Cancel the explosion completely
-                    event.setCancelled(true);
+                    // Instead of trying to cancel the event (which isn't cancellable),
+                    // just close the entity directly
+                    // event.setCancelled(true);
                     
-                    // Remove the TNT entity
+                    // Ensure the entity is immediately closed/removed
                     entity.close();
                     
                     if (plugin.isDebugMode()) {
-                        plugin.debug("Cancelled TNT explosion at " + 
+                        plugin.debug("Instantly despawned primed TNT entity at " + 
                             pos.getFloorX() + ", " + pos.getFloorY() + ", " + pos.getFloorZ() +
                             " in area " + area.getName());
                     }
@@ -398,8 +399,9 @@ public class EntityListener implements Listener {
                     pos.getLevel().getName(), pos.getX(), pos.getY(), pos.getZ());
                 
                 if (area != null && !area.getToggleState("allowTNT")) {
-                    // Cancel event to prevent TNT from spawning at all
-                    event.setCancelled(true);
+                    // Instead of trying to cancel the event (which isn't cancellable),
+                    // just close the entity directly
+                    // event.setCancelled(true);
                     
                     // Ensure the entity is immediately closed/removed
                     entity.close();
